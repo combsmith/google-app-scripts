@@ -1066,6 +1066,12 @@ describe('Ontological Knowledge Graph and Triage Matrix Prompt Architecture', ()
     expect(prompt).toContain('PRIMARY PARTY ATTRIBUTION PRINCIPLE')
     expect(prompt).toContain('Family/Kids/Tide')
     expect(prompt).toContain('Family/Kids/Toby')
+    expect(prompt).toContain(
+      'NON-PROFIT & CHARITY BROADCASTS VS DIRECT CORRESPONDENCE'
+    )
+    expect(prompt).toContain(
+      'TECH PLATFORM NOTIFICATIONS & SYSTEM ANNOUNCEMENTS'
+    )
     expect(prompt).not.toContain('Under NO circumstances')
     expect(prompt).not.toContain('Do NOT classify')
     expect(prompt).not.toContain('Reserve strictly for')
