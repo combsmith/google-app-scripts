@@ -105,16 +105,19 @@ function buildOntologicalPrompt(config, sender, subject, snippet) {
     '  - Sub-label "Family/Sisters" applies strictly to direct personal correspondence regarding the sister\'s own independent adult personal affairs.\n\n' +
     '=== TIER 2: ORTHOGONAL TRIAGE MATRIX (LIFECYCLE STATE) ===\n' +
     'Determine category and action based on the lifecycle state of the email:\n' +
-    '1. Action_Required (Manual bills due without auto-pay, direct 1:1 personal/teacher messages needing individual human reply, audit/response deadlines, suspicious login alerts, ready prescriptions):\n' +
+    '1. Action_Required (Manual bills due without auto-pay, direct 1:1 personal/teacher/counselor correspondence needing individual human reply, audit/response deadlines, suspicious login alerts, ready prescriptions):\n' +
     "   -> category: 'Primary', action: 'keep'\n" +
-    '2. Informational_Feed (Routine school bulletins/newsletters/ParentSquare updates, automated search/monitoring alerts, active orders in transit, routine tax forms/receipts, volunteer reminders, upcoming travel itineraries):\n' +
-    "   -> category: 'Updates', action: 'keep'\n" +
+    '2. Informational_Feed (Routine school bulletins/newsletters/ParentSquare updates, non-profit newsletters/appeals, automated search/monitoring alerts, active orders in transit, routine tax forms/receipts, volunteer reminders, upcoming travel itineraries):\n' +
+    "   -> category: 'Updates', action: 'archive'\n" +
     '3. Completed_Transaction (Confirmed scheduled auto-payments, delivered packages, successful SSO/sign-ins, routine lunch menu digests, bank transfers, automated machine/sensor telemetry [BroodMinder, HoneyBeeham], device/server pings):\n' +
     "   -> category: 'Updates', action: 'archive'\n" +
     '4. Broadcast_Marketing (Commercial promos, retail discounts, vendor newsletters, terms of service and privacy policy updates):\n' +
     "   -> category: 'Promotions', action: 'archive'\n" +
     '5. Spam_Solicitation (Phishing, scam attempts, cold wholesaler pitches):\n' +
     "   -> category: 'Promotions', action: 'trash'\n\n" +
+    'CATEGORY-DRIVEN INBOX RETENTION INVARIANT:\n' +
+    '• Primary Inbox is an Action Queue: Only emails categorized as "Primary" belong in the Primary Inbox (action: "keep").\n' +
+    '• All non-Primary streams ("Updates", "Promotions", "Social", "Forums") are Informational Feeds that must be archived out of the Inbox (action: "archive") into their respective category tab and domain sub-label.\n\n' +
     '=== CONSTRAINTS ===\n' +
     '• Single Sub-Label Invariant: Return AT MOST ONE sub-label string (e.g. "Finance/Banking" or "Family/School-Student"). Do not stack or combine multiple sub-labels.\n\n'
 
@@ -135,7 +138,7 @@ function buildOntologicalPrompt(config, sender, subject, snippet) {
     'Body Snippet: ' +
     snippet +
     '\n\n' +
-    'Return JSON ONLY: {"canonicalDomain": "01_Household", "subLabel": "Household/Property", "category": "Updates", "action": "keep", "confidence": 0.98, "title": "Short Title", "summary": "2 sentence executive summary"}\n' +
+    'Return JSON ONLY: {"canonicalDomain": "01_Household", "subLabel": "Household/Property", "category": "Updates", "action": "archive", "confidence": 0.98, "title": "Short Title", "summary": "2 sentence executive summary"}\n' +
     "Valid categories: 'Primary', 'Updates', 'Promotions', 'Social', 'Forums'.\n" +
     "Valid actions: 'keep', 'archive', 'trash', 'mark_read'."
 
@@ -2731,10 +2734,23 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
       }
       if (
         classification.category &&
+        classification.category !== 'Primary' &&
+        classification.action !== 'trash'
+      ) {
+        classification.action = 'archive'
+      }
+      if (
+        classification.category &&
         classification.action !== 'trash' &&
         typeof setGmailCategoryTab === 'function'
       ) {
         setGmailCategoryTab(thread, classification.category)
+      }
+      if (
+        classification.action === 'archive' &&
+        typeof thread.moveToArchive === 'function'
+      ) {
+        thread.moveToArchive()
       }
       if (
         cfg.processedLabel &&

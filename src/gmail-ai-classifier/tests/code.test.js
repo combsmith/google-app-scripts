@@ -929,6 +929,13 @@ describe('Ontological Knowledge Graph and Triage Matrix Prompt Architecture', ()
     expect(prompt).toContain('Completed_Transaction')
     expect(prompt).toContain('Broadcast_Marketing')
     expect(prompt).toContain('Spam_Solicitation')
+    expect(prompt).toContain('CATEGORY-DRIVEN INBOX RETENTION INVARIANT')
+    expect(prompt).toContain(
+      'Primary Inbox is an Action Queue: Only emails categorized as "Primary" belong in the Primary Inbox'
+    )
+    expect(prompt).toContain(
+      'All non-Primary streams ("Updates", "Promotions", "Social", "Forums") are Informational Feeds that must be archived out of the Inbox'
+    )
 
     // Tier 3: Injected Entity Knowledge Graph
     expect(prompt).toContain(
@@ -1618,6 +1625,52 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
         expect(mockFile.moveTo).toHaveBeenCalledWith(mockNewFolder)
         expect(mockMovedFiles).toHaveLength(1)
         expect(mockMovedFiles[0].dest).toBe('Students')
+      })
+
+      test('deterministically sets action archive and calls moveToArchive for non-Primary categories', () => {
+        const mockMoveToArchive = jest.fn()
+        const mockThread = {
+          getId: () => 'thread-nonprimary',
+          getMessages: () => [
+            {
+              getFrom: () => 'newsletter@school.org',
+              getSubject: () => 'Weekly Update',
+              getPlainBody: () => 'Routine school announcements',
+            },
+          ],
+          getLabels: () => [],
+          addLabel: jest.fn(),
+          removeLabel: jest.fn(),
+          moveToArchive: mockMoveToArchive,
+        }
+        const mockGmail = {
+          search: jest.fn(() => [mockThread]),
+          getUserLabelByName: jest.fn((name) => ({ getName: () => name })),
+          createLabel: jest.fn((name) => ({ getName: () => name })),
+        }
+        const mockClassify = jest.fn(() => ({
+          canonicalDomain: '04_Family_Health',
+          subLabel: 'Family/School-Student',
+          action: 'keep',
+          category: 'Updates',
+        }))
+
+        const report = fn(
+          'school newsletter',
+          { maxThreads: 5, dryRun: false },
+          {
+            canonicalDomains: ['04_Family_Health'],
+            processedLabel: 'Processed',
+          },
+          {
+            GmailApp: mockGmail,
+            classifyFn: mockClassify,
+          }
+        )
+
+        expect(report.scanned).toBe(1)
+        expect(report.items[0].action).toBe('archive')
+        expect(mockMoveToArchive).toHaveBeenCalledTimes(1)
       })
 
       it('dynamically discovers sister labels and includes name change query in runRealignmentAudit', () => {
