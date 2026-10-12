@@ -88,8 +88,8 @@ function buildOntologicalPrompt(config, sender, subject, snippet) {
     '• Community/beehive telemetry (BroodMinder monitors) -> "07_Community_NonProfit", sub-label "Projects/Telemetry" or "Projects/Beekeeping".\n' +
     '• Tech infrastructure/server telemetry (device pings, server metrics, cron logs) -> "05_Tech_Infrastructure", sub-label "Tech/Alerts".\n' +
     '• MANDATORY ROUTING: Always route machine telemetry to category "Updates" with action "archive". Keep telemetry completely archived out of the Inbox.\n\n' +
-    'SCHOOL & STUDENT ANNOUNCEMENTS VS DIRECT CORRESPONDENCE (MCAA, Briarwood, FACTS, PowerSchool, ParentSquare, Canvas, Google Classroom):\n' +
-    '• Routine school announcements, district/ParentSquare broadcasts, headmaster/principal letters, athletics/arts/club notices, lunch menus, school calendars, Google Classroom summaries, FACTS bulletins, PowerSchool broadcasts, and weekly school newsletters -> "04_Family_Health", sub-label "Family/School-Student", category: "Updates", action: "archive". Ingest and log them to notes, but keep them archived out of the Inbox (Updates tab).\n' +
+    'SCHOOL & STUDENT ANNOUNCEMENTS VS DIRECT CORRESPONDENCE (MCAA, Briarwood, FACTS, PowerSchool, ParentSquare, Canvas, Google Classroom, Colleges):\n' +
+    '• Routine school announcements, district/ParentSquare broadcasts, headmaster/principal letters, athletics/arts/club notices (e.g. "Noteworthy News", "Athletics Newsletter", "Lion Guard Update"), lunch menus, school calendars, college/admissions parent newsletters (e.g. "Parent and Family Newsletter"), Google Classroom summaries, FACTS bulletins, PowerSchool broadcasts, and weekly school newsletters -> "04_Family_Health", sub-label "Family/School-Student", category: "Updates", action: "archive". Ingest and log them to notes, but keep them archived out of the Inbox (Updates tab).\n' +
     '• Direct 1:1 personal emails from an individual teacher, principal, or guidance counselor addressed personally to the parent regarding an individual student\'s urgent academic/disciplinary matter or conference request -> category: "Primary", action: "keep".\n\n' +
     'NON-PROFIT & CHARITY BROADCASTS VS DIRECT CORRESPONDENCE:\n' +
     '• Routine mass newsletters, monthly impact reports, event notices, general fundraising appeals, and volunteer list blasts from non-profits or charities (e.g. Community Food Bank, The Lovelady Center, Southeastern Climbers Coalition, Grace Klein Community mass mail, Restoration Academy bulletins) -> "07_Community_NonProfit", sub-label "Projects/Charity", category: "Updates", action: "archive". Ingest and log them to notes, but keep them archived out of the Inbox.\n' +
@@ -648,6 +648,33 @@ function processThreadBatch(threads, config, services) {
       thread.addLabel(categoryLabel)
     }
     thread.addLabel(processedLabel)
+
+    // Category-Driven Action Invariant:
+    // Primary belongs in the Action Queue (Inbox).
+    // Non-Primary categories (Updates, Promotions, Social, Forums) are Informational Streams
+    // that deterministically bypass the Primary Inbox into their category tab and domain sub-label.
+    if (
+      classification.category &&
+      classification.category !== 'Primary' &&
+      classification.action !== 'trash'
+    ) {
+      classification.action = 'archive'
+    }
+
+    if (
+      classification.category &&
+      classification.action !== 'trash' &&
+      typeof setGmailCategoryTab === 'function'
+    ) {
+      setGmailCategoryTab(thread, classification.category, services.Gmail)
+    }
+
+    if (
+      classification.action === 'archive' &&
+      typeof thread.moveToArchive === 'function'
+    ) {
+      thread.moveToArchive()
+    }
 
     let filterCreated = false
     if (classification.confidence >= config.autoFilterConfidenceThreshold) {
