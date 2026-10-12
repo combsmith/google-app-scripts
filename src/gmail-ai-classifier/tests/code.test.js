@@ -1407,10 +1407,12 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
   const {
     reclassifyThreadsByQuery: reclassifyIndex,
     runRealignmentAudit: auditIndex,
+    sweepAllUnreadInboxEmails: sweepIndex,
   } = require('../src/index')
   const {
     reclassifyThreadsByQuery: reclassifyCodeGs,
     runRealignmentAudit: auditCodeGs,
+    sweepAllUnreadInboxEmails: sweepCodeGs,
   } = require('../code.gs')
 
   ;[
@@ -1418,13 +1420,15 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
       name: 'src/index.js implementation',
       fn: reclassifyIndex,
       auditFn: auditIndex,
+      sweepFn: sweepIndex,
     },
     {
       name: 'code.gs implementation',
       fn: reclassifyCodeGs,
       auditFn: auditCodeGs,
+      sweepFn: sweepCodeGs,
     },
-  ].forEach(({ name, fn, auditFn }) => {
+  ].forEach(({ name, fn, auditFn, sweepFn }) => {
     describe(name, () => {
       test('reclassifies historical threads and strips conflicting labels in live mode', () => {
         const addedLabels = []
@@ -1698,6 +1702,23 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           10
         )
         expect(report.dryRun).toBe(true)
+      })
+
+      test('sweepAllUnreadInboxEmails queries in:inbox is:unread', () => {
+        const mockGmail = {
+          search: jest.fn(() => []),
+        }
+        const report = sweepFn(
+          { maxThreads: 20 },
+          { canonicalDomains: ['04_Family_Health'] },
+          { GmailApp: mockGmail, classifyFn: jest.fn() }
+        )
+        expect(mockGmail.search).toHaveBeenCalledWith(
+          'in:inbox is:unread',
+          0,
+          20
+        )
+        expect(report.dryRun).toBe(false)
       })
     })
   })

@@ -2979,6 +2979,25 @@ function runRealignmentAudit(query, options, config, services) {
   )
 }
 
+/**
+ * Sweeps and reclassifies current unread items in the inbox against the
+ * Category-Driven Retention Invariant, archiving all non-Primary streams.
+ *
+ * @param {Object} [options] - Reclassification options (maxThreads, dryRun, timeBudgetMs)
+ * @param {Object} [customConfig] - Optional override config
+ * @param {Object} [customServices] - Optional injected services
+ * @returns {Object} Realignment summary report
+ */
+function sweepAllUnreadInboxEmails(options, customConfig, customServices) {
+  var opts = Object.assign({ maxThreads: 50, dryRun: false }, options || {})
+  return reclassifyThreadsByQuery(
+    'in:inbox is:unread',
+    opts,
+    customConfig,
+    customServices
+  )
+}
+
 module.exports = {
   validateClassification,
   classifyEmailWithGemini,
@@ -3014,6 +3033,7 @@ module.exports = {
   cleanConflictingLabels,
   reclassifyThreadsByQuery,
   runRealignmentAudit,
+  sweepAllUnreadInboxEmails,
   CANONICAL_TAXONOMY_SUBFOLDERS,
   SUBLABEL_TO_FOLDER_MAP,
   DEFAULT_DOMAIN_SUBLABEL_MAP,

@@ -30,7 +30,17 @@ function processEmailsWithAiClassifier() {
   )
 
   if (threads.length === 0) {
-    return
+    // Secondary sweep: Look for any unread non-primary inbox threads to realign
+    var sweepQuery = 'in:inbox is:unread -category:primary'
+    threads = GmailApp.search(sweepQuery, 0, 10)
+    console.log(
+      '[processEmailsWithAiClassifier] Secondary sweep found ' +
+        threads.length +
+        ' unread non-primary thread(s) in inbox.'
+    )
+    if (threads.length === 0) {
+      return
+    }
   }
 
   var processedLabel = ensureUserLabel(config.processedLabel)
@@ -3277,9 +3287,29 @@ function runRealignmentAudit(query, options, config, services) {
   )
 }
 
+/**
+ * Sweeps and reclassifies current unread items in the inbox against the
+ * Category-Driven Retention Invariant, archiving all non-Primary streams.
+ *
+ * @param {Object} [options] - Reclassification options (maxThreads, dryRun, timeBudgetMs)
+ * @param {Object} [customConfig] - Optional override config
+ * @param {Object} [customServices] - Optional injected services
+ * @returns {Object} Realignment summary report
+ */
+function sweepAllUnreadInboxEmails(options, customConfig, customServices) {
+  var opts = Object.assign({ maxThreads: 50, dryRun: false }, options || {})
+  return reclassifyThreadsByQuery(
+    'in:inbox is:unread',
+    opts,
+    customConfig,
+    customServices
+  )
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     processEmailsWithAiClassifier: processEmailsWithAiClassifier,
+    sweepAllUnreadInboxEmails: sweepAllUnreadInboxEmails,
     purgeExpiredEmailsByRetentionPolicy: purgeExpiredEmailsByRetentionPolicy,
     setupWeeklyRetentionTrigger: setupWeeklyRetentionTrigger,
     setupFiveMinuteTrigger: setupFiveMinuteTrigger,
