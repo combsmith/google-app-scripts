@@ -67,7 +67,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      patch: ${{ steps.patch.outputs.patch }}
+      has_patch: ${{ steps.patch.outputs.has_patch }}
 
     steps:
       - name: Checkout code
@@ -96,14 +96,28 @@ jobs:
         id: patch
         run: |
           git add -A
-          echo "patch=$(git diff --cached --binary | base64 -w0)" >> "$GITHUB_OUTPUT"
+          git diff --cached --binary > "${RUNNER_TEMP}/autofix.patch"
+          if [ -s "${RUNNER_TEMP}/autofix.patch" ]; then
+            echo "has_patch=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_patch=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Passed as an artifact: job outputs are capped at ~1 MB.
+      - name: Upload auto-fix patch
+        if: steps.patch.outputs.has_patch == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: autofix-patch
+          path: ${{ runner.temp }}/autofix.patch
+          if-no-files-found: error
 
       - name: Verify no remaining issues after auto-fix
         run: npm run check
 
   autofix-push:
     needs: autofix
-    if: needs.autofix.outputs.patch != ''
+    if: needs.autofix.outputs.has_patch == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -115,14 +129,18 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           persist-credentials: false
 
+      - name: Download auto-fix patch
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: autofix-patch
+          path: ${{ runner.temp }}/autofix-patch
+
       - name: Commit and push auto-fixes
         env:
           GH_TOKEN: ${{ secrets.GH_PAT_WORKFLOWS || secrets.GITHUB_TOKEN }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          PATCH_B64: ${{ needs.autofix.outputs.patch }}
         run: |
-          printf '%s' "${PATCH_B64}" | base64 -d > "${RUNNER_TEMP}/autofix.patch"
-          git apply --index "${RUNNER_TEMP}/autofix.patch"
+          git apply --index "${RUNNER_TEMP}/autofix-patch/autofix.patch"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -m "chore(ci): apply prettier/eslint auto-fixes"
