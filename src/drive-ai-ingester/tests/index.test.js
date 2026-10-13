@@ -268,6 +268,31 @@ describe('applyDualLayerTagsToDriveFile', () => {
     expect(body.insertParagraph).not.toHaveBeenCalled()
   })
 
+  test('handles non-array metadata tags, people, and organization gracefully', () => {
+    const body = { getText: () => 'text', insertParagraph: jest.fn() }
+    const DocumentApp = { openById: () => ({ getBody: () => body }) }
+    const file = makeFile({ getMimeType: () => 'gdoc' })
+    const nonArrayMeta = {
+      canonicalDomain: '01_Household',
+      subLabel: 'x',
+      tags: 'not-an-array',
+      people: 'not-an-array',
+      organization: 'not-an-array',
+    }
+    expect(
+      applyDualLayerTagsToDriveFile(file, nonArrayMeta, {
+        DocumentApp,
+        MimeType,
+        Utilities,
+      })
+    ).toBe(true)
+    expect(file.setDescription).toHaveBeenCalled()
+    expect(body.insertParagraph).toHaveBeenCalledWith(
+      0,
+      expect.stringContaining('people: []')
+    )
+  })
+
   test('returns false when layer 1 fails', () => {
     const file = makeFile({
       setDescription: () => {
@@ -369,18 +394,33 @@ describe('formatDriveIngestionEntry', () => {
     expect(out).not.toContain('Summary')
   })
 
-  test('escapes square brackets in document title', () => {
+  test('escapes square brackets and backslashes in document title', () => {
     const out = formatDriveIngestionEntry(
       '2026-01-01',
-      '[Draft] Spec [Q1]',
+      '[Draft\\Test] Spec [Q1]',
       'http://u',
       ' sum ',
       ['a'],
       ['P'],
       'me@x'
     )
-    expect(out).toContain('\\[Draft\\] Spec \\[Q1\\]')
-    expect(out).toContain('[\\[Draft\\] Spec \\[Q1\\]](http://u)')
+    expect(out).toContain('\\[Draft\\\\Test\\] Spec \\[Q1\\]')
+    expect(out).toContain('[\\[Draft\\\\Test\\] Spec \\[Q1\\]](http://u)')
+  })
+
+  test('handles non-array peopleList and tagsList gracefully', () => {
+    const out = formatDriveIngestionEntry(
+      '2026-01-01',
+      'T',
+      'http://u',
+      ' sum ',
+      'not-an-array',
+      'not-an-array',
+      null
+    )
+    expect(out).not.toContain('People')
+    expect(out).not.toContain('Tags')
+    expect(out).toContain('[T](http://u)')
   })
 
   test('handles null or undefined title gracefully', () => {

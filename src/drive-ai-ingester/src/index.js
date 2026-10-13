@@ -153,10 +153,15 @@ function analyzeDocumentWithAi(fileName, fileText, config, services) {
  */
 function applyDualLayerTagsToDriveFile(file, metadata, services) {
   const { DocumentApp, MimeType, Utilities } = services
-  const tagsStr = (metadata.tags || []).join(', ')
-  const peopleStr = (metadata.people || []).join(', ')
-  const domainStr = metadata.canonicalDomain || ''
-  const sublabelStr = metadata.subLabel || ''
+  const tagsList = Array.isArray(metadata?.tags) ? metadata.tags : []
+  const peopleList = Array.isArray(metadata?.people) ? metadata.people : []
+  const orgList = Array.isArray(metadata?.organization)
+    ? metadata.organization
+    : []
+  const tagsStr = tagsList.join(', ')
+  const peopleStr = peopleList.join(', ')
+  const domainStr = metadata?.canonicalDomain || ''
+  const sublabelStr = metadata?.subLabel || ''
 
   // Layer 1: Native Drive File Description Metadata Tagging
   try {
@@ -203,13 +208,13 @@ function applyDualLayerTagsToDriveFile(file, metadata, services) {
         JSON.stringify(sublabelStr) +
         '\n' +
         'people: ' +
-        JSON.stringify(metadata.people || []) +
+        JSON.stringify(peopleList) +
         '\n' +
         'organization: ' +
-        JSON.stringify(metadata.organization || []) +
+        JSON.stringify(orgList) +
         '\n' +
         'tags: ' +
-        JSON.stringify(metadata.tags || []) +
+        JSON.stringify(tagsList) +
         '\n' +
         'created: ' +
         Utilities.formatDate(file.getLastUpdated(), 'GMT', 'yyyy-MM-dd') +
@@ -318,17 +323,22 @@ function formatDriveIngestionEntry(
   peopleList,
   accountEmail
 ) {
-  const escapedTitle = (title || '').replace(/\[/g, '\\[').replace(/\]/g, '\\]')
+  const escapedTitle = (title || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]')
   let entry =
     '\n### ' + dateStr + ' — [' + escapedTitle + '](' + driveUrl + ')\n'
   if (accountEmail) {
     entry += '- **Account**: ' + accountEmail + '\n'
   }
-  if (peopleList && peopleList.length > 0) {
-    entry += '- **People**: ' + peopleList.join(', ') + '\n'
+  const people = Array.isArray(peopleList) ? peopleList : []
+  if (people.length > 0) {
+    entry += '- **People**: ' + people.join(', ') + '\n'
   }
-  if (tagsList && tagsList.length > 0) {
-    entry += '- **Tags**: `' + tagsList.join('`, `') + '`\n'
+  const tags = Array.isArray(tagsList) ? tagsList : []
+  if (tags.length > 0) {
+    entry += '- **Tags**: `' + tags.join('`, `') + '`\n'
   }
   if (summaryText) {
     entry += '- **Summary**:\n  > ' + summaryText.trim() + '\n'
