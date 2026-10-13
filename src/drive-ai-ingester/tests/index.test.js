@@ -1,0 +1,298 @@
+const {
+  extractFileContentText,
+  analyzeDocumentWithAi,
+  applyDualLayerTagsToDriveFile,
+  extractJsonSubstring,
+  parseRetryDelayMs,
+  getNotePathForDomain,
+  formatDriveIngestionEntry,
+} = require('../src/index')
+
+const MimeType = { GOOGLE_DOCS: 'gdoc', PLAIN_TEXT: 'text/plain' }
+
+function makeResponse(code, text, headers) {
+  return {
+    getResponseCode: () => code,
+    getContentText: () => text,
+    getHeaders: () => headers || {},
+  }
+}
+
+function geminiBody(text) {
+  return JSON.stringify({
+    candidates: [{ content: { parts: [{ text }] } }],
+  })
+}
+
+describe('extractFileContentText', () => {
+  beforeEach(() => jest.spyOn(console, 'warn').mockImplementation(() => {}))
+  afterEach(() => jest.restoreAllMocks())
+
+  test('reads Google Doc body truncated to 3000 chars', () => {
+    const file = {
+      getMimeType: () => 'gdoc',
+      getId: () => 'id1',
+      getName: () => 'n',
+    }
+    const DocumentApp = {
+      openById: () => ({
+        getBody: () => ({ getText: () => 'a'.repeat(5000) }),
+      }),
+    }
+    expect(
+      extractFileContentText(file, { DocumentApp, MimeType })
+    ).toHaveLength(3000)
+  })
+
+  test('reads plain text blob', () => {
+    const file = {
+      getMimeType: () => 'text/plain',
+      getBlob: () => ({ getDataAsString: () => 'hello' }),
+      getName: () => 'n',
+    }
+    expect(extractFileContentText(file, { MimeType })).toBe('hello')
+  })
+
+  test('falls back to file name for other types', () => {
+    const file = { getMimeType: () => 'pdf', getName: () => 'a.pdf' }
+    expect(extractFileContentText(file, { MimeType })).toBe('a.pdf')
+  })
+
+  test('falls back to file name on error', () => {
+    const file = {
+      getMimeType: () => {
+        throw new Error('boom')
+      },
+      getName: () => 'a.pdf',
+    }
+    expect(extractFileContentText(file, { MimeType })).toBe('a.pdf')
+    expect(console.warn).toHaveBeenCalled()
+  })
+})
+
+describe('analyzeDocumentWithAi', () => {
+  const config = { canonicalDomains: ['01_Household'], geminiApiKey: 'k' }
+  beforeEach(() => {
+    jest.spyOn(console, 'warn').mockImplementation(() => {})
+    jest.spyOn(console, 'log').mockImplementation(() => {})
+  })
+  afterEach(() => jest.restoreAllMocks())
+
+  test('returns parsed metadata on first success', () => {
+    const UrlFetchApp = {
+      fetch: jest
+        .fn()
+        .mockReturnValue(
+          makeResponse(200, geminiBody('```json\n{"title":"T"}\n```'))
+        ),
+    }
+    const res = analyzeDocumentWithAi('f', 't', config, {
+      UrlFetchApp,
+      Utilities: { sleep: jest.fn() },
+    })
+    expect(res).toEqual({ title: 'T' })
+    expect(UrlFetchApp.fetch).toHaveBeenCalledTimes(1)
+  })
+
+  test('sleeps on 429, handles exceptions and bad bodies, then returns null', () => {
+    const sleep = jest.fn()
+    const fetch = jest
+      .fn()
+      .mockReturnValueOnce(makeResponse(429, '', { 'Retry-After': '2' }))
+      .mockImplementationOnce(() => {
+        throw new Error('net')
+      })
+      .mockReturnValueOnce(makeResponse(200, JSON.stringify({})))
+      .mockReturnValueOnce(makeResponse(200, geminiBody('no json here')))
+      .mockReturnValueOnce(makeResponse(500, ''))
+      .mockReturnValueOnce(makeResponse(200, geminiBody('')))
+    const res = analyzeDocumentWithAi('f', 't', config, {
+      UrlFetchApp: { fetch },
+      Utilities: { sleep },
+    })
+    expect(res).toBeNull()
+    expect(sleep).toHaveBeenCalledWith(2000)
+    expect(fetch).toHaveBeenCalledTimes(6)
+  })
+})
+
+describe('applyDualLayerTagsToDriveFile', () => {
+  beforeEach(() => {
+    jest.spyOn(console, 'warn').mockImplementation(() => {})
+    jest.spyOn(console, 'log').mockImplementation(() => {})
+    jest.spyOn(console, 'error').mockImplementation(() => {})
+  })
+  afterEach(() => jest.restoreAllMocks())
+
+  const Utilities = { formatDate: () => '2026-01-01' }
+  const meta = {
+    canonicalDomain: '01_Household',
+    subLabel: 'x',
+    tags: ['a', 'b'],
+    people: ['P', 'Acme, Inc.'],
+    organization: ['Org, LLC'],
+  }
+
+  function makeFile(over) {
+    return Object.assign(
+      {
+        getDescription: () => 'old',
+        setDescription: jest.fn(),
+        getName: () => 'n',
+        getMimeType: () => 'text/plain',
+        getId: () => 'id',
+        getLastUpdated: () => new Date(),
+      },
+      over
+    )
+  }
+
+  test('sets description and inserts front matter into docs with properly escaped JSON arrays', () => {
+    const body = { getText: () => 'text', insertParagraph: jest.fn() }
+    const DocumentApp = { openById: () => ({ getBody: () => body }) }
+    const file = makeFile({ getMimeType: () => 'gdoc' })
+    expect(
+      applyDualLayerTagsToDriveFile(file, meta, {
+        DocumentApp,
+        MimeType,
+        Utilities,
+      })
+    ).toBe(true)
+    expect(file.setDescription).toHaveBeenCalledWith(
+      expect.stringContaining('old\n\n[AI_INDEXED]')
+    )
+    expect(body.insertParagraph).toHaveBeenCalledWith(
+      0,
+      expect.stringContaining('people: ["P","Acme, Inc."]')
+    )
+    expect(body.insertParagraph).toHaveBeenCalledWith(
+      0,
+      expect.stringContaining('organization: ["Org, LLC"]')
+    )
+  })
+
+  test('uses empty description, skips existing marker and header', () => {
+    const body = { getText: () => '---x', insertParagraph: jest.fn() }
+    const DocumentApp = { openById: () => ({ getBody: () => body }) }
+    const file = makeFile({
+      getDescription: () => '[AI_INDEXED] already',
+      getMimeType: () => 'gdoc',
+    })
+    expect(
+      applyDualLayerTagsToDriveFile(
+        file,
+        {},
+        { DocumentApp, MimeType, Utilities }
+      )
+    ).toBe(true)
+    expect(file.setDescription).not.toHaveBeenCalled()
+    expect(body.insertParagraph).not.toHaveBeenCalled()
+
+    const f2 = makeFile({ getDescription: () => null })
+    applyDualLayerTagsToDriveFile(f2, meta, { MimeType, Utilities })
+    expect(f2.setDescription).toHaveBeenCalledWith(
+      expect.stringMatching(/^\[AI_INDEXED\]/)
+    )
+  })
+
+  test('returns false when layer 1 fails', () => {
+    const file = makeFile({
+      setDescription: () => {
+        throw new Error('x')
+      },
+    })
+    expect(
+      applyDualLayerTagsToDriveFile(file, meta, { MimeType, Utilities })
+    ).toBe(false)
+  })
+
+  test('layer 2 failure is non-fatal', () => {
+    const DocumentApp = {
+      openById: () => {
+        throw new Error('x')
+      },
+    }
+    const file = makeFile({ getMimeType: () => 'gdoc' })
+    expect(
+      applyDualLayerTagsToDriveFile(file, meta, {
+        DocumentApp,
+        MimeType,
+        Utilities,
+      })
+    ).toBe(true)
+  })
+})
+
+describe('extractJsonSubstring', () => {
+  beforeEach(() => jest.spyOn(console, 'warn').mockImplementation(() => {}))
+  afterEach(() => jest.restoreAllMocks())
+
+  test('handles empty, invalid, and valid input', () => {
+    expect(extractJsonSubstring('')).toBeNull()
+    expect(extractJsonSubstring('nothing')).toBeNull()
+    expect(extractJsonSubstring('{bad}')).toBeNull()
+    expect(extractJsonSubstring('x {"a":1} y')).toEqual({ a: 1 })
+  })
+})
+
+describe('parseRetryDelayMs', () => {
+  test('parses, caps, and defaults', () => {
+    expect(
+      parseRetryDelayMs(makeResponse(429, '', { 'Retry-After': '3' }))
+    ).toBe(3000)
+    expect(
+      parseRetryDelayMs(makeResponse(429, '', { 'retry-after': '999' }))
+    ).toBe(30000)
+    expect(
+      parseRetryDelayMs(makeResponse(429, '', { 'Retry-After': 'x' }))
+    ).toBe(5000)
+    expect(parseRetryDelayMs(makeResponse(429, ''))).toBe(5000)
+    expect(parseRetryDelayMs(undefined)).toBe(5000)
+  })
+})
+
+describe('getNotePathForDomain', () => {
+  test('maps known and unknown domains', () => {
+    expect(getNotePathForDomain('03_Vehicles')).toBe('03_Vehicles/index.md')
+    expect(getNotePathForDomain('nope')).toBeNull()
+  })
+})
+
+describe('formatDriveIngestionEntry', () => {
+  test('formats full entry with account email', () => {
+    const out = formatDriveIngestionEntry(
+      '2026-01-01',
+      'T',
+      'http://u',
+      ' sum ',
+      ['a', 'b'],
+      ['P'],
+      'me@x'
+    )
+    expect(out).toContain('[T](http://u)')
+    expect(out).toContain('- **Account**: me@x')
+    expect(out).toContain('**People**: P')
+    expect(out).toContain('`a`, `b`')
+    expect(out).toContain('> sum')
+  })
+
+  test('omits Account line when accountEmail is null or empty', () => {
+    const out = formatDriveIngestionEntry(
+      '2026-01-01',
+      'T',
+      'http://u',
+      ' sum ',
+      ['a'],
+      ['P'],
+      null
+    )
+    expect(out).not.toContain('Account')
+  })
+
+  test('omits empty sections', () => {
+    const out = formatDriveIngestionEntry('d', 'T', 'u', '', [], null, 'me')
+    expect(out).not.toContain('People')
+    expect(out).not.toContain('Tags')
+    expect(out).not.toContain('Summary')
+  })
+})
