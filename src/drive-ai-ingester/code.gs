@@ -50,10 +50,28 @@ function processDriveFilesWithAiIngester() {
       '[processDriveFilesWithAiIngester] Searching non-trashed document files across Drive...'
     )
     var query =
-      "trashed = false and (mimeType = 'application/vnd.google-apps.document' or mimeType = 'text/plain') and not fullText contains '[AI_INDEXED]'"
-    var files = DriveApp.searchFiles(query)
+      "trashed = false and (mimeType = 'application/vnd.google-apps.document' or mimeType = 'text/plain')"
+    var props = PropertiesService.getScriptProperties()
+    var continuationToken = props.getProperty(
+      'DRIVE_INGESTER_CONTINUATION_TOKEN'
+    )
+    var files = null
+    if (continuationToken) {
+      try {
+        files = DriveApp.continueFileIterator(continuationToken)
+      } catch (tokenErr) {
+        console.warn(
+          '[processDriveFilesWithAiIngester] Could not resume file iteration with token, restarting search: ' +
+            tokenErr.message
+        )
+        files = DriveApp.searchFiles(query)
+      }
+    } else {
+      files = DriveApp.searchFiles(query)
+    }
 
     while (
+      files &&
       files.hasNext() &&
       processedCount < MAX_FILES_PER_RUN &&
       inspectedCount < MAX_INSPECTED_PER_RUN
@@ -61,108 +79,144 @@ function processDriveFilesWithAiIngester() {
       var file = files.next()
       inspectedCount++
 
-      var description = ''
       try {
-        description = file.getDescription() || ''
-      } catch (e) {}
+        var description = ''
+        try {
+          description = file.getDescription() || ''
+        } catch (e) {}
 
-      var isIndexed = description.indexOf('[AI_INDEXED]') !== -1
-      var mime = file.getMimeType()
+        var isIndexed = description.indexOf('[AI_INDEXED]') !== -1
+        var mime = file.getMimeType()
 
-      // 1. Skip if already tagged & indexed
-      if (isIndexed) {
-        continue
-      }
-
-      // 2. Filter to document types whose contents can be extracted.
-      var isDocument =
-        mime === MimeType.GOOGLE_DOCS || mime === MimeType.PLAIN_TEXT
-
-      if (!isDocument) {
-        continue
-      }
-
-      console.log(
-        '[processDriveFilesWithAiIngester] Tagging document (' +
-          (processedCount + 1) +
-          '/' +
-          MAX_FILES_PER_RUN +
-          '): "' +
-          file.getName() +
-          '" (' +
-          mime +
-          ')'
-      )
-
-      var fileText = extractFileContentText(file, services)
-      var metadata = analyzeDocumentWithAi(
-        file.getName(),
-        fileText,
-        config,
-        services
-      )
-
-      if (metadata) {
-        // 3. Sync Executive Summary & Drive Link to GitHub self-private FIRST.
-        // If GitHub sync fails, leave file unindexed for subsequent retries.
-        var githubSuccess = true
-        if (config.githubToken) {
-          var notePath = getNotePathForDomain(
-            metadata.canonicalDomain || '01_Household',
-            metadata.subLabel
-          )
-          if (notePath) {
-            var dateStr = Utilities.formatDate(
-              file.getLastUpdated(),
-              'GMT',
-              'yyyy-MM-dd'
-            )
-            var entryMd = formatDriveIngestionEntry(
-              dateStr,
-              metadata.title || file.getName(),
-              file.getUrl(),
-              metadata.summary,
-              metadata.tags,
-              metadata.people,
-              config.userAccountEmail
-            )
-            githubSuccess = appendMarkdownEntryToGitHubRepo(
-              notePath,
-              entryMd,
-              'feat(drive-ingest): ' + file.getName()
-            )
-          }
-        }
-
-        if (!githubSuccess) {
-          console.warn(
-            '[processDriveFilesWithAiIngester] GitHub sync failed; skipping tagging and leaving file for retry: ' +
-              file.getName()
-          )
-          Utilities.sleep(2000)
+        // 1. Skip if already tagged & indexed
+        if (isIndexed) {
           continue
         }
 
-        // 4. Apply Dual-Layer Metadata Tags. Only increment processed counter
-        // if [AI_INDEXED] is successfully persisted.
-        var tagged = applyDualLayerTagsToDriveFile(file, metadata, services)
-        if (!tagged) {
-          console.warn(
-            '[processDriveFilesWithAiIngester] Tagging failed; leaving file for retry: ' +
-              file.getName()
-          )
-          Utilities.sleep(2000)
+        // 2. Filter to document types whose contents can be extracted.
+        var isDocument =
+          mime === MimeType.GOOGLE_DOCS || mime === MimeType.PLAIN_TEXT
+
+        if (!isDocument) {
           continue
         }
 
         console.log(
-          '[processDriveFilesWithAiIngester] Successfully tagged & indexed file in-place: ' +
-            file.getName()
+          '[processDriveFilesWithAiIngester] Tagging document (' +
+            (processedCount + 1) +
+            '/' +
+            MAX_FILES_PER_RUN +
+            '): "' +
+            file.getName() +
+            '" (' +
+            mime +
+            ')'
         )
-        processedCount++
+
+        var fileText = extractFileContentText(file, services)
+        var metadata = analyzeDocumentWithAi(
+          file.getName(),
+          fileText,
+          config,
+          services
+        )
+
+        if (metadata) {
+          // 3. Sync Executive Summary & Drive Link to GitHub self-private FIRST.
+          // If GitHub sync fails, leave file unindexed for subsequent retries.
+          var githubSuccess = true
+          if (config.githubToken) {
+            var notePath = getNotePathForDomain(
+              metadata.canonicalDomain || '01_Household',
+              metadata.subLabel
+            )
+            if (notePath) {
+              var dateStr = Utilities.formatDate(
+                file.getLastUpdated(),
+                'GMT',
+                'yyyy-MM-dd'
+              )
+              var entryMd = formatDriveIngestionEntry(
+                dateStr,
+                metadata.title || file.getName(),
+                file.getUrl(),
+                metadata.summary,
+                metadata.tags,
+                metadata.people,
+                config.userAccountEmail
+              )
+              githubSuccess = appendMarkdownEntryToGitHubRepo(
+                notePath,
+                entryMd,
+                'feat(drive-ingest): ' + file.getName()
+              )
+            } else {
+              console.warn(
+                '[processDriveFilesWithAiIngester] No GitHub note path for canonicalDomain "' +
+                  metadata.canonicalDomain +
+                  '" (file: ' +
+                  file.getName() +
+                  '); skipping indexing so it can be retried.'
+              )
+              githubSuccess = false
+            }
+          }
+
+          if (!githubSuccess) {
+            console.warn(
+              '[processDriveFilesWithAiIngester] GitHub sync failed; skipping tagging and leaving file for retry: ' +
+                file.getName()
+            )
+            Utilities.sleep(2000)
+            continue
+          }
+
+          // 4. Apply Dual-Layer Metadata Tags. Only increment processed counter
+          // if [AI_INDEXED] is successfully persisted.
+          var tagged = applyDualLayerTagsToDriveFile(file, metadata, services)
+          if (!tagged) {
+            console.warn(
+              '[processDriveFilesWithAiIngester] Tagging failed; leaving file for retry: ' +
+                file.getName()
+            )
+            Utilities.sleep(2000)
+            continue
+          }
+
+          console.log(
+            '[processDriveFilesWithAiIngester] Successfully tagged & indexed file in-place: ' +
+              file.getName()
+          )
+          processedCount++
+        }
+      } catch (fileErr) {
+        console.warn(
+          '[processDriveFilesWithAiIngester] Failed processing file "' +
+            file.getName() +
+            '": ' +
+            fileErr.message
+        )
       }
 
       Utilities.sleep(2000)
+    }
+
+    if (files && files.hasNext()) {
+      try {
+        props.setProperty(
+          'DRIVE_INGESTER_CONTINUATION_TOKEN',
+          files.getContinuationToken()
+        )
+      } catch (tokenSaveErr) {
+        console.warn(
+          '[processDriveFilesWithAiIngester] Failed to save continuation token: ' +
+            tokenSaveErr.message
+        )
+      }
+    } else {
+      try {
+        props.deleteProperty('DRIVE_INGESTER_CONTINUATION_TOKEN')
+      } catch (e) {}
     }
   } catch (err) {
     console.error(

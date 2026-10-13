@@ -18,8 +18,8 @@ function getDriveIngesterConfig() {
   return {
     geminiApiKey: props.getProperty('GEMINI_API_KEY') || '',
     githubToken: props.getProperty('GITHUB_PAT') || '',
-    githubRepoOwner: props.getProperty('GITHUB_REPO_OWNER') || 'don-petry',
-    githubRepoName: props.getProperty('GITHUB_REPO_NAME') || 'self-private',
+    githubRepoOwner: props.getProperty('GITHUB_REPO_OWNER') || '',
+    githubRepoName: props.getProperty('GITHUB_REPO_NAME') || '',
     userAccountEmail: userEmail,
 
     // 7 Canonical Domain Folders & Label Tree

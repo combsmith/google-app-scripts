@@ -435,4 +435,78 @@ describe('formatDriveIngestionEntry', () => {
     )
     expect(out).toContain('[](http://u)')
   })
+
+  test('formats multi-line summary with blockquote marker on every line', () => {
+    const out = formatDriveIngestionEntry(
+      '2026-01-01',
+      'Doc Title',
+      'http://u',
+      'Line 1\nLine 2\r\nLine 3',
+      [],
+      [],
+      null
+    )
+    expect(out).toContain(
+      '- **Summary**:\n  > Line 1\n  > Line 2\n  > Line 3\n'
+    )
+  })
+})
+
+describe('config and gitHubSync validation', () => {
+  const { getDriveIngesterConfig } = require('../config.gs')
+  const {
+    appendMarkdownEntryToGitHubRepo,
+    executeGitHubCommit,
+  } = require('../gitHubSync.gs')
+
+  beforeEach(() => {
+    global.getDriveIngesterConfig = getDriveIngesterConfig
+    jest.spyOn(console, 'warn').mockImplementation(() => {})
+    jest.spyOn(console, 'error').mockImplementation(() => {})
+  })
+  afterEach(() => jest.restoreAllMocks())
+
+  test('getDriveIngesterConfig defaults github repo owner and name to empty string', () => {
+    global.PropertiesService = {
+      getScriptProperties: () => ({
+        getProperty: () => null,
+      }),
+    }
+    const config = getDriveIngesterConfig()
+    expect(config.githubRepoOwner).toBe('')
+    expect(config.githubRepoName).toBe('')
+    expect(config.githubToken).toBe('')
+  })
+
+  test('appendMarkdownEntryToGitHubRepo returns false when destination repo coordinates are missing', () => {
+    global.PropertiesService = {
+      getScriptProperties: () => ({
+        getProperty: (key) => {
+          if (key === 'GITHUB_PAT') return 'token'
+          return null
+        },
+      }),
+    }
+    const result = appendMarkdownEntryToGitHubRepo(
+      'path.md',
+      'entry',
+      'message'
+    )
+    expect(result).toBe(false)
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining('GitHub sync configuration incomplete')
+    )
+  })
+
+  test('executeGitHubCommit returns false when repo coordinates are missing', () => {
+    const result = executeGitHubCommit('path.md', 'entry', 'msg', {
+      githubToken: 'tok',
+      githubRepoOwner: '',
+      githubRepoName: '',
+    })
+    expect(result).toBe(false)
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('Missing repository owner or repository name')
+    )
+  })
 })

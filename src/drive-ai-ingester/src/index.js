@@ -341,7 +341,14 @@ function formatDriveIngestionEntry(
     entry += '- **Tags**: `' + tags.join('`, `') + '`\n'
   }
   if (summaryText) {
-    entry += '- **Summary**:\n  > ' + summaryText.trim() + '\n'
+    entry +=
+      '- **Summary**:\n' +
+      summaryText
+        .trim()
+        .split(/\r?\n/)
+        .map((l) => '  > ' + l)
+        .join('\n') +
+      '\n'
   }
   return entry
 }
