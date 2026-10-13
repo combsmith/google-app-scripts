@@ -722,6 +722,25 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     }
   }
 
+  // IoT, Weather & Automation Alerts (IFTTT)
+  if (
+    sLower.indexOf('action@ifttt.com') !== -1 ||
+    sLower.indexOf('ifttt.com') !== -1
+  ) {
+    return {
+      canonicalDomain: '01_Household',
+      canonical_label: '01_Household',
+      subLabel: 'Household/Property',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.98,
+      title: subject,
+      summary:
+        'Automated weather or IoT trigger notification routed to Household/Property.',
+      reasoning: 'IFTTT / Weather Alert',
+    }
+  }
+
   // School Broadcasts & Bulletins (including ParentSquare & College parent newsletters)
   if (
     (isSchoolDomain ||
@@ -741,6 +760,22 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       summary:
         'Routine school bulletin, newsletter, or ParentSquare digest routed to Updates.',
       reasoning: 'School Broadcast',
+    }
+  }
+
+  // Routine Healthcare / Benefits Wellness Broadcasts
+  if (sLower.indexOf('hello.springhealth.com') !== -1) {
+    return {
+      canonicalDomain: '04_Family_Health',
+      canonical_label: '04_Family_Health',
+      subLabel: 'Family/Health-Medical',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.98,
+      title: subject,
+      summary:
+        'Routine employer healthcare benefit announcement or wellness newsletter.',
+      reasoning: 'Benefits Broadcast',
     }
   }
 
@@ -824,7 +859,9 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     sLower.indexOf('the passion translation') !== -1 ||
     sLower.indexOf('redditmail.com') !== -1 ||
     sLower.indexOf('daily.therundown.ai') !== -1 ||
-    sLower.indexOf('aibreakfast') !== -1
+    sLower.indexOf('aibreakfast') !== -1 ||
+    sLower.indexOf('mail.instagram.com') !== -1 ||
+    sLower.indexOf('facebookmail.com') !== -1
   ) {
     return {
       canonicalDomain: null,
@@ -853,7 +890,8 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     sLower.indexOf('birminghamhomebuyers') !== -1 ||
     sLower.indexOf('trailerparts') !== -1 ||
     sLower.indexOf('hillco') !== -1 ||
-    sLower.indexOf('scarsella') !== -1
+    sLower.indexOf('scarsella') !== -1 ||
+    sLower.indexOf('em1.cloudflare.com') !== -1
   ) {
     return {
       canonicalDomain: null,
