@@ -85,8 +85,8 @@ function analyzeDocumentWithAi(fileName, fileText, config, services) {
     'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
   ]
 
-  for (let e = 0; e < endpoints.length; e++) {
-    const url = endpoints[e] + '?key=' + config.geminiApiKey
+  for (const endpoint of endpoints) {
+    const url = endpoint + '?key=' + config.geminiApiKey
     const options = {
       method: 'post',
       contentType: 'application/json',
@@ -101,18 +101,12 @@ function analyzeDocumentWithAi(fileName, fileText, config, services) {
 
       if (statusCode === 200) {
         const resData = JSON.parse(jsonText)
-        if (
-          resData.candidates &&
-          resData.candidates[0] &&
-          resData.candidates[0].content &&
-          resData.candidates[0].content.parts &&
-          resData.candidates[0].content.parts[0]
-        ) {
-          const textOutput = resData.candidates[0].content.parts[0].text
+        const textOutput = resData.candidates?.[0]?.content?.parts?.[0]?.text
+        if (textOutput) {
           const parsedObj = extractJsonSubstring(textOutput)
           if (parsedObj) {
             console.log(
-              '[analyzeDocumentWithAi] Success using endpoint: ' + endpoints[e]
+              '[analyzeDocumentWithAi] Success using endpoint: ' + endpoint
             )
             return parsedObj
           }
@@ -121,7 +115,7 @@ function analyzeDocumentWithAi(fileName, fileText, config, services) {
         const delayMs = parseRetryDelayMs(response)
         console.warn(
           '[analyzeDocumentWithAi] Endpoint ' +
-            endpoints[e] +
+            endpoint +
             ' HTTP 429 Rate Limit: sleeping ' +
             delayMs / 1000 +
             's...'
@@ -131,7 +125,7 @@ function analyzeDocumentWithAi(fileName, fileText, config, services) {
     } catch (err) {
       console.warn(
         '[analyzeDocumentWithAi] Exception on endpoint ' +
-          endpoints[e] +
+          endpoint +
           ': ' +
           err.message
       )
@@ -166,7 +160,7 @@ function applyDualLayerTagsToDriveFile(file, metadata, services) {
   // Layer 1: Native Drive File Description Metadata Tagging
   try {
     const currDesc = file.getDescription() || ''
-    if (currDesc.indexOf('[AI_INDEXED]') === -1) {
+    if (!currDesc.includes('[AI_INDEXED]')) {
       const tagBlock =
         '[AI_INDEXED] [AI_DOMAIN: ' +
         domainStr +
@@ -276,8 +270,8 @@ function parseRetryDelayMs(response) {
   const headers = response?.getHeaders?.() || {}
   const retryHeader = headers['Retry-After'] || headers['retry-after']
   if (retryHeader) {
-    const seconds = parseInt(retryHeader, 10)
-    if (!isNaN(seconds) && seconds > 0) {
+    const seconds = Number.parseInt(retryHeader, 10)
+    if (!Number.isNaN(seconds) && seconds > 0) {
       return Math.min(seconds * 1000, 30000)
     }
   }
@@ -324,9 +318,9 @@ function formatDriveIngestionEntry(
   accountEmail
 ) {
   const escapedTitle = (title || '')
-    .replace(/\\/g, '\\\\')
-    .replace(/\[/g, '\\[')
-    .replace(/\]/g, '\\]')
+    .replaceAll('\\', '\\\\')
+    .replaceAll('[', String.raw`\[`)
+    .replaceAll(']', String.raw`\]`)
   let entry =
     '\n### ' + dateStr + ' — [' + escapedTitle + '](' + driveUrl + ')\n'
   if (accountEmail) {
