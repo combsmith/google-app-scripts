@@ -49,7 +49,9 @@ function processDriveFilesWithAiIngester() {
     console.log(
       '[processDriveFilesWithAiIngester] Searching non-trashed document files across Drive...'
     )
-    var files = DriveApp.searchFiles('trashed = false')
+    var query =
+      "trashed = false and (mimeType = 'application/vnd.google-apps.document' or mimeType = 'text/plain') and not fullText contains '[AI_INDEXED]'"
+    var files = DriveApp.searchFiles(query)
 
     while (
       files.hasNext() &&

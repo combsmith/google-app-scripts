@@ -78,7 +78,7 @@ describe('analyzeDocumentWithAi', () => {
   })
   afterEach(() => jest.restoreAllMocks())
 
-  test('returns parsed metadata on first success', () => {
+  test('returns parsed metadata on first success using gemini-2.5-flash', () => {
     const UrlFetchApp = {
       fetch: jest
         .fn()
@@ -92,9 +92,38 @@ describe('analyzeDocumentWithAi', () => {
     })
     expect(res).toEqual({ title: 'T' })
     expect(UrlFetchApp.fetch).toHaveBeenCalledTimes(1)
+    expect(UrlFetchApp.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('gemini-2.5-flash:generateContent'),
+      expect.any(Object)
+    )
   })
 
-  test('sleeps on 429, handles exceptions and bad bodies, then returns null', () => {
+  test('falls back to secondary model if first model fails', () => {
+    const fetch = jest
+      .fn()
+      .mockReturnValueOnce(makeResponse(500, 'Internal Server Error'))
+      .mockReturnValueOnce(
+        makeResponse(200, geminiBody('```json\n{"title":"Fallback"}\n```'))
+      )
+    const res = analyzeDocumentWithAi('f', 't', config, {
+      UrlFetchApp: { fetch },
+      Utilities: { sleep: jest.fn() },
+    })
+    expect(res).toEqual({ title: 'Fallback' })
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('gemini-2.5-flash:generateContent'),
+      expect.any(Object)
+    )
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('gemini-2.0-flash:generateContent'),
+      expect.any(Object)
+    )
+  })
+
+  test('sleeps on 429, handles exceptions and bad bodies across all production models, then returns null', () => {
     const sleep = jest.fn()
     const fetch = jest
       .fn()
@@ -102,17 +131,41 @@ describe('analyzeDocumentWithAi', () => {
       .mockImplementationOnce(() => {
         throw new Error('net')
       })
-      .mockReturnValueOnce(makeResponse(200, JSON.stringify({})))
       .mockReturnValueOnce(makeResponse(200, geminiBody('no json here')))
-      .mockReturnValueOnce(makeResponse(500, ''))
-      .mockReturnValueOnce(makeResponse(200, geminiBody('')))
     const res = analyzeDocumentWithAi('f', 't', config, {
       UrlFetchApp: { fetch },
       Utilities: { sleep },
     })
     expect(res).toBeNull()
     expect(sleep).toHaveBeenCalledWith(2000)
-    expect(fetch).toHaveBeenCalledTimes(6)
+    expect(fetch).toHaveBeenCalledTimes(3)
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('gemini-2.5-flash:generateContent'),
+      expect.any(Object)
+    )
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('gemini-2.0-flash:generateContent'),
+      expect.any(Object)
+    )
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining('gemini-1.5-flash:generateContent'),
+      expect.any(Object)
+    )
+  })
+
+  test('handles 200 response with missing candidates', () => {
+    const fetch = jest
+      .fn()
+      .mockReturnValue(makeResponse(200, JSON.stringify({})))
+    const res = analyzeDocumentWithAi('f', 't', config, {
+      UrlFetchApp: { fetch },
+      Utilities: { sleep: jest.fn() },
+    })
+    expect(res).toBeNull()
+    expect(fetch).toHaveBeenCalledTimes(3)
   })
 })
 
@@ -193,6 +246,26 @@ describe('applyDualLayerTagsToDriveFile', () => {
     expect(f2.setDescription).toHaveBeenCalledWith(
       expect.stringMatching(/^\[AI_INDEXED\]/)
     )
+  })
+
+  test('skips header insertion when existing header has leading whitespace', () => {
+    const body = {
+      getText: () => '  \n\n---\ndomain: "01_Household"\n---',
+      insertParagraph: jest.fn(),
+    }
+    const DocumentApp = { openById: () => ({ getBody: () => body }) }
+    const file = makeFile({
+      getDescription: () => 'desc',
+      getMimeType: () => 'gdoc',
+    })
+    expect(
+      applyDualLayerTagsToDriveFile(file, meta, {
+        DocumentApp,
+        MimeType,
+        Utilities,
+      })
+    ).toBe(true)
+    expect(body.insertParagraph).not.toHaveBeenCalled()
   })
 
   test('returns false when layer 1 fails', () => {
@@ -294,5 +367,32 @@ describe('formatDriveIngestionEntry', () => {
     expect(out).not.toContain('People')
     expect(out).not.toContain('Tags')
     expect(out).not.toContain('Summary')
+  })
+
+  test('escapes square brackets in document title', () => {
+    const out = formatDriveIngestionEntry(
+      '2026-01-01',
+      '[Draft] Spec [Q1]',
+      'http://u',
+      ' sum ',
+      ['a'],
+      ['P'],
+      'me@x'
+    )
+    expect(out).toContain('\\[Draft\\] Spec \\[Q1\\]')
+    expect(out).toContain('[\\[Draft\\] Spec \\[Q1\\]](http://u)')
+  })
+
+  test('handles null or undefined title gracefully', () => {
+    const out = formatDriveIngestionEntry(
+      '2026-01-01',
+      null,
+      'http://u',
+      ' sum ',
+      [],
+      [],
+      null
+    )
+    expect(out).toContain('[](http://u)')
   })
 })

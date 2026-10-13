@@ -80,12 +80,9 @@ function analyzeDocumentWithAi(fileName, fileText, config, services) {
   }
 
   const endpoints = [
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent',
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent',
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent',
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent',
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent',
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent',
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
   ]
 
   for (let e = 0; e < endpoints.length; e++) {
@@ -220,7 +217,7 @@ function applyDualLayerTagsToDriveFile(file, metadata, services) {
         '---\n\n'
 
       const text = body.getText()
-      if (text.indexOf('---') !== 0) {
+      if (text.trim().indexOf('---') !== 0) {
         body.insertParagraph(0, yamlHeader)
         console.log(
           '[applyDualLayerTagsToDriveFile] Embedded YAML front-matter header into Google Doc: ' +
@@ -321,7 +318,9 @@ function formatDriveIngestionEntry(
   peopleList,
   accountEmail
 ) {
-  let entry = '\n### ' + dateStr + ' — [' + title + '](' + driveUrl + ')\n'
+  const escapedTitle = (title || '').replace(/\[/g, '\\[').replace(/\]/g, '\\]')
+  let entry =
+    '\n### ' + dateStr + ' — [' + escapedTitle + '](' + driveUrl + ')\n'
   if (accountEmail) {
     entry += '- **Account**: ' + accountEmail + '\n'
   }
