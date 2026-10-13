@@ -137,9 +137,13 @@ jobs:
 
       - name: Commit and push auto-fixes
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT_WORKFLOWS || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT_WORKFLOWS }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::GH_PAT_WORKFLOWS is required for autofix pushes."
+            exit 1
+          fi
           git apply --index "${RUNNER_TEMP}/autofix-patch/autofix.patch"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
