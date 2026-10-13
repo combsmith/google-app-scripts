@@ -72,7 +72,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.ref }}
-          token: ${{ secrets.GH_PAT_WORKFLOWS || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
@@ -88,6 +88,8 @@ jobs:
           npm run lint -- --fix
 
       - name: Commit and push auto-fixes
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT_WORKFLOWS || secrets.GITHUB_TOKEN }}
         run: |
           if git diff --quiet; then
             echo "No formatting or lint fixes needed."
@@ -96,7 +98,7 @@ jobs:
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add -A
             git commit -m "chore(ci): apply prettier/eslint auto-fixes"
-            git push
+            git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:${{ github.event.pull_request.head.ref }}
           fi
 
       - name: Verify no remaining issues after auto-fix
