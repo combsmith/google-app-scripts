@@ -33,3 +33,9 @@
 # central byte-identity stub-drift guard. Prettier would collapse that gap and
 # reflow comments, re-introducing drift, so it must not reformat this file.
 .github/workflows/persona-mention.yml
+# pr-review is a standards-owned caller stub copied VERBATIM from
+# petry-projects/.github/standards/workflows/pr-review.yml. Its exact bytes
+# (including the two-space gap before the `# NOSONAR` marker) are enforced by the
+# central byte-identity stub-drift guard. Prettier would collapse that gap and
+# reflow comments, re-introducing drift, so it must not reformat this file.
+.github/workflows/pr-review.yml
