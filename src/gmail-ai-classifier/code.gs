@@ -85,7 +85,16 @@ function processEmailsWithAiClassifier() {
         sender
     )
 
-    var classification = classifyWithGemini(sender, subject, snippet, config)
+    var classification = deterministicRuleClassify_(
+      sender,
+      subject,
+      snippet,
+      thread,
+      config
+    )
+    if (!classification) {
+      classification = classifyWithGemini(sender, subject, snippet, config)
+    }
     if (classification) {
       // Clean up any pre-existing conflicting core domain labels, sub-labels, flat labels, and Retention/Permanent
       cleanConflictingLabels(
@@ -243,6 +252,347 @@ function processEmailsWithAiClassifier() {
   }
 
   console.log('[processEmailsWithAiClassifier] Batch processing complete.')
+}
+
+/**
+ * Fast-path deterministic rule-based classifier.
+ * Categorizes unambiguous broadcast feeds, machine telemetry, routine receipts,
+ * and social newsletters in 0ms without consuming Gemini API quota.
+ * Strictly respects safety shields (user-sent, family, and 1:1 teacher correspondence).
+ *
+ * @param {string} sender - Email sender header
+ * @param {string} subject - Email subject line
+ * @param {string} snippet - Email body snippet
+ * @param {Object} [thread] - GmailThread object (for sender/reply safety checks)
+ * @param {Object} [config] - Classifier configuration
+ * @returns {Object|null} Classification object or null if email requires Gemini LLM reasoning
+ */
+function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
+  var sLower = (sender || '').toLowerCase()
+  var subLower = (subject || '').toLowerCase()
+  var userEmail = (
+    config && config.userAccountEmail ? config.userAccountEmail : ''
+  ).toLowerCase()
+
+  // 1. Safety Shields
+  if (thread && typeof thread.getMessages === 'function' && userEmail) {
+    try {
+      var msgs = thread.getMessages() || []
+      for (var m = 0; m < msgs.length; m++) {
+        var fromA = (msgs[m].getFrom() || '').toLowerCase()
+        if (fromA.indexOf(userEmail) !== -1) {
+          return {
+            canonicalDomain: null,
+            canonical_label: null,
+            subLabel: null,
+            category: 'Primary',
+            action: 'keep',
+            confidence: 1.0,
+            title: subject,
+            summary: 'User-sent or replied thread preserved in Primary Inbox.',
+            reasoning: 'User-Sent Shield',
+          }
+        }
+      }
+    } catch (err) {
+      // ignore thread check errors
+    }
+  }
+
+  // Family 1:1 Shield (configurable via config.familyEmails or customPromptRules)
+  var familyList =
+    config && config.familyEmails
+      ? config.familyEmails.toLowerCase().split(',')
+      : []
+  if (
+    familyList.length > 0 &&
+    familyList.some(function (f) {
+      return f.trim() && sLower.indexOf(f.trim()) !== -1
+    })
+  ) {
+    return {
+      canonicalDomain: '04_Family_Health',
+      canonical_label: '04_Family_Health',
+      subLabel: 'Family/Correspondence',
+      category: 'Primary',
+      action: 'keep',
+      confidence: 1.0,
+      title: subject,
+      summary: 'Direct family correspondence preserved in Primary Inbox.',
+      reasoning: 'Family 1:1 Shield',
+    }
+  }
+
+  // Teacher / Academic Counselor 1:1 Shield (exclude mass broadcast subjects)
+  var isSchoolDomain =
+    sLower.indexOf('bcsk12.org') !== -1 ||
+    sLower.indexOf('mcaabhm.org') !== -1 ||
+    sLower.indexOf('jeffersonstate.edu') !== -1
+  var isBroadcastSubject = [
+    'weekly',
+    'newsletter',
+    'bulletin',
+    'update',
+    'digest',
+    'progress is ready',
+    'lunch',
+    'menu',
+    'portraits',
+    'news',
+    'noteworthy',
+    'announcement',
+    'athletics',
+  ].some(function (w) {
+    return subLower.indexOf(w) !== -1
+  })
+
+  if (isSchoolDomain && !isBroadcastSubject) {
+    return {
+      canonicalDomain: '04_Family_Health',
+      canonical_label: '04_Family_Health',
+      subLabel: 'Family/School-Student',
+      category: 'Primary',
+      action: 'keep',
+      confidence: 1.0,
+      title: subject,
+      summary:
+        'Direct 1:1 teacher or school counselor correspondence preserved in Primary Inbox.',
+      reasoning: 'Teacher 1:1 Shield',
+    }
+  }
+
+  // 2. Deterministic Feeds & Broadcasts
+  // Automated Daily Agenda Digests
+  if (subLower.indexOf('your day ahead') !== -1) {
+    return {
+      canonicalDomain: '01_Household',
+      canonical_label: '01_Household',
+      subLabel: 'Household/Property',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary: 'Automated daily agenda digest routed to Updates.',
+      reasoning: 'Daily Digest',
+    }
+  }
+
+  // Bee Telemetry (BroodMinder)
+  if (
+    sLower.indexOf('broodminder') !== -1 ||
+    subLower.indexOf('hive alert') !== -1 ||
+    sLower.indexOf('alerts@broodminder.com') !== -1
+  ) {
+    return {
+      canonicalDomain: '07_Community_NonProfit',
+      canonical_label: '07_Community_NonProfit',
+      subLabel: 'Projects/Telemetry',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary: 'Automated hive telemetry alert routed to Projects/Telemetry.',
+      reasoning: 'BroodMinder Telemetry',
+    }
+  }
+
+  // Developer & Infrastructure Monitoring Alerts
+  if (
+    sLower.indexOf('notifications@linear.app') !== -1 ||
+    sLower.indexOf('linear.app') !== -1
+  ) {
+    return {
+      canonicalDomain: '05_Tech_Infrastructure',
+      canonical_label: '05_Tech_Infrastructure',
+      subLabel: 'Tech/Alerts',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary:
+        'Linear task and project notification digest routed to Tech/Alerts.',
+      reasoning: 'Linear Alert',
+    }
+  }
+  if (
+    sLower.indexOf('notifications.cubic.dev') !== -1 ||
+    sLower.indexOf('cubic') !== -1
+  ) {
+    return {
+      canonicalDomain: '05_Tech_Infrastructure',
+      canonical_label: '05_Tech_Infrastructure',
+      subLabel: 'Tech/Alerts',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary: 'Cubic AI automated code review notice routed to Tech/Alerts.',
+      reasoning: 'Cubic Code Review',
+    }
+  }
+  if (sLower.indexOf('notifications@github.com') !== -1) {
+    return {
+      canonicalDomain: '05_Tech_Infrastructure',
+      canonical_label: '05_Tech_Infrastructure',
+      subLabel: 'Tech/Alerts',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary:
+        'GitHub CI/CD workflow run or notification routed to Tech/Alerts.',
+      reasoning: 'GitHub Alert',
+    }
+  }
+
+  // School Broadcasts & Bulletins (including ParentSquare & College parent newsletters)
+  if (
+    (isSchoolDomain ||
+      sLower.indexOf('parentsquare.com') !== -1 ||
+      sLower.indexOf('briarwoodchristianschool.org') !== -1 ||
+      sLower.indexOf('admissions@ua.edu') !== -1) &&
+    (isBroadcastSubject || sLower.indexOf('parentsquare.com') !== -1)
+  ) {
+    return {
+      canonicalDomain: '04_Family_Health',
+      canonical_label: '04_Family_Health',
+      subLabel: 'Family/School-Student',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.98,
+      title: subject,
+      summary:
+        'Routine school bulletin, newsletter, or ParentSquare digest routed to Updates.',
+      reasoning: 'School Broadcast',
+    }
+  }
+
+  // Order Deliveries & Shipping Tracking
+  if (
+    sLower.indexOf('ebay.com') !== -1 &&
+    (subLower.indexOf('delivered') !== -1 ||
+      subLower.indexOf('out for delivery') !== -1 ||
+      subLower.indexOf('order confirmed') !== -1 ||
+      subLower.indexOf('shipped') !== -1)
+  ) {
+    return {
+      canonicalDomain: '02_Finance_Legal',
+      canonical_label: '02_Finance_Legal',
+      subLabel: 'Finance/Purchases',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.98,
+      title: subject,
+      summary: 'Online order confirmation or package delivery tracking notice.',
+      reasoning: 'Order Tracking',
+    }
+  }
+  if (
+    sLower.indexOf('amazon.com') !== -1 &&
+    (subLower.indexOf('ordered:') !== -1 ||
+      subLower.indexOf('shipped:') !== -1 ||
+      subLower.indexOf('delivered:') !== -1 ||
+      subLower.indexOf('refund issued') !== -1 ||
+      subLower.indexOf('auto-reloaded') !== -1)
+  ) {
+    return {
+      canonicalDomain: '02_Finance_Legal',
+      canonical_label: '02_Finance_Legal',
+      subLabel: 'Finance/Purchases',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.98,
+      title: subject,
+      summary: 'Routine Amazon e-commerce order, shipping, or refund update.',
+      reasoning: 'Amazon Routine',
+    }
+  }
+
+  // Routine Utility & Bank Statements
+  if (
+    sLower.indexOf('capitalone') !== -1 ||
+    sLower.indexOf('chase.com') !== -1 ||
+    sLower.indexOf('bankofamerica.com') !== -1 ||
+    sLower.indexOf('spireenergy.com') !== -1 ||
+    sLower.indexOf('spectrum') !== -1 ||
+    sLower.indexOf('message.att-mail.com') !== -1
+  ) {
+    if (
+      subLower.indexOf('statement') !== -1 ||
+      subLower.indexOf('autopay') !== -1 ||
+      subLower.indexOf('payment processed') !== -1 ||
+      subLower.indexOf('bill is ready') !== -1
+    ) {
+      return {
+        canonicalDomain: '02_Finance_Legal',
+        canonical_label: '02_Finance_Legal',
+        subLabel: 'Finance/Bills',
+        category: 'Updates',
+        action: 'archive',
+        confidence: 0.98,
+        title: subject,
+        summary: 'Routine billing statement, receipt, or AutoPay confirmation.',
+        reasoning: 'Routine Billing',
+      }
+    }
+  }
+
+  // Newsletters, Digests, Political Blasts, Social Media
+  if (
+    sLower.indexOf('nytimes.com') !== -1 ||
+    sLower.indexOf('nextdoor.com') !== -1 ||
+    sLower.indexOf('substack.com') !== -1 ||
+    sLower.indexOf('dougforalabama') !== -1 ||
+    sLower.indexOf('ossoff') !== -1 ||
+    sLower.indexOf('the passion translation') !== -1 ||
+    sLower.indexOf('redditmail.com') !== -1 ||
+    sLower.indexOf('daily.therundown.ai') !== -1 ||
+    sLower.indexOf('aibreakfast') !== -1
+  ) {
+    return {
+      canonicalDomain: null,
+      canonical_label: null,
+      subLabel: null,
+      category: 'Social',
+      action: 'archive',
+      confidence: 0.98,
+      title: subject,
+      summary:
+        'Routine media newsletter, Substack digest, or political appeal.',
+      reasoning: 'News/Newsletter/Social',
+    }
+  }
+
+  // Retail & E-Commerce Marketing Blasts
+  if (
+    sLower.indexOf('lowes') !== -1 ||
+    sLower.indexOf('mannlake') !== -1 ||
+    sLower.indexOf('urotuning') !== -1 ||
+    sLower.indexOf('ray-ban') !== -1 ||
+    sLower.indexOf('americanmeadows') !== -1 ||
+    sLower.indexOf('foxhound') !== -1 ||
+    sLower.indexOf('bhphotovideo') !== -1 ||
+    sLower.indexOf('starbucks') !== -1 ||
+    sLower.indexOf('birminghamhomebuyers') !== -1 ||
+    sLower.indexOf('trailerparts') !== -1 ||
+    sLower.indexOf('hillco') !== -1 ||
+    sLower.indexOf('scarsella') !== -1
+  ) {
+    return {
+      canonicalDomain: null,
+      canonical_label: null,
+      subLabel: null,
+      category: 'Promotions',
+      action: 'archive',
+      confidence: 0.98,
+      title: subject,
+      summary:
+        'Commercial vendor retail promo, discount, or marketing announcement.',
+      reasoning: 'Retail Promo',
+    }
+  }
+
+  return null
 }
 
 /**
