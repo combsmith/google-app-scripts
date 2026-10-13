@@ -90,6 +90,7 @@ jobs:
       - name: Commit and push auto-fixes
         env:
           GH_TOKEN: ${{ secrets.GH_PAT_WORKFLOWS || secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           if git diff --quiet; then
             echo "No formatting or lint fixes needed."
@@ -98,7 +99,7 @@ jobs:
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add -A
             git commit -m "chore(ci): apply prettier/eslint auto-fixes"
-            git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:${{ github.event.pull_request.head.ref }}
+            git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:"${HEAD_REF}"
           fi
 
       - name: Verify no remaining issues after auto-fix
