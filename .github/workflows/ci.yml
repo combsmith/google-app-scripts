@@ -65,7 +65,9 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      patch: ${{ steps.patch.outputs.patch }}
 
     steps:
       - name: Checkout code
@@ -87,23 +89,44 @@ jobs:
           npm run format
           npm run lint -- --fix
 
+      # No push token is available in this job: PR-controlled tooling (npm
+      # scripts, git hooks) runs here, so the fixes are exported as a patch and
+      # applied + pushed by the separate 'autofix-push' job on a clean checkout.
+      - name: Export auto-fixes as patch
+        id: patch
+        run: |
+          git add -A
+          echo "patch=$(git diff --cached --binary | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify no remaining issues after auto-fix
+        run: npm run check
+
+  autofix-push:
+    needs: autofix
+    if: needs.autofix.outputs.patch != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code (clean, no PR-installed tooling)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          persist-credentials: false
+
       - name: Commit and push auto-fixes
         env:
           GH_TOKEN: ${{ secrets.GH_PAT_WORKFLOWS || secrets.GITHUB_TOKEN }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PATCH_B64: ${{ needs.autofix.outputs.patch }}
         run: |
-          if git diff --quiet; then
-            echo "No formatting or lint fixes needed."
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "chore(ci): apply prettier/eslint auto-fixes"
-            git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:"${HEAD_REF}"
-          fi
-
-      - name: Verify no remaining issues after auto-fix
-        run: npm run check
+          printf '%s' "${PATCH_B64}" | base64 -d > "${RUNNER_TEMP}/autofix.patch"
+          git apply --index "${RUNNER_TEMP}/autofix.patch"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(ci): apply prettier/eslint auto-fixes"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:"${HEAD_REF}"
 
   secret-scan:
     name: Secret scan (gitleaks)
