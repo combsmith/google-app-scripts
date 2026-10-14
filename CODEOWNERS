@@ -1,5 +1,5 @@
 # CODEOWNERS
-# Standard: use the @petry-projects/org-leads team for all code owner
-# assignments. See petry-projects/.github standards/codeowners-standard.md
+# Standard: use the @combsmith/org-leads team for all code owner
+# assignments. See combsmith/.github standards/codeowners-standard.md
 
-* @petry-projects/org-leads
+* @combsmith/org-leads

@@ -14,7 +14,7 @@ If you discover a security vulnerability in this project, please report it respo
 
 Instead, use one of the following methods:
 
-1. **GitHub Private Vulnerability Reporting**: Use the [Security tab](https://github.com/petry-projects/google-app-scripts/security/advisories/new) to report a vulnerability privately.
+1. **GitHub Private Vulnerability Reporting**: Use the [Security tab](https://github.com/combsmith/google-app-scripts/security/advisories/new) to report a vulnerability privately.
 2. **Email**: Send details to **security@petry-projects.dev**.
 
 ### What to include
