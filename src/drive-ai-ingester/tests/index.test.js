@@ -510,3 +510,223 @@ describe('config and gitHubSync validation', () => {
     )
   })
 })
+
+describe('processDriveFilesWithAiIngester runner & functional validation', () => {
+  const {
+    processDriveFilesWithAiIngester,
+    setupFifteenMinuteDriveTrigger,
+    stopAllDriveTriggers,
+  } = require('../code.gs')
+
+  beforeEach(() => {
+    jest.spyOn(console, 'log').mockImplementation(() => {})
+    jest.spyOn(console, 'warn').mockImplementation(() => {})
+    jest.spyOn(console, 'error').mockImplementation(() => {})
+    global.Utilities = {
+      sleep: jest.fn(),
+      formatDate: jest.fn(() => '2026-10-13'),
+    }
+  })
+  afterEach(() => jest.restoreAllMocks())
+
+  test('aborts early when geminiApiKey is missing', () => {
+    global.getDriveIngesterConfig = () => ({ geminiApiKey: '' })
+    processDriveFilesWithAiIngester()
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('GEMINI_API_KEY ScriptProperty is missing')
+    )
+  })
+
+  test('skips run if script lock cannot be acquired', () => {
+    global.getDriveIngesterConfig = () => ({ geminiApiKey: 'key' })
+    global.LockService = {
+      getScriptLock: () => ({
+        tryLock: () => false,
+      }),
+    }
+    processDriveFilesWithAiIngester()
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining('Another ingestion run is in progress')
+    )
+  })
+
+  test('runs file search, processes unindexed doc, persists continuation token, and isolates errors', () => {
+    global.getDriveIngesterConfig = () => ({
+      geminiApiKey: 'test-key',
+      githubToken: '',
+      canonicalDomains: ['01_Household'],
+    })
+    const releaseLock = jest.fn()
+    global.LockService = {
+      getScriptLock: () => ({
+        tryLock: () => true,
+        releaseLock,
+      }),
+    }
+    const setProperty = jest.fn()
+    const deleteProperty = jest.fn()
+    global.PropertiesService = {
+      getScriptProperties: () => ({
+        getProperty: (k) =>
+          k === 'DRIVE_INGESTER_CONTINUATION_TOKEN' ? null : null,
+        setProperty,
+        deleteProperty,
+      }),
+    }
+
+    const docBody = {
+      getText: () => 'Test document body',
+      insertParagraph: jest.fn(),
+    }
+    global.DocumentApp = {
+      openById: () => ({ getBody: () => docBody }),
+    }
+    global.MimeType = {
+      GOOGLE_DOCS: 'application/vnd.google-apps.document',
+      PLAIN_TEXT: 'text/plain',
+    }
+    global.UrlFetchApp = {
+      fetch: () =>
+        makeResponse(
+          200,
+          geminiBody(
+            JSON.stringify({
+              canonicalDomain: '01_Household',
+              subLabel: 'General',
+              title: 'My Doc',
+              tags: ['home'],
+              people: ['Jane Doe'],
+              summary: 'Summary line 1\nSummary line 2',
+            })
+          )
+        ),
+    }
+
+    const testFile = {
+      getName: () => 'My Test Doc',
+      getDescription: () => '',
+      setDescription: jest.fn(),
+      getMimeType: () => 'application/vnd.google-apps.document',
+      getId: () => 'doc123',
+      getLastUpdated: () => new Date(),
+      getUrl: () => 'https://drive.google.com/file/d/doc123',
+    }
+
+    const errorFile = {
+      getName: () => 'Corrupt Doc',
+      getDescription: () => {
+        throw new Error('Corrupt metadata')
+      },
+    }
+
+    let filesList = [errorFile, testFile]
+    let index = 0
+    const mockIterator = {
+      hasNext: () => index < filesList.length,
+      next: () => filesList[index++],
+      getContinuationToken: () => 'cursor_token_123',
+    }
+
+    global.DriveApp = {
+      searchFiles: jest.fn(() => mockIterator),
+      continueFileIterator: jest.fn(),
+    }
+
+    processDriveFilesWithAiIngester()
+
+    expect(global.DriveApp.searchFiles).toHaveBeenCalled()
+    expect(testFile.setDescription).toHaveBeenCalledWith(
+      expect.stringContaining('[AI_INDEXED]')
+    )
+    expect(deleteProperty).toHaveBeenCalledWith(
+      'DRIVE_INGESTER_CONTINUATION_TOKEN'
+    )
+    expect(releaseLock).toHaveBeenCalled()
+  })
+
+  test('resumes iterator when continuation token is present and saves token when files remain', () => {
+    global.getDriveIngesterConfig = () => ({
+      geminiApiKey: 'test-key',
+      githubToken: '',
+      canonicalDomains: ['01_Household'],
+    })
+    const releaseLock = jest.fn()
+    global.LockService = {
+      getScriptLock: () => ({
+        tryLock: () => true,
+        releaseLock,
+      }),
+    }
+    const setProperty = jest.fn()
+    global.PropertiesService = {
+      getScriptProperties: () => ({
+        getProperty: (k) =>
+          k === 'DRIVE_INGESTER_CONTINUATION_TOKEN' ? 'existing_cursor' : null,
+        setProperty,
+        deleteProperty: jest.fn(),
+      }),
+    }
+    global.DocumentApp = {
+      openById: () => ({
+        getBody: () => ({ getText: () => '', insertParagraph: jest.fn() }),
+      }),
+    }
+    global.MimeType = { GOOGLE_DOCS: 'gdoc', PLAIN_TEXT: 'text/plain' }
+    global.UrlFetchApp = { fetch: jest.fn() }
+
+    const mockIterator = {
+      hasNext: jest.fn().mockReturnValue(true),
+      next: jest.fn().mockReturnValue({
+        getName: () => 'Already Indexed',
+        getDescription: () => '[AI_INDEXED] tags',
+        getMimeType: () => 'gdoc',
+      }),
+      getContinuationToken: () => 'next_cursor_token',
+    }
+
+    global.DriveApp = {
+      continueFileIterator: jest.fn(() => mockIterator),
+      searchFiles: jest.fn(),
+    }
+
+    processDriveFilesWithAiIngester()
+
+    expect(global.DriveApp.continueFileIterator).toHaveBeenCalledWith(
+      'existing_cursor'
+    )
+    expect(setProperty).toHaveBeenCalledWith(
+      'DRIVE_INGESTER_CONTINUATION_TOKEN',
+      'next_cursor_token'
+    )
+    expect(releaseLock).toHaveBeenCalled()
+  })
+
+  test('setupFifteenMinuteDriveTrigger and stopAllDriveTriggers manage triggers', () => {
+    const deleteTrigger = jest.fn()
+    const matchingTrigger = {
+      getHandlerFunction: () => 'processDriveFilesWithAiIngester',
+    }
+    const otherTrigger = {
+      getHandlerFunction: () => 'otherFunction',
+    }
+    const create = jest.fn()
+    const everyMinutes = jest.fn(() => ({ create }))
+    const timeBased = jest.fn(() => ({ everyMinutes }))
+    const newTrigger = jest.fn(() => ({ timeBased }))
+
+    global.ScriptApp = {
+      getProjectTriggers: () => [matchingTrigger, otherTrigger],
+      deleteTrigger,
+      newTrigger,
+    }
+
+    stopAllDriveTriggers()
+    expect(deleteTrigger).toHaveBeenCalledWith(matchingTrigger)
+    expect(deleteTrigger).not.toHaveBeenCalledWith(otherTrigger)
+
+    setupFifteenMinuteDriveTrigger()
+    expect(newTrigger).toHaveBeenCalledWith('processDriveFilesWithAiIngester')
+    expect(everyMinutes).toHaveBeenCalledWith(15)
+    expect(create).toHaveBeenCalled()
+  })
+})
