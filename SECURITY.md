@@ -12,10 +12,9 @@ If you discover a security vulnerability in this project, please report it respo
 
 **Do not open a public issue.**
 
-Instead, use one of the following methods:
+Instead, use the following method:
 
 1. **GitHub Private Vulnerability Reporting**: Use the [Security tab](https://github.com/combsmith/google-app-scripts/security/advisories/new) to report a vulnerability privately.
-2. **Email**: Send details to **security@petry-projects.dev**.
 
 ### What to include
 
