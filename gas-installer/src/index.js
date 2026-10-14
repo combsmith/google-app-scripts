@@ -8,7 +8,7 @@
 'use strict'
 
 const GITHUB_API_BASE =
-  'https://api.github.com/repos/petry-projects/google-app-scripts/contents/src'
+  'https://api.github.com/repos/combsmith/google-app-scripts/contents/src'
 
 const APPS_SCRIPT_API_BASE = 'https://script.googleapis.com/v1'
 

@@ -12,7 +12,7 @@
  */
 
 var GITHUB_API_BASE =
-  'https://api.github.com/repos/petry-projects/google-app-scripts/contents/src'
+  'https://api.github.com/repos/combsmith/google-app-scripts/contents/src'
 var APPS_SCRIPT_API = 'https://script.googleapis.com/v1'
 
 /**

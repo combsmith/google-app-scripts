@@ -1,6 +1,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# SOURCE OF TRUTH: petry-projects/.github/standards/workflows/copilot-setup-steps.yml
-# Standard:        petry-projects/.github/standards/ci-standards.md#11-copilot-cloud-agent-setup
+# SOURCE OF TRUTH: combsmith/.github/standards/workflows/copilot-setup-steps.yml
+# Standard:        combsmith/.github/standards/ci-standards.md#11-copilot-cloud-agent-setup
 #
 # ADOPTING THIS WORKFLOW:
 #   1. Copy this file to .github/workflows/copilot-setup-steps.yml in your repo.
@@ -74,7 +74,7 @@ jobs:
 
       - name: Verify environment
         run: |
-          echo "=== petry-projects Copilot cloud agent environment ==="
+          echo "=== combsmith Copilot cloud agent environment ==="
           echo "Repository : ${{ github.repository }}"
           echo "Ref        : ${{ github.ref }}"
           echo "Runner     : ${{ runner.os }} / ${{ runner.arch }}"

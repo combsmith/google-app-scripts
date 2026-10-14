@@ -5,7 +5,7 @@
 # pull-request reviews and blocks force-pushes on the default branch.
 #
 # Standard reference:
-#   https://github.com/petry-projects/.github/blob/main/standards/github-settings.md#pr-quality--standard-ruleset-all-repositories
+#   https://github.com/combsmith/.github/blob/main/standards/github-settings.md#pr-quality--standard-ruleset-all-repositories
 #
 # What this script does:
 #   1. Checks whether the "pr-quality" ruleset already exists

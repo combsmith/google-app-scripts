@@ -2,8 +2,8 @@
 # https://github.com/probot/settings
 
 # Repository-level settings — standard defaults
-# Reference: https://github.com/petry-projects/.github/blob/main/standards/github-settings.md#repository-settings--standard-defaults
-# Security settings reference: https://github.com/petry-projects/.github/blob/main/standards/push-protection.md#required-repo-level-settings
+# Reference: https://github.com/combsmith/.github/blob/main/standards/github-settings.md#repository-settings--standard-defaults
+# Security settings reference: https://github.com/combsmith/.github/blob/main/standards/push-protection.md#required-repo-level-settings
 repository:
   allow_auto_merge: true
   delete_branch_on_merge: true
@@ -19,7 +19,7 @@ repository:
       status: enabled
 
 # Labels — standard set
-# Reference: https://github.com/petry-projects/.github/blob/main/standards/github-settings.md#labels--standard-set
+# Reference: https://github.com/combsmith/.github/blob/main/standards/github-settings.md#labels--standard-set
 labels:
   - name: security
     color: e4e669
