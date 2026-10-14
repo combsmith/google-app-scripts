@@ -3,7 +3,7 @@
 #
 # Applies required security_and_analysis settings to the repository via the
 # GitHub API, per the push-protection standard:
-# https://github.com/petry-projects/.github/blob/main/standards/push-protection.md#required-repo-level-settings
+# https://github.com/combsmith/.github/blob/main/standards/push-protection.md#required-repo-level-settings
 #
 # What this script does:
 #   1. Enables secret scanning
@@ -64,7 +64,7 @@ echo "  ✓ dependabot_security_updates"
 # ── Disable check-suite auto-trigger for CodeRabbit and Claude ────────────────
 # These apps create queued check suites on every push that are never completed,
 # permanently blocking auto-merge. Disabling auto-trigger prevents this.
-# Reference: https://github.com/petry-projects/.github/blob/main/standards/github-settings.md#check-suite-auto-trigger-configuration
+# Reference: https://github.com/combsmith/.github/blob/main/standards/github-settings.md#check-suite-auto-trigger-configuration
 echo ""
 echo "Disabling check-suite auto-trigger for CodeRabbit and Claude..."
 

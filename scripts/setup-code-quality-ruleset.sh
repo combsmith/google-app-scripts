@@ -4,7 +4,7 @@
 # Creates the "code-quality" repository ruleset that enforces required status
 # checks before merging to protected branches (main).
 #
-# Standard: https://github.com/petry-projects/.github/blob/main/standards/github-settings.md#code-quality--required-checks-ruleset-all-repositories
+# Standard: https://github.com/combsmith/.github/blob/main/standards/github-settings.md#code-quality--required-checks-ruleset-all-repositories
 #
 # What this script does:
 #   1. Creates (or updates) the "code-quality" ruleset on the target repository
