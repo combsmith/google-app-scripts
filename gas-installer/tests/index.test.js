@@ -235,7 +235,7 @@ describe('buildDeploymentPayload', () => {
 describe('GITHUB_API_BASE', () => {
   test('points to the correct repository path', () => {
     expect(GITHUB_API_BASE).toBe(
-      'https://api.github.com/repos/petry-projects/google-app-scripts/contents/src'
+      'https://api.github.com/repos/combsmith/google-app-scripts/contents/src'
     )
   })
 })

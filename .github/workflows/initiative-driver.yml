@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# SOURCE OF TRUTH: petry-projects/.github/standards/workflows/initiative-driver.yml
-# Standard:        petry-projects/.github/standards/ci-standards.md
-# Central driver:  petry-projects/.github-private/.github/workflows/initiative-driver.yml
+# SOURCE OF TRUTH: combsmith/.github/standards/workflows/initiative-driver.yml
+# Standard:        combsmith/.github/standards/ci-standards.md
+# Central driver:  combsmith/.github-private/.github/workflows/initiative-driver.yml
 #
 # AGENTS — READ BEFORE EDITING:
 #   • This file is a THIN CALLER STUB. All dependency-aware release logic (the
@@ -12,17 +12,17 @@
 #     is pure-bash (no claude-code-action), so this stub dispatches the central
 #     workflow_dispatch DIRECTLY with `gh workflow run`. No LLM runs here.
 #   • You MUST NOT change: the dispatch target
-#     (-R petry-projects/.github-private -f target_repo=${{ github.repository }}),
+#     (-R combsmith/.github-private -f target_repo=${{ github.repository }}),
 #     the `initiative:auto` label filter, or the PAT guard.
 #   • If you need different release behaviour, open a PR against the central
-#     driver in petry-projects/.github-private — never by editing callers.
+#     driver in combsmith/.github-private — never by editing callers.
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # Initiative Driver — per-repo dispatcher, thin caller for the central driver.
 #
 # On this repo's issues:[closed, labeled] (plus a safety-net off-peak schedule),
 # this stub dispatches the CENTRAL initiative-driver in
-# petry-projects/.github-private with target_repo=<this repo>. The central
+# combsmith/.github-private with target_repo=<this repo>. The central
 # driver then sweeps this repo's `initiative:auto` epics and releases their ready
 # sub-issues to dev-lead — so the central driver does not have to watch every
 # enrolled repo's events.
@@ -31,12 +31,12 @@
 #   1. Copy this file verbatim to .github/workflows/initiative-driver.yml in your repo.
 #   2. Ensure the `initiative:auto` label exists on the repo.
 #   3. Confirm the org-level secret GH_PAT_WORKFLOWS is accessible **and its
-#      owner has write access to petry-projects/.github-private** (to dispatch
+#      owner has write access to combsmith/.github-private** (to dispatch
 #      the central workflow) **and to this repo** (the central driver applies the
 #      `dev-lead` label cross-repo with that PAT; a label applied with
 #      GITHUB_TOKEN would not trigger dev-lead).
 #
-# Standard: https://github.com/petry-projects/.github/blob/main/standards/ci-standards.md
+# Standard: https://github.com/combsmith/.github/blob/main/standards/ci-standards.md
 name: Initiative Driver — Dispatch Central
 
 on:
@@ -85,5 +85,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT_DON_PETRY || secrets.GH_PAT_WORKFLOWS }}
         run: |
           gh workflow run initiative-driver.yml \
-            -R petry-projects/.github-private \
+            -R combsmith/.github-private \
             -f target_repo=${{ github.repository }}

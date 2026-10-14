@@ -1,6 +1,6 @@
 # Google Apps Script Productivity Suite
 
-[![Contributing](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](https://github.com/petry-projects/.github/blob/main/CONTRIBUTING.md)
+[![Contributing](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](https://github.com/combsmith/.github/blob/main/CONTRIBUTING.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ![googleappscripts](header.jpg)
@@ -94,7 +94,7 @@ For commercial inquiries, email [support@combsmith.com](mailto:support@combsmith
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please review the org-wide [Contributing Guide](https://github.com/petry-projects/.github/blob/main/CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
+Contributions are welcome! Please review the org-wide [Contributing Guide](https://github.com/combsmith/.github/blob/main/CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
 1.  Fork the repository.
 2.  Create a feature branch (`git checkout -b feature/AmazingScript`).

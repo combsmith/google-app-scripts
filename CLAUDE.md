@@ -1,7 +1,7 @@
-@https://github.com/petry-projects/.github/blob/main/AGENTS.md
+@https://github.com/combsmith/.github/blob/main/AGENTS.md
 @AGENTS.md
 
-> **Org-wide standards:** This project inherits shared development standards from [petry-projects/.github/AGENTS.md](https://github.com/petry-projects/.github/blob/main/AGENTS.md).
+> **Org-wide standards:** This project inherits shared development standards from [combsmith/.github/AGENTS.md](https://github.com/combsmith/.github/blob/main/AGENTS.md).
 
 # Google Apps Script — Claude Code Project Context
 
