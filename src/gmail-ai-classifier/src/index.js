@@ -1966,6 +1966,57 @@ function auditEmailClassifications(customConfig, customServices) {
   return report
 }
 
+/**
+ * Sets up a daily cloud trigger to run auditEmailClassifications every morning at 6:00 AM.
+ */
+function setupDailyAuditTrigger(services) {
+  const scriptApp =
+    services?.ScriptApp || (typeof ScriptApp !== 'undefined' ? ScriptApp : null)
+  if (!scriptApp) return
+  const triggers = scriptApp.getProjectTriggers() || []
+  for (let i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'auditEmailClassifications') {
+      scriptApp.deleteTrigger(triggers[i])
+    }
+  }
+
+  scriptApp
+    .newTrigger('auditEmailClassifications')
+    .timeBased()
+    .everyDays(1)
+    .atHour(6)
+    .create()
+
+  console.log(
+    '[setupDailyAuditTrigger] Established daily 6:00 AM classification audit trigger.'
+  )
+}
+
+/**
+ * Sets up a recurring cloud trigger to run auditEmailClassifications every 4 hours.
+ */
+function setupFourHourAuditTrigger(services) {
+  const scriptApp =
+    services?.ScriptApp || (typeof ScriptApp !== 'undefined' ? ScriptApp : null)
+  if (!scriptApp) return
+  const triggers = scriptApp.getProjectTriggers() || []
+  for (let i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'auditEmailClassifications') {
+      scriptApp.deleteTrigger(triggers[i])
+    }
+  }
+
+  scriptApp
+    .newTrigger('auditEmailClassifications')
+    .timeBased()
+    .everyHours(4)
+    .create()
+
+  console.log(
+    '[setupFourHourAuditTrigger] Established 4-hour classification audit trigger.'
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Attachment Persistence to Google Drive along Taxonomy Path
 // ---------------------------------------------------------------------------
@@ -4190,6 +4241,8 @@ module.exports = {
   auditClassifications,
   formatAuditDigest,
   auditEmailClassifications,
+  setupDailyAuditTrigger,
+  setupFourHourAuditTrigger,
   isCanonicalClassification,
   resolveTaxonomySubfolderName,
   evaluateAttachmentEligibility,

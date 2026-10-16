@@ -1090,6 +1090,27 @@ function setupDailyAuditTrigger() {
 }
 
 /**
+ * Sets up a recurring cloud trigger to run auditEmailClassifications every 4 hours.
+ */
+function setupFourHourAuditTrigger() {
+  var triggers = ScriptApp.getProjectTriggers()
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'auditEmailClassifications') {
+      ScriptApp.deleteTrigger(triggers[i])
+    }
+  }
+
+  ScriptApp.newTrigger('auditEmailClassifications')
+    .timeBased()
+    .everyHours(4)
+    .create()
+
+  console.log(
+    '[setupFourHourAuditTrigger] Established 4-hour classification audit trigger.'
+  )
+}
+
+/**
  * Daily audit routine that inspects recently processed threads for classification anomalies,
  * missing or duplicate domain labels, and potential prompt tuning opportunities.
  * Logs anomalies to console and optionally emails a digest if AUDIT_DIGEST_EMAIL is configured.
@@ -4038,5 +4059,7 @@ if (typeof module !== 'undefined' && module.exports) {
     auditEmailClassifications: auditEmailClassifications,
     auditClassifications: auditClassifications,
     formatAuditDigest: formatAuditDigest,
+    setupDailyAuditTrigger: setupDailyAuditTrigger,
+    setupFourHourAuditTrigger: setupFourHourAuditTrigger,
   }
 }
