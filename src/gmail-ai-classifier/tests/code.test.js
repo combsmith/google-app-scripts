@@ -1484,6 +1484,141 @@ describe('Sparse Body Attachment Filename Enrichment', () => {
       '[Attached: Receipt_2026.pdf, Contract_Doc.pdf]'
     )
   })
+
+  test('enriches snippet with attachment filenames even when body is not sparse', () => {
+    let capturedPrompt = ''
+    const mockThread = {
+      getId: () => 't-non-sparse',
+      getMessages: () => [
+        {
+          getFrom: () => 'contractor@example.com',
+          getSubject: () => 'Roof estimate for review',
+          getPlainBody: () =>
+            'Hi Client, please find attached the detailed estimate for the residential porch and roof repair project.',
+          getAttachments: () => [
+            { getName: () => 'Roof_Estimate_2026.pdf' },
+            { getName: () => 'company_logo.png' },
+          ],
+        },
+      ],
+      getLabels: () => [],
+      addLabel: jest.fn(),
+    }
+    const mockFetch = jest.fn((url, opts) => {
+      const payload = JSON.parse(opts.payload)
+      capturedPrompt = payload.contents[0].parts[0].text
+      return {
+        getResponseCode: () => 200,
+        getContentText: () =>
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      text: JSON.stringify({
+                        canonical_label: '01_Household/Property',
+                        canonicalDomain: '01_Household',
+                        subLabel: 'Household/Property',
+                        confidence: 0.98,
+                        reasoning: 'Roof repair estimate',
+                      }),
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+      }
+    })
+    const config = {
+      modelEndpoint: 'https://example.com/gemini',
+      geminiApiKey: 'test-key',
+      canonicalDomains: ['01_Household/Property'],
+      processedLabel: 'Processed',
+      autoFilterConfidenceThreshold: 0.99,
+    }
+    const services = {
+      GmailApp: {
+        getUserLabelByName: jest.fn((name) => ({ getName: () => name })),
+        createLabel: jest.fn((name) => ({ getName: () => name })),
+      },
+      UrlFetchApp: { fetch: mockFetch },
+      Gmail: null,
+    }
+
+    processThreadBatch([mockThread], config, services)
+
+    expect(capturedPrompt).toContain('[Attached: Roof_Estimate_2026.pdf]')
+    expect(capturedPrompt).not.toContain('company_logo.png')
+  })
+})
+
+describe('enrichSnippetWithAttachments_ Unit Tests', () => {
+  const { enrichSnippetWithAttachments_: enrichIndex } = require('../src/index')
+  const { enrichSnippetWithAttachments_: enrichCodeGs } = require('../code.gs')
+
+  ;[
+    { name: 'src/index.js', fn: enrichIndex },
+    { name: 'code.gs', fn: enrichCodeGs },
+  ].forEach(({ name, fn }) => {
+    describe(`${name} implementation`, () => {
+      test('returns base snippet untouched when message has no attachments', () => {
+        const msg = { getAttachments: () => [] }
+        expect(fn('Hello world', msg)).toBe('Hello world')
+        expect(fn('', msg)).toBe('')
+        expect(fn(null, msg)).toBe('')
+      })
+
+      test('appends document attachment names to non-empty snippet', () => {
+        const msg = {
+          getAttachments: () => [
+            { getName: () => 'Inspection_Report.pdf' },
+            { getName: () => 'Invoice.xlsx' },
+          ],
+        }
+        const result = fn('Please review findings.', msg)
+        expect(result).toBe(
+          'Please review findings. [Attached: Inspection_Report.pdf, Invoice.xlsx]'
+        )
+      })
+
+      test('enriches sparse/empty snippet with attachment names', () => {
+        const msg = {
+          getAttachments: () => [{ getName: () => 'Signed_Waiver.pdf' }],
+        }
+        expect(fn('', msg)).toBe('[Attached: Signed_Waiver.pdf]')
+        expect(fn('   ', msg)).toBe('[Attached: Signed_Waiver.pdf]')
+      })
+
+      test('filters signature icons, tracking pixels, and non-document formats', () => {
+        const msg = {
+          getAttachments: () => [
+            { getName: () => 'logo.png' },
+            { getName: () => 'company_logo.jpeg' },
+            { getName: () => 'signature_banner.jpg' },
+            { getName: () => 'spacer.gif' },
+            { getName: () => 'invite.ics' },
+            { getName: () => 'contact.vcf' },
+            { getName: () => 'disclaimer.htm' },
+            { getName: () => 'Valid_Contract.docx' },
+          ],
+        }
+        const result = fn('Agreement attached.', msg)
+        expect(result).toBe(
+          'Agreement attached. [Attached: Valid_Contract.docx]'
+        )
+      })
+
+      test('is idempotent when [Attached: already present in snippet', () => {
+        const msg = {
+          getAttachments: () => [{ getName: () => 'Existing.pdf' }],
+        }
+        const snippet = 'Here is the doc. [Attached: Existing.pdf]'
+        expect(fn(snippet, msg)).toBe(snippet)
+      })
+    })
+  })
 })
 
 describe('reclassifyThreadsByQuery Historical Realignment', () => {

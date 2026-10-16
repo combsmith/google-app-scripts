@@ -1011,29 +1011,11 @@ function processThreadBatch(threads, config, services) {
     const latestMsg = messages[0]
     const sender = latestMsg.getFrom()
     const subject = latestMsg.getSubject()
-    let bodySnippet = latestMsg.getPlainBody()
-      ? latestMsg.getPlainBody().substring(0, 1200)
-      : ''
-    if (
-      bodySnippet.trim().length < 15 &&
-      typeof latestMsg.getAttachments === 'function'
-    ) {
-      try {
-        const atts = latestMsg.getAttachments() || []
-        const attNames = atts
-          .map((a) => (typeof a.getName === 'function' ? a.getName() : ''))
-          .filter(Boolean)
-        if (attNames.length > 0) {
-          bodySnippet =
-            (bodySnippet.trim() ? bodySnippet.trim() + ' ' : '') +
-            '[Attached: ' +
-            attNames.join(', ') +
-            ']'
-        }
-      } catch {
-        // ignore attachment errors
-      }
-    }
+    let bodySnippet =
+      typeof latestMsg.getPlainBody === 'function'
+        ? latestMsg.getPlainBody().substring(0, 1200)
+        : ''
+    bodySnippet = enrichSnippetWithAttachments_(bodySnippet, latestMsg)
 
     let classification = deterministicRuleClassify_(
       sender,
@@ -2510,6 +2492,67 @@ function getMessageAttachments_(msg) {
   return msg.attachments || []
 }
 
+/**
+ * Enriches email snippet text with eligible attachment filenames so classifiers
+ * (deterministic rules and Gemini) have full document context.
+ *
+ * @param {string} snippet - Raw or truncated body snippet
+ * @param {Object} message - GmailMessage or mock
+ * @returns {string} Enriched snippet string
+ */
+function enrichSnippetWithAttachments_(snippet, message) {
+  var baseSnippet = (snippet || '').trim()
+  if (!message || typeof message.getAttachments !== 'function') {
+    return baseSnippet
+  }
+  if (baseSnippet.indexOf('[Attached:') !== -1) {
+    return baseSnippet
+  }
+  try {
+    var atts = message.getAttachments() || []
+    var attNames = atts
+      .map(function (a) {
+        return typeof a.getName === 'function' ? a.getName() : a.name || ''
+      })
+      .filter(function (name) {
+        if (!name || typeof name !== 'string') return false
+        var clean = name.trim()
+        var dot = clean.lastIndexOf('.')
+        var ext = dot > 0 ? clean.slice(dot + 1).toLowerCase() : ''
+        var stem =
+          dot > 0 ? clean.slice(0, dot).toLowerCase() : clean.toLowerCase()
+        if (
+          /(logo|banner|header|footer|avatar|badge|icon|button|spacer|pixel|tracking|divider|rating|star|thumb|unnamed|outlook-)/i.test(
+            stem
+          ) ||
+          /(^|[-_.])sig(nature)?([-_.]|$)/i.test(stem) ||
+          /^image\d*$/i.test(stem)
+        ) {
+          return false
+        }
+        if (
+          /^(ics|ical|vcf|vcard|htm|html|css|js|json|xml|dat|p7s|p7m|eml|msg)$/i.test(
+            ext
+          )
+        ) {
+          return false
+        }
+        return true
+      })
+    if (attNames.length > 0) {
+      return (
+        (baseSnippet ? baseSnippet + ' ' : '') +
+        '[Attached: ' +
+        attNames.join(', ') +
+        ']'
+      )
+    }
+  } catch (e) {
+    // ignore attachment inspection errors
+  }
+  return baseSnippet
+}
+
 function getOrCreateChildFolder_(parentFolder, folderName) {
   const folders = parentFolder.getFoldersByName(folderName)
   if (folders && typeof folders.hasNext === 'function' && folders.hasNext()) {
@@ -3359,28 +3402,7 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
       typeof firstMessage.getPlainBody === 'function'
         ? firstMessage.getPlainBody().substring(0, 500)
         : ''
-    if (
-      snippet.trim().length < 15 &&
-      typeof firstMessage.getAttachments === 'function'
-    ) {
-      try {
-        var atts = firstMessage.getAttachments() || []
-        var attNames = atts
-          .map(function (a) {
-            return typeof a.getName === 'function' ? a.getName() : ''
-          })
-          .filter(Boolean)
-        if (attNames.length > 0) {
-          snippet =
-            (snippet.trim() ? snippet.trim() + ' ' : '') +
-            '[Attached: ' +
-            attNames.join(', ') +
-            ']'
-        }
-      } catch {
-        // ignore attachment errors
-      }
-    }
+    snippet = enrichSnippetWithAttachments_(snippet, firstMessage)
 
     var rawLabels = []
     if (typeof thread.getLabels === 'function') {
@@ -4008,29 +4030,11 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
       var firstMessage = messages[0]
       var sender = firstMessage.getFrom()
       var subject = firstMessage.getSubject()
-      var snippet = firstMessage.getPlainBody().substring(0, 500)
-      if (
-        snippet.trim().length < 15 &&
-        typeof firstMessage.getAttachments === 'function'
-      ) {
-        try {
-          var atts = firstMessage.getAttachments() || []
-          var attNames = atts
-            .map(function (a) {
-              return typeof a.getName === 'function' ? a.getName() : ''
-            })
-            .filter(Boolean)
-          if (attNames.length > 0) {
-            snippet =
-              (snippet.trim() ? snippet.trim() + ' ' : '') +
-              '[Attached: ' +
-              attNames.join(', ') +
-              ']'
-          }
-        } catch (attErr) {
-          // ignore attachment errors
-        }
-      }
+      var snippet =
+        typeof firstMessage.getPlainBody === 'function'
+          ? firstMessage.getPlainBody().substring(0, 500)
+          : ''
+      snippet = enrichSnippetWithAttachments_(snippet, firstMessage)
 
       console.log(
         '[processEmailsWithAiClassifier] Processing (' +
@@ -4281,5 +4285,6 @@ module.exports = {
   isRootDomainLabel,
   resolveCanonicalDomainFromLabels,
   deterministicRuleClassify_,
+  enrichSnippetWithAttachments_,
   getFileHash,
 }
