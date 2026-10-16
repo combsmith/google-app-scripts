@@ -406,6 +406,7 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
   // Teacher / Academic Counselor 1:1 Shield (exclude mass broadcast subjects)
   var isSchoolDomain =
     sLower.indexOf('bcsk12.org') !== -1 ||
+    sLower.indexOf('bcs-lions.org') !== -1 ||
     sLower.indexOf('mcaabhm.org') !== -1 ||
     sLower.indexOf('jeffersonstate.edu') !== -1
   var isBroadcastSubject = [
@@ -822,17 +823,29 @@ function cleanConflictingLabels(thread, targetDomain, targetSubLabel, config) {
  * Automatically purges emails older than their category retention policy (2 years for Promotions/Social/Forums).
  * Core household domains (01_Household - 07_Community_NonProfit), Primary, Updates, Starred, and User Replied/Sent threads are 100% EXEMPT.
  */
-function purgeExpiredEmailsByRetentionPolicy() {
+function purgeExpiredEmailsByRetentionPolicy(customConfig, customServices) {
   console.log(
     '[purgeExpiredEmailsByRetentionPolicy] Starting weekly category retention cleanup...'
   )
-  var config = getAiClassifierConfig()
+  var services = customServices || {}
+  var config =
+    customConfig ||
+    (typeof getAiClassifierConfig === 'function' ? getAiClassifierConfig() : {})
+
+  var gmail =
+    services.GmailApp || (typeof GmailApp !== 'undefined' ? GmailApp : null)
+  if (!gmail) {
+    console.error(
+      '[purgeExpiredEmailsByRetentionPolicy] GmailApp service is missing.'
+    )
+    return { trashedCount: 0, exemptedCount: 0 }
+  }
 
   // Explicitly exclude threads sent by user or containing user replies
   var retentionQuery =
     '(category:promotions OR category:social OR category:forums) older_than:2y -is:starred -from:me'
 
-  var threads = GmailApp.search(retentionQuery, 0, 50)
+  var threads = gmail.search(retentionQuery, 0, 50) || []
   console.log(
     '[purgeExpiredEmailsByRetentionPolicy] Found ' +
       threads.length +
@@ -840,56 +853,84 @@ function purgeExpiredEmailsByRetentionPolicy() {
   )
 
   if (threads.length === 0) {
-    return
+    return { trashedCount: 0, exemptedCount: 0 }
   }
 
-  var coreDomainLabels = config.canonicalDomains
+  var coreDomainLabels = config.canonicalDomains || [
+    '01_Household',
+    '02_Finance_Legal',
+    '03_Vehicles',
+    '04_Family_Health',
+    '05_Tech_Infrastructure',
+    '06_Work_Career',
+    '07_Community_NonProfit',
+  ]
   var trashedCount = 0
+  var exemptedCount = 0
 
   for (var i = 0; i < threads.length; i++) {
-    var thread = threads[i]
-    var labels = thread.getLabels()
-    var isExempt = false
+    try {
+      var thread = threads[i]
+      if (!thread) continue
+      var labels =
+        typeof thread.getLabels === 'function' ? thread.getLabels() || [] : []
+      var isExempt = false
 
-    // Safety Shield 1: Check if thread contains any Core Household Domain label
-    // OR any classifier sub-label. Under the strict single-label model a saved
-    // core thread often carries ONLY its sub-label (e.g. "Finance/Banking") with
-    // the canonical-domain code stripped, so exempting canonical codes alone
-    // would let the 2-year purge trash indefinitely-retained core mail. Any
-    // user sub-label (contains '/', excluding the ephemeral Retention/* tags)
-    // therefore also grants exemption.
-    for (var l = 0; l < labels.length; l++) {
-      var labelName = labels[l].getName()
-      for (var cd = 0; cd < coreDomainLabels.length; cd++) {
-        if (labelName.indexOf(coreDomainLabels[cd]) !== -1) {
+      // Safety Shield 1: Check if thread contains any Core Household Domain label
+      // OR any classifier sub-label. Under the strict single-label model a saved
+      // core thread often carries ONLY its sub-label (e.g. "Finance/Banking") with
+      // the canonical-domain code stripped, so exempting canonical codes alone
+      // would let the 2-year purge trash indefinitely-retained core mail. Any
+      // user sub-label (contains '/', excluding the ephemeral Retention/* tags)
+      // therefore also grants exemption.
+      for (var l = 0; l < labels.length; l++) {
+        var labelName =
+          typeof labels[l].getName === 'function'
+            ? labels[l].getName()
+            : String(labels[l])
+        for (var cd = 0; cd < coreDomainLabels.length; cd++) {
+          if (labelName.indexOf(coreDomainLabels[cd]) !== -1) {
+            isExempt = true
+            break
+          }
+        }
+        if (isExempt) break
+        if (
+          labelName.indexOf('/') !== -1 &&
+          labelName.indexOf('Retention/') !== 0
+        ) {
           isExempt = true
           break
         }
       }
-      if (isExempt) break
-      if (
-        labelName.indexOf('/') !== -1 &&
-        labelName.indexOf('Retention/') !== 0
-      ) {
-        isExempt = true
-        break
-      }
-    }
 
-    // Safety Shield 2: Check if user sent a message or replied in this thread
-    if (!isExempt) {
-      if (isThreadSentOrRepliedByUser(thread, config.userAccountEmail)) {
-        isExempt = true
+      // Safety Shield 2: Check if user sent a message or replied in this thread
+      if (!isExempt) {
+        if (isThreadSentOrRepliedByUser(thread, config.userAccountEmail)) {
+          isExempt = true
+        }
       }
-    }
 
-    if (!isExempt) {
-      thread.moveToTrash()
-      trashedCount++
-    } else {
-      console.log(
-        '[purgeExpiredEmailsByRetentionPolicy] Exempted thread from trash (contains core domain label or user reply): ' +
-          thread.getFirstMessageSubject()
+      if (!isExempt) {
+        if (typeof thread.moveToTrash === 'function') {
+          thread.moveToTrash()
+        }
+        trashedCount++
+      } else {
+        exemptedCount++
+        var subj =
+          typeof thread.getFirstMessageSubject === 'function'
+            ? thread.getFirstMessageSubject()
+            : thread.getId()
+        console.log(
+          '[purgeExpiredEmailsByRetentionPolicy] Exempted thread from trash (contains core domain label or user reply): ' +
+            subj
+        )
+      }
+    } catch (err) {
+      console.warn(
+        '[purgeExpiredEmailsByRetentionPolicy] Error processing thread: ' +
+          err.message
       )
     }
   }
@@ -899,6 +940,7 @@ function purgeExpiredEmailsByRetentionPolicy() {
       trashedCount +
       ' expired thread(s) to Trash.'
   )
+  return { trashedCount: trashedCount, exemptedCount: exemptedCount }
 }
 
 /**
@@ -906,18 +948,18 @@ function purgeExpiredEmailsByRetentionPolicy() {
  */
 function isThreadSentOrRepliedByUser(thread, userEmail) {
   try {
-    // userEmail is pre-computed once by the caller from config.userAccountEmail.
-    // Never call Session.getEffectiveUser().getEmail() here: this function runs
-    // inside per-thread loops (processEmailsWithAiClassifier, retention purge),
-    // so re-fetching the static owner email would be an expensive API call per
-    // iteration.
     var primaryEmail = (userEmail || '').toLowerCase()
-    if (!primaryEmail) {
+    if (!primaryEmail || !thread || typeof thread.getMessages !== 'function') {
       return false
     }
-    var messages = thread.getMessages()
+    var messages = thread.getMessages() || []
     for (var m = 0; m < messages.length; m++) {
-      var fromAddr = messages[m].getFrom().toLowerCase()
+      var msg = messages[m]
+      if (!msg || typeof msg.getFrom !== 'function') continue
+      var rawFrom = msg.getFrom()
+      var fromAddr = (
+        rawFrom && typeof rawFrom === 'string' ? rawFrom : ''
+      ).toLowerCase()
       if (fromAddr.indexOf(primaryEmail) !== -1) {
         return true
       }
@@ -1131,6 +1173,56 @@ function auditClassifications(threads, config) {
     var assignedCanonical = rawLabels.filter(function (l) {
       return canonicalDomains.indexOf(l) !== -1 || /^0[1-7]_/.test(l)
     })
+
+    // Collect any canonical domains represented via sub-labels (e.g. "Finance/Banking" -> "02_Finance_Legal")
+    var sublabelDomains = []
+    rawLabels.forEach(function (l) {
+      var lLower = (l || '').toLowerCase()
+      if (
+        lLower.indexOf('household/') === 0 &&
+        sublabelDomains.indexOf('01_Household') === -1
+      ) {
+        sublabelDomains.push('01_Household')
+      } else if (
+        lLower.indexOf('finance/') === 0 &&
+        sublabelDomains.indexOf('02_Finance_Legal') === -1
+      ) {
+        sublabelDomains.push('02_Finance_Legal')
+      } else if (
+        lLower.indexOf('vehicles/') === 0 &&
+        sublabelDomains.indexOf('03_Vehicles') === -1
+      ) {
+        sublabelDomains.push('03_Vehicles')
+      } else if (
+        lLower.indexOf('family/') === 0 &&
+        sublabelDomains.indexOf('04_Family_Health') === -1
+      ) {
+        sublabelDomains.push('04_Family_Health')
+      } else if (
+        lLower.indexOf('tech/') === 0 &&
+        sublabelDomains.indexOf('05_Tech_Infrastructure') === -1
+      ) {
+        sublabelDomains.push('05_Tech_Infrastructure')
+      } else if (
+        lLower.indexOf('work/') === 0 &&
+        sublabelDomains.indexOf('06_Work_Career') === -1
+      ) {
+        sublabelDomains.push('06_Work_Career')
+      } else if (
+        (lLower.indexOf('community/') === 0 ||
+          lLower.indexOf('projects/') === 0) &&
+        sublabelDomains.indexOf('07_Community_NonProfit') === -1
+      ) {
+        sublabelDomains.push('07_Community_NonProfit')
+      }
+    })
+
+    sublabelDomains.forEach(function (sd) {
+      if (assignedCanonical.indexOf(sd) === -1) {
+        assignedCanonical.push(sd)
+      }
+    })
+
     var flags = []
 
     // 1. Missing Domain
@@ -1317,13 +1409,20 @@ function formatAuditDigest(report) {
   text += report.summary + '\n\n'
 
   report.findings.forEach(function (finding, idx) {
+    if (!finding) return
+    var labelsStr =
+      Array.isArray(finding.canonicalLabels) &&
+      finding.canonicalLabels.length > 0
+        ? finding.canonicalLabels.join(', ')
+        : '(none)'
+    var flagsList = Array.isArray(finding.flags) ? finding.flags : []
+
     text +=
       idx + 1 + '. Subject: "' + (finding.subject || '(no subject)') + '"\n'
     text += '   Sender:  ' + (finding.sender || '(unknown)') + '\n'
-    text +=
-      '   Labels:  ' + (finding.canonicalLabels.join(', ') || '(none)') + '\n'
+    text += '   Labels:  ' + labelsStr + '\n'
     text += '   Flags:\n'
-    finding.flags.forEach(function (f) {
+    flagsList.forEach(function (f) {
       text += '     • ' + f + '\n'
     })
     text += '\n'
@@ -2074,6 +2173,9 @@ function backfillOriginalEmailHeaders() {
  * @param {Object} [gmailService] - Optional injected Advanced Gmail service (defaults to global Gmail)
  */
 function setGmailCategoryTab(thread, targetCategory, gmailService) {
+  if (!thread || typeof thread.getId !== 'function') {
+    return
+  }
   var gmail = gmailService || (typeof Gmail !== 'undefined' ? Gmail : null)
   if (
     !gmail ||
@@ -3823,6 +3925,7 @@ if (typeof module !== 'undefined' && module.exports) {
     processEmailsWithAiClassifier: processEmailsWithAiClassifier,
     sweepAllUnreadInboxEmails: sweepAllUnreadInboxEmails,
     purgeExpiredEmailsByRetentionPolicy: purgeExpiredEmailsByRetentionPolicy,
+    isThreadSentOrRepliedByUser: isThreadSentOrRepliedByUser,
     setupWeeklyRetentionTrigger: setupWeeklyRetentionTrigger,
     setupFiveMinuteTrigger: setupFiveMinuteTrigger,
     stopAllTriggers: stopAllTriggers,

@@ -231,6 +231,34 @@ describe('createPermanentGmailFilter', () => {
     Users: { Settings: { Filters: { create: createFn, list: listFn } } },
   })
 
+  test('returns false without throwing when senderEmail is null, undefined, or empty', () => {
+    const gmailApp = makeGmailApp()
+    expect(
+      createPermanentGmailFilter(
+        null,
+        '01_Household/Primary_House',
+        makeGmailService(),
+        gmailApp
+      )
+    ).toBe(false)
+    expect(
+      createPermanentGmailFilter(
+        undefined,
+        '01_Household/Primary_House',
+        makeGmailService(),
+        gmailApp
+      )
+    ).toBe(false)
+    expect(
+      createPermanentGmailFilter(
+        '',
+        '01_Household/Primary_House',
+        makeGmailService(),
+        gmailApp
+      )
+    ).toBe(false)
+  })
+
   test('creates filter via Gmail service and returns true', () => {
     const gmailApp = makeGmailApp({
       existingLabel: makeLabel('01_Household/Primary_House'),
@@ -1194,6 +1222,16 @@ describe('setGmailCategoryTab Category Shifting', () => {
           'bare_thread_456'
         )
       })
+
+      test('handles null or invalid thread gracefully without throwing', () => {
+        expect(() => {
+          fn(null, 'Updates', mockGmailService)
+        }).not.toThrow()
+        expect(() => {
+          fn({}, 'Updates', mockGmailService)
+        }).not.toThrow()
+        expect(mockModify).not.toHaveBeenCalled()
+      })
     })
   })
 })
@@ -1842,6 +1880,20 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             expect(resCurriculum.category).not.toBe('Promotions')
           }
         })
+
+        test('shields school 1:1 teacher correspondence (bcs-lions.org) into Primary', () => {
+          const res = fn(
+            'asmith@bcs-lions.org',
+            'Student - Math Progress & Tutoring Schedule',
+            'Hello Parents, the student did great on the algebra quiz today...'
+          )
+          expect(res).not.toBeNull()
+          expect(res.canonicalDomain).toBe('04_Family_Health')
+          expect(res.subLabel).toBe('Family/School-Student')
+          expect(res.category).toBe('Primary')
+          expect(res.action).toBe('keep')
+          expect(res.reasoning).toBe('Teacher 1:1 Shield')
+        })
       })
     })
   })
@@ -2146,6 +2198,156 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(getHashIndexJs(undefined)).toBe('')
           expect(getHashIndexJs({})).toBe('')
         }
+      })
+    })
+
+    describe('isThreadSentOrRepliedByUser user reply shield', () => {
+      const {
+        isThreadSentOrRepliedByUser: isSentCodeGs,
+      } = require('../code.gs')
+      const {
+        isThreadSentOrRepliedByUser: isSentIndexJs,
+      } = require('../src/index.js')
+
+      const implementations = [
+        { name: 'code.gs', fn: isSentCodeGs },
+        { name: 'src/index.js', fn: isSentIndexJs },
+      ]
+
+      implementations.forEach(({ name, fn }) => {
+        describe(name, () => {
+          test('returns true when message sender contains user email case-insensitively', () => {
+            const thread = {
+              getMessages: () => [
+                { getFrom: () => 'Partner <partner@example.com>' },
+                { getFrom: () => 'Account Owner <DON@EXAMPLE.COM>' },
+              ],
+            }
+            expect(fn(thread, 'don@example.com')).toBe(true)
+          })
+
+          test('returns false when no messages are from user email', () => {
+            const thread = {
+              getMessages: () => [
+                { getFrom: () => 'Partner <partner@example.com>' },
+              ],
+            }
+            expect(fn(thread, 'don@example.com')).toBe(false)
+          })
+
+          test('returns false safely without throwing when userEmail is empty or missing', () => {
+            const thread = {
+              getMessages: () => [{ getFrom: () => 'any@example.com' }],
+            }
+            expect(fn(thread, '')).toBe(false)
+            expect(fn(thread, null)).toBe(false)
+            expect(fn(thread, undefined)).toBe(false)
+          })
+
+          test('handles malformed messages with null getFrom safely', () => {
+            const thread = {
+              getMessages: () => [
+                null,
+                { getFrom: () => null },
+                { getFrom: () => undefined },
+              ],
+            }
+            expect(() => {
+              expect(fn(thread, 'don@example.com')).toBe(false)
+            }).not.toThrow()
+          })
+        })
+      })
+    })
+
+    describe('purgeExpiredEmailsByRetentionPolicy safety & error boundary', () => {
+      const {
+        purgeExpiredEmailsByRetentionPolicy: purgeCodeGs,
+      } = require('../code.gs')
+      const {
+        purgeExpiredEmailsByRetentionPolicy: purgeIndexJs,
+      } = require('../src/index.js')
+
+      const implementations = [
+        { name: 'code.gs', fn: purgeCodeGs },
+        { name: 'src/index.js', fn: purgeIndexJs },
+      ]
+
+      implementations.forEach(({ name, fn }) => {
+        describe(name, () => {
+          test('moves non-exempt expired thread to trash while exempting core sub-label and user replies', () => {
+            const trashableThread = {
+              getId: () => 't-trash',
+              getFirstMessageSubject: () => 'Expired Promo 2024',
+              getLabels: () => [{ getName: () => 'Promotions' }],
+              getMessages: () => [{ getFrom: () => 'promo@store.example.com' }],
+              moveToTrash: jest.fn(),
+            }
+
+            const coreSublabelThread = {
+              getId: () => 't-core-sublabel',
+              getFirstMessageSubject: () => 'Bank Notice 2024',
+              getLabels: () => [{ getName: () => 'Finance/Banking' }],
+              getMessages: () => [
+                { getFrom: () => 'service@bank.example.com' },
+              ],
+              moveToTrash: jest.fn(),
+            }
+
+            const userRepliedThread = {
+              getId: () => 't-user-replied',
+              getFirstMessageSubject: () => 'Old Discussion 2024',
+              getLabels: () => [{ getName: () => 'Forums' }],
+              getMessages: () => [
+                { getFrom: () => 'stranger@forum.example.com' },
+                { getFrom: () => 'Account Owner <don@example.com>' },
+              ],
+              moveToTrash: jest.fn(),
+            }
+
+            const throwingThread = {
+              getId: () => 't-throw',
+              getFirstMessageSubject: () => 'Locked Thread',
+              getLabels: () => [{ getName: () => 'Social' }],
+              getMessages: () => [{ getFrom: () => 'social@app.example.com' }],
+              moveToTrash: jest.fn(() => {
+                throw new Error('Thread locked')
+              }),
+            }
+
+            const followingThread = {
+              getId: () => 't-following',
+              getFirstMessageSubject: () => 'Expired Deal 2024',
+              getLabels: () => [{ getName: () => 'Promotions' }],
+              getMessages: () => [{ getFrom: () => 'deals@store.example.com' }],
+              moveToTrash: jest.fn(),
+            }
+
+            const mockGmailApp = {
+              search: jest.fn(() => [
+                trashableThread,
+                coreSublabelThread,
+                userRepliedThread,
+                throwingThread,
+                followingThread,
+              ]),
+            }
+
+            const testConfig = {
+              userAccountEmail: 'don@example.com',
+              canonicalDomains: ['01_Household', '02_Finance_Legal'],
+            }
+
+            const result = fn(testConfig, { GmailApp: mockGmailApp })
+
+            expect(trashableThread.moveToTrash).toHaveBeenCalled()
+            expect(coreSublabelThread.moveToTrash).not.toHaveBeenCalled()
+            expect(userRepliedThread.moveToTrash).not.toHaveBeenCalled()
+            expect(throwingThread.moveToTrash).toHaveBeenCalled()
+            expect(followingThread.moveToTrash).toHaveBeenCalled()
+            expect(result.trashedCount).toBe(2)
+          })
+        })
       })
     })
   })

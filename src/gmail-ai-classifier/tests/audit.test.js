@@ -44,6 +44,23 @@ describe('Gmail AI Classifier Audit System', () => {
       expect(report.findings).toHaveLength(0)
     })
 
+    test('passes compliant thread with single canonical sub-label (single-label model)', () => {
+      const singleLabelThread = {
+        getId: () => 't-single',
+        getFirstMessageSubject: () => 'Quarterly Statement',
+        getMessages: () => [{ getFrom: () => 'statements@mybank.example.com' }],
+        getLabels: () => [
+          { getName: () => 'Processed' },
+          { getName: () => 'Finance/Banking' },
+        ],
+      }
+
+      const report = auditClassifications([singleLabelThread], config)
+      expect(report.scannedCount).toBe(1)
+      expect(report.flaggedCount).toBe(0)
+      expect(report.findings).toHaveLength(0)
+    })
+
     test('flags missing canonical domain (orphan processed thread)', () => {
       const orphanThread = {
         getId: () => 't2',
@@ -260,6 +277,30 @@ describe('Gmail AI Classifier Audit System', () => {
       expect(digest).toContain(
         'Tuning Action: Update ScriptProperty CUSTOM_PROMPT_RULES'
       )
+    })
+
+    test('handles report with missing or malformed finding properties without throwing', () => {
+      const malformedReport = {
+        scannedCount: 1,
+        flaggedCount: 1,
+        findings: [
+          {
+            threadId: 't-bad',
+            subject: null,
+            sender: undefined,
+            canonicalLabels: null,
+            flags: null,
+          },
+        ],
+        summary: 'Audited 1 thread(s); 1 anomaly flag(s) identified.',
+      }
+
+      expect(() => {
+        const digest = formatAuditDigest(malformedReport)
+        expect(digest).toContain('(no subject)')
+        expect(digest).toContain('(unknown)')
+        expect(digest).toContain('(none)')
+      }).not.toThrow()
     })
   })
 })
