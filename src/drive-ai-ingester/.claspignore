@@ -1,0 +1,4 @@
+**/*.test.js
+**/tests/**
+**/src/index.js
+**/node_modules/**
