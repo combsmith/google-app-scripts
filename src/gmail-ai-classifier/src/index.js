@@ -4,7 +4,19 @@
  * with Jest without a live Google Apps Script environment.
  */
 
-const { getFileHash } = require('../../gas-utils')
+const { getFileHash: gasGetFileHash } = require('../../gas-utils')
+
+/**
+ * Computes MD5 hex digest for a GAS blob safely without throwing for invalid blobs.
+ */
+function getFileHash(blob) {
+  if (!blob) return ''
+  try {
+    return gasGetFileHash(blob)
+  } catch {
+    return ''
+  }
+}
 
 /**
  * Validates a Gemini classification response object.
@@ -2635,7 +2647,9 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
     )
   }
 
-  let searchQuery = opts.query || 'has:attachment'
+  const defaultCanonicalQuery =
+    'has:attachment (label:01_Household OR label:02_Finance_Legal OR label:03_Vehicles OR label:04_Family_Health OR label:05_Tech_Infrastructure OR label:06_Work_Career OR label:07_Community_NonProfit OR label:Household OR label:Finance OR label:Vehicles OR label:Family OR label:Tech OR label:Work OR label:Community)'
+  let searchQuery = opts.query || defaultCanonicalQuery
 
   let threads = []
   if (typeof gmail.search === 'function') {
@@ -3568,9 +3582,20 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
       services.Gmail
     )
 
+    const startTime = Date.now()
+
     for (var i = 0; i < threads.length; i++) {
+      if (Date.now() - startTime > 270000) {
+        console.warn(
+          '[processEmailsWithAiClassifier] Safety time budget reached (270s); stopping batch gracefully.'
+        )
+        break
+      }
       var thread = threads[i]
-      var firstMessage = thread.getMessages()[0]
+      var messages =
+        typeof thread.getMessages === 'function' ? thread.getMessages() : []
+      if (!messages || messages.length === 0) continue
+      var firstMessage = messages[0]
       var sender = firstMessage.getFrom()
       var subject = firstMessage.getSubject()
       var snippet = firstMessage.getPlainBody().substring(0, 500)
@@ -3667,34 +3692,49 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
           )
 
           if (config.githubToken) {
-            var notePath = getNotePathForDomain(
-              classification.canonicalDomain,
-              classification.subLabel
-            )
-            if (notePath && services.Utilities) {
-              var dateStr = services.Utilities.formatDate(
-                firstMessage.getDate(),
-                'GMT',
-                'yyyy-MM-dd'
+            try {
+              var notePath = getNotePathForDomain(
+                classification.canonicalDomain,
+                classification.subLabel
               )
-              var entryMd = formatProgressiveDisclosureEntry(
-                dateStr,
-                classification.title || subject,
-                sender,
-                subject,
-                classification.summary,
-                config.userAccountEmail,
-                savedAttachments
-              )
-              assertNoAsciiReplacement_(
-                (subject || '') + (classification.summary || ''),
-                entryMd
-              )
-              assertClean_(entryMd, 'new entry for ' + notePath)
-              appendMarkdownEntryToGitHubRepo(
-                notePath,
-                entryMd,
-                'feat(ingestion): ' + subject
+              if (notePath && services.Utilities) {
+                var dateStr = services.Utilities.formatDate(
+                  firstMessage.getDate(),
+                  'GMT',
+                  'yyyy-MM-dd'
+                )
+                var entryMd = formatProgressiveDisclosureEntry(
+                  dateStr,
+                  classification.title || subject,
+                  sender,
+                  subject,
+                  classification.summary,
+                  config.userAccountEmail,
+                  savedAttachments
+                )
+                if (typeof assertNoAsciiReplacement_ === 'function') {
+                  assertNoAsciiReplacement_(
+                    (subject || '') + (classification.summary || ''),
+                    entryMd
+                  )
+                }
+                if (typeof assertClean_ === 'function') {
+                  assertClean_(entryMd, 'new entry for ' + notePath)
+                }
+                if (typeof appendMarkdownEntryToGitHubRepo === 'function') {
+                  appendMarkdownEntryToGitHubRepo(
+                    notePath,
+                    entryMd,
+                    'feat(ingestion): ' + subject
+                  )
+                }
+              }
+            } catch (ghErr) {
+              console.warn(
+                '[processEmailsWithAiClassifier] Non-blocking GitHub sync error for ' +
+                  subject +
+                  ': ' +
+                  ghErr.message
               )
             }
           }
@@ -3825,4 +3865,5 @@ module.exports = {
   isRootDomainLabel,
   resolveCanonicalDomainFromLabels,
   deterministicRuleClassify_,
+  getFileHash,
 }

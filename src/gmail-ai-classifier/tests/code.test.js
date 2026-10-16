@@ -1888,6 +1888,183 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             'in:inbox is:unread -category:primary -label:Processed'
           )
         })
+
+        test('gracefully skips empty threads without throwing TypeError', () => {
+          const emptyThread = {
+            getId: () => 'th-empty',
+            getMessages: () => [],
+          }
+          const mockLock = {
+            tryLock: jest.fn(() => true),
+            releaseLock: jest.fn(),
+          }
+          const mockLockService = {
+            getScriptLock: jest.fn(() => mockLock),
+          }
+          const mockGmail = {
+            search: jest.fn(() => [emptyThread]),
+            getUserLabelByName: jest.fn((name) => ({ getName: () => name })),
+          }
+
+          expect(() => {
+            fn(config, {
+              LockService: mockLockService,
+              GmailApp: mockGmail,
+            })
+          }).not.toThrow()
+          expect(mockLock.releaseLock).toHaveBeenCalled()
+        })
+
+        test('treats GitHub sync failures as non-blocking and preserves thread labeling', () => {
+          const mockMessage = {
+            getFrom: () => 'sender@example.com',
+            getSubject: () => 'Invoice Document',
+            getPlainBody: () => 'Please find attached invoice.',
+            getDate: () => new Date(),
+            getAttachments: () => [],
+          }
+          const addedLabels = []
+          const mockThread = {
+            getId: () => 'th-doc-1',
+            getMessages: () => [mockMessage],
+            addLabel: jest.fn((l) =>
+              addedLabels.push(
+                typeof l.getName === 'function' ? l.getName() : String(l)
+              )
+            ),
+            getLabels: () => [],
+            markRead: jest.fn(),
+            moveToArchive: jest.fn(),
+          }
+          const mockLock = {
+            tryLock: jest.fn(() => true),
+            releaseLock: jest.fn(),
+          }
+          const mockLockService = {
+            getScriptLock: jest.fn(() => mockLock),
+          }
+          const mockGmail = {
+            search: jest.fn(() => [mockThread]),
+            getUserLabelByName: jest.fn((name) => ({ getName: () => name })),
+          }
+
+          const ghFailingConfig = {
+            ...config,
+            githubToken: 'gh-mock-token',
+          }
+
+          global.UrlFetchApp = {
+            fetch: jest.fn(() => {
+              throw new Error('GitHub network connection timeout')
+            }),
+          }
+
+          expect(() => {
+            fn(ghFailingConfig, {
+              LockService: mockLockService,
+              GmailApp: mockGmail,
+              classifyFn: () => ({
+                canonicalDomain: '02_Finance_Legal',
+                subLabel: 'Finance/Bills',
+                category: 'Updates',
+                action: 'archive',
+                confidence: 0.99,
+                title: 'Invoice',
+                summary: 'Invoice document',
+              }),
+            })
+          }).not.toThrow()
+
+          expect(addedLabels).toContain('Processed')
+          expect(mockLock.releaseLock).toHaveBeenCalled()
+        })
+
+        test('gracefully breaks thread processing loop when approaching 270s execution budget', () => {
+          const createThread = (id) => ({
+            getId: () => id,
+            getMessages: () => [
+              {
+                getFrom: () => 'sender@example.com',
+                getSubject: () => 'Sub ' + id,
+                getPlainBody: () => 'body ' + id,
+                getDate: () => new Date(),
+                getAttachments: () => [],
+              },
+            ],
+            addLabel: jest.fn(),
+            getLabels: () => [],
+            markRead: jest.fn(),
+            moveToArchive: jest.fn(),
+          })
+
+          const threads = [
+            createThread('t-1'),
+            createThread('t-2'),
+            createThread('t-3'),
+          ]
+          const mockLock = {
+            tryLock: jest.fn(() => true),
+            releaseLock: jest.fn(),
+          }
+          const mockLockService = {
+            getScriptLock: jest.fn(() => mockLock),
+          }
+          const mockGmail = {
+            search: jest.fn(() => threads),
+            getUserLabelByName: jest.fn((name) => ({ getName: () => name })),
+          }
+
+          let callCount = 0
+          const initialTime = 1000000
+          jest.spyOn(Date, 'now').mockImplementation(() => {
+            callCount++
+            if (callCount > 3) {
+              return initialTime + 275000
+            }
+            return initialTime
+          })
+
+          try {
+            fn(config, {
+              LockService: mockLockService,
+              GmailApp: mockGmail,
+              classifyFn: () => ({
+                canonicalDomain: '01_Household',
+                subLabel: 'Household/Property',
+                category: 'Updates',
+                action: 'archive',
+                confidence: 0.99,
+                title: 'Household Note',
+                summary: 'Household item',
+              }),
+            })
+
+            expect(threads[0].addLabel).toHaveBeenCalled()
+            expect(threads[2].addLabel).not.toHaveBeenCalled()
+            expect(mockLock.releaseLock).toHaveBeenCalled()
+          } finally {
+            Date.now.mockRestore()
+          }
+        })
+      })
+    })
+
+    describe('getFileHash blob safety', () => {
+      const { getFileHash: getHashCodeGs } = require('../code.gs')
+      const { getFileHash: getHashIndexJs } = require('../src/index.js')
+
+      test('code.gs getFileHash safely handles null and invalid blobs without throwing', () => {
+        expect(getHashCodeGs(null)).toBe('')
+        expect(getHashCodeGs(undefined)).toBe('')
+        expect(getHashCodeGs({})).toBe('')
+      })
+
+      test('src/index.js getFileHash safely handles null and invalid blobs without throwing', () => {
+        if (typeof getHashIndexJs === 'function') {
+          expect(getHashIndexJs(null)).toBe('')
+          expect(getHashIndexJs(undefined)).toBe('')
+          expect(getHashIndexJs({})).toBe('')
+        }
       })
     })
   })

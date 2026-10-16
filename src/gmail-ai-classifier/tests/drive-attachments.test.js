@@ -1173,6 +1173,27 @@ describe('Drive Attachment Persistence along Taxonomy Path', () => {
         'Sub-label: Household/Property'
       )
     })
+
+    test('defaults to canonical domain label search query when opts.query is omitted', () => {
+      const mockDriveApp = createMockDriveApp()
+      const mockGmailApp = {
+        search: jest.fn(() => []),
+      }
+
+      auditAndBackfillCanonicalAttachments(
+        {},
+        {},
+        { GmailApp: mockGmailApp, DriveApp: mockDriveApp }
+      )
+
+      expect(mockGmailApp.search).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'has:attachment (label:01_Household OR label:02_Finance_Legal'
+        ),
+        0,
+        50
+      )
+    })
   })
 
   describe('resolveCanonicalDomainFromLabels', () => {

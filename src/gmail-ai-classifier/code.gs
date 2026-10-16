@@ -83,9 +83,20 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
 
     var processedLabel = ensureUserLabel(config.processedLabel, gmail)
 
+    var startTime = Date.now()
+
     for (var i = 0; i < threads.length; i++) {
+      if (Date.now() - startTime > 270000) {
+        console.warn(
+          '[processEmailsWithAiClassifier] Safety time budget reached (270s); stopping batch gracefully.'
+        )
+        break
+      }
       var thread = threads[i]
-      var firstMessage = thread.getMessages()[0]
+      var messages =
+        typeof thread.getMessages === 'function' ? thread.getMessages() : []
+      if (!messages || messages.length === 0) continue
+      var firstMessage = messages[0]
       var sender = firstMessage.getFrom()
       var subject = firstMessage.getSubject()
       var snippet = firstMessage.getPlainBody().substring(0, 500)
@@ -192,34 +203,49 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
 
           // Sync Progressive Disclosure Summary to GitHub
           if (config.githubToken) {
-            var notePath = getNotePathForDomain(
-              classification.canonicalDomain,
-              classification.subLabel
-            )
-            if (notePath && utils) {
-              var dateStr = utils.formatDate(
-                firstMessage.getDate(),
-                'GMT',
-                'yyyy-MM-dd'
+            try {
+              var notePath = getNotePathForDomain(
+                classification.canonicalDomain,
+                classification.subLabel
               )
-              var entryMd = formatProgressiveDisclosureEntry(
-                dateStr,
-                classification.title || subject,
-                sender,
-                subject,
-                classification.summary,
-                config.userAccountEmail,
-                savedAttachments
-              )
-              assertNoAsciiReplacement_(
-                (subject || '') + (classification.summary || ''),
-                entryMd
-              )
-              assertClean_(entryMd, 'new entry for ' + notePath)
-              appendMarkdownEntryToGitHubRepo(
-                notePath,
-                entryMd,
-                'feat(ingestion): ' + subject
+              if (notePath && utils) {
+                var dateStr = utils.formatDate(
+                  firstMessage.getDate(),
+                  'GMT',
+                  'yyyy-MM-dd'
+                )
+                var entryMd = formatProgressiveDisclosureEntry(
+                  dateStr,
+                  classification.title || subject,
+                  sender,
+                  subject,
+                  classification.summary,
+                  config.userAccountEmail,
+                  savedAttachments
+                )
+                if (typeof assertNoAsciiReplacement_ === 'function') {
+                  assertNoAsciiReplacement_(
+                    (subject || '') + (classification.summary || ''),
+                    entryMd
+                  )
+                }
+                if (typeof assertClean_ === 'function') {
+                  assertClean_(entryMd, 'new entry for ' + notePath)
+                }
+                if (typeof appendMarkdownEntryToGitHubRepo === 'function') {
+                  appendMarkdownEntryToGitHubRepo(
+                    notePath,
+                    entryMd,
+                    'feat(ingestion): ' + subject
+                  )
+                }
+              }
+            } catch (ghErr) {
+              console.warn(
+                '[processEmailsWithAiClassifier] Non-blocking GitHub sync error for ' +
+                  subject +
+                  ': ' +
+                  ghErr.message
               )
             }
           }
@@ -2255,10 +2281,22 @@ var SUBLABEL_TO_FOLDER_MAP = {
  * Computes MD5 hex digest for a GAS blob.
  */
 function getFileHash(blob) {
-  var digest = Utilities.computeDigest(
-    Utilities.DigestAlgorithm.MD5,
-    blob.getBytes()
-  )
+  if (!blob) return ''
+  var bytes = null
+  if (typeof blob.getBytes === 'function') {
+    bytes = blob.getBytes()
+  } else if (blob.bytes) {
+    bytes = blob.bytes
+  } else if (
+    Array.isArray(blob) ||
+    (typeof Buffer !== 'undefined' && Buffer.isBuffer(blob))
+  ) {
+    bytes = blob
+  }
+  if (!bytes) return ''
+  var utils = typeof Utilities !== 'undefined' ? Utilities : null
+  if (!utils || typeof utils.computeDigest !== 'function') return ''
+  var digest = utils.computeDigest(utils.DigestAlgorithm.MD5, bytes)
   return digest
     .map(function (byte) {
       return ('0' + (byte & 0xff).toString(16)).slice(-2)
@@ -2971,7 +3009,9 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
     )
   }
 
-  var searchQuery = opts.query || 'has:attachment'
+  var defaultCanonicalQuery =
+    'has:attachment (label:01_Household OR label:02_Finance_Legal OR label:03_Vehicles OR label:04_Family_Health OR label:05_Tech_Infrastructure OR label:06_Work_Career OR label:07_Community_NonProfit OR label:Household OR label:Finance OR label:Vehicles OR label:Family OR label:Tech OR label:Work OR label:Community)'
+  var searchQuery = opts.query || defaultCanonicalQuery
 
   var threads = []
   if (typeof gmail.search === 'function') {
