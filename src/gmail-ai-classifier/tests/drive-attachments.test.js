@@ -228,6 +228,39 @@ describe('Drive Attachment Persistence along Taxonomy Path', () => {
         'Community_BOD'
       )
     })
+
+    test('resolves school student sublabels to Students directory', () => {
+      expect(
+        resolveTaxonomySubfolderName(
+          '04_Family_Health',
+          'Family/School-Charley'
+        )
+      ).toBe('Students')
+      expect(
+        resolveTaxonomySubfolderName('04_Family_Health', 'Family/School-Toby')
+      ).toBe('Students')
+      expect(
+        resolveTaxonomySubfolderName('04_Family_Health', 'Family/School-Tide')
+      ).toBe('Students')
+    })
+
+    test('resolves family correspondence and parent sublabels to Family_General directory', () => {
+      expect(
+        resolveTaxonomySubfolderName(
+          '04_Family_Health',
+          'Family/Personal-Correspondence'
+        )
+      ).toBe('Family_General')
+      expect(
+        resolveTaxonomySubfolderName('04_Family_Health', 'Family/Parents')
+      ).toBe('Family_General')
+      expect(
+        resolveTaxonomySubfolderName(
+          '04_Family_Health',
+          'Family/Parents/Household'
+        )
+      ).toBe('Family_General')
+    })
   })
 
   describe('isEligibleAttachment', () => {
@@ -371,6 +404,17 @@ describe('Drive Attachment Persistence along Taxonomy Path', () => {
         expect(res.eligible).toBe(false)
         expect(res.reason).toContain('SIGNATURE_OR_LOGO_PATTERN')
       })
+    })
+
+    test('strictly rejects attachments exceeding GAS payload limit (>25MB)', () => {
+      const oversizeAtt = createMockAttachment({
+        name: 'large_archive.zip',
+        size: 26 * 1024 * 1024,
+      })
+      const res = evaluateAttachmentEligibility(oversizeAtt)
+      expect(res.eligible).toBe(false)
+      expect(res.reason).toBe('EXCEEDS_GAS_SIZE_LIMIT (>25MB)')
+      expect(isEligibleAttachment(oversizeAtt)).toBe(false)
     })
 
     test('getMessageAttachments_ requests non-inline attachments', () => {

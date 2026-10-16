@@ -878,6 +878,13 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
   }
 
   // Retail & E-Commerce Marketing Blasts
+  const isScarsella = sLower.indexOf('scarsella') !== -1
+  const isScarsellaCurriculum =
+    isScarsella &&
+    /\b(curriculum|schedule|testing|belt|forms?)\b/i.test(
+      (subject || '') + ' ' + (snippet || '')
+    )
+
   if (
     sLower.indexOf('lowes') !== -1 ||
     sLower.indexOf('mannlake') !== -1 ||
@@ -890,7 +897,7 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     sLower.indexOf('birminghamhomebuyers') !== -1 ||
     sLower.indexOf('trailerparts') !== -1 ||
     sLower.indexOf('hillco') !== -1 ||
-    sLower.indexOf('scarsella') !== -1 ||
+    (isScarsella && !isScarsellaCurriculum) ||
     sLower.indexOf('em1.cloudflare.com') !== -1
   ) {
     return {
@@ -1846,6 +1853,10 @@ const SUBLABEL_TO_FOLDER_MAP = {
   'family/medical-student': 'Medical_Records',
   'family/health-general': 'Medical_Records',
   'family/school-student': 'Students',
+  'family/school-charley': 'Students',
+  'family/school-toby': 'Students',
+  'family/school-tide': 'Students',
+  'family/parents': 'Family_General',
   'family/personal-correspondence': 'Family_General',
   'family/kids/tide': 'Students',
   'family/kids/toby': 'Students',
@@ -1932,13 +1943,19 @@ function resolveTaxonomySubfolderName(canonicalDomain, subLabel) {
       return SUBLABEL_TO_FOLDER_MAP[normalized]
     }
 
-    if (normalized.startsWith('family/kids')) {
+    if (
+      normalized.startsWith('family/kids') ||
+      normalized.startsWith('family/school')
+    ) {
       if (normalized.includes('health') || normalized.includes('medical')) {
         return 'Medical_Records'
       }
       return 'Students'
     }
-    if (normalized.startsWith('family/sisters')) {
+    if (
+      normalized.startsWith('family/sisters') ||
+      normalized.startsWith('family/parents')
+    ) {
       return 'Family_General'
     }
 
@@ -1994,9 +2011,12 @@ function evaluateAttachmentEligibility(att) {
     size = att.size
   }
 
-  // 1. Skip empty files
+  // 1. Skip empty files or files exceeding GAS payload limit (30MB limit; cap at 25MB)
   if (size <= 0) {
     return { eligible: false, reason: 'ZERO_BYTE' }
+  }
+  if (size > 25 * 1024 * 1024) {
+    return { eligible: false, reason: 'EXCEEDS_GAS_SIZE_LIMIT (>25MB)' }
   }
 
   const cleanName = name.trim()
@@ -3413,7 +3433,357 @@ function sweepAllUnreadInboxEmails(options, customConfig, customServices) {
   )
 }
 
+/**
+ * Checks if a thread contains any messages sent or replied by the account owner.
+ */
+function isThreadSentOrRepliedByUser(thread, userEmail) {
+  try {
+    var primaryEmail = (userEmail || '').toLowerCase()
+    if (!primaryEmail) {
+      return false
+    }
+    var messages = thread.getMessages()
+    for (var m = 0; m < messages.length; m++) {
+      var fromAddr = messages[m].getFrom().toLowerCase()
+      if (fromAddr.indexOf(primaryEmail) !== -1) {
+        return true
+      }
+    }
+  } catch (e) {
+    console.warn(
+      '[isThreadSentOrRepliedByUser] Error checking message senders:',
+      e.message
+    )
+  }
+  return false
+}
+
+var DESTRUCTIVE_CONFIDENCE_MIN = 0.85
+
+function isDestructiveActionAllowed_(classification) {
+  if (!classification || typeof classification !== 'object') {
+    return false
+  }
+  if (
+    classification.action !== 'trash' &&
+    classification.action !== 'archive'
+  ) {
+    return false
+  }
+  var confidence = classification.confidence
+  if (!Number.isFinite(confidence)) {
+    return false
+  }
+  return confidence >= DESTRUCTIVE_CONFIDENCE_MIN
+}
+
+var GMAIL_AI_CLASSIFIER_VERSION = 'v1.8.0-drive-taxonomy-attachments'
+
+/**
+ * Main entry point for Gemini AI-Powered Semantic Email Classification and Auto-Filter Engine.
+ * Supports injected config and services for testing and headless execution.
+ *
+ * @param {Object} [customConfig] - Optional override config
+ * @param {Object} [customServices] - Optional injected services
+ */
+function processEmailsWithAiClassifier(customConfig, customServices) {
+  var services = customServices || {}
+  var lockService =
+    services.LockService ||
+    (typeof LockService !== 'undefined' ? LockService : null)
+  var lock = null
+  if (lockService && typeof lockService.getScriptLock === 'function') {
+    lock = lockService.getScriptLock()
+    var hasLock = false
+    try {
+      hasLock = lock.tryLock(10000)
+    } catch (e) {
+      console.warn(
+        '[processEmailsWithAiClassifier] Error attempting script lock:',
+        e.message
+      )
+    }
+    if (!hasLock) {
+      console.warn(
+        '[processEmailsWithAiClassifier] Could not obtain script lock after 10s. Another execution is in progress. Exiting.'
+      )
+      return
+    }
+  }
+
+  try {
+    console.log(
+      '[processEmailsWithAiClassifier] Engine Version: ' +
+        GMAIL_AI_CLASSIFIER_VERSION
+    )
+    console.log(
+      '[processEmailsWithAiClassifier] Starting AI semantic email processing...'
+    )
+    var config =
+      customConfig ||
+      (typeof getAiClassifierConfig === 'function'
+        ? getAiClassifierConfig()
+        : {})
+
+    if (!config.geminiApiKey) {
+      console.error(
+        '[processEmailsWithAiClassifier] GEMINI_API_KEY ScriptProperty is missing.'
+      )
+      return
+    }
+
+    var gmail =
+      services.GmailApp || (typeof GmailApp !== 'undefined' ? GmailApp : null)
+    if (!gmail) {
+      console.error(
+        '[processEmailsWithAiClassifier] GmailApp service is missing.'
+      )
+      return
+    }
+
+    var threads = gmail.search(config.unprocessedQuery, 0, 10)
+    console.log(
+      '[processEmailsWithAiClassifier] Found ' +
+        threads.length +
+        ' unprocessed thread(s).'
+    )
+
+    if (threads.length === 0) {
+      // Secondary sweep: Look for any unread non-primary inbox threads to realign
+      var sweepQuery = 'in:inbox is:unread -category:primary -label:Processed'
+      threads = gmail.search(sweepQuery, 0, 10)
+      console.log(
+        '[processEmailsWithAiClassifier] Secondary sweep found ' +
+          threads.length +
+          ' unread non-primary thread(s) in inbox.'
+      )
+      if (threads.length === 0) {
+        return
+      }
+    }
+
+    var processedLabel = ensureGmailLabel(
+      config.processedLabel,
+      gmail,
+      services.Gmail
+    )
+
+    for (var i = 0; i < threads.length; i++) {
+      var thread = threads[i]
+      var firstMessage = thread.getMessages()[0]
+      var sender = firstMessage.getFrom()
+      var subject = firstMessage.getSubject()
+      var snippet = firstMessage.getPlainBody().substring(0, 500)
+      if (
+        snippet.trim().length < 15 &&
+        typeof firstMessage.getAttachments === 'function'
+      ) {
+        try {
+          var atts = firstMessage.getAttachments() || []
+          var attNames = atts
+            .map(function (a) {
+              return typeof a.getName === 'function' ? a.getName() : ''
+            })
+            .filter(Boolean)
+          if (attNames.length > 0) {
+            snippet =
+              (snippet.trim() ? snippet.trim() + ' ' : '') +
+              '[Attached: ' +
+              attNames.join(', ') +
+              ']'
+          }
+        } catch (attErr) {
+          // ignore attachment errors
+        }
+      }
+
+      console.log(
+        '[processEmailsWithAiClassifier] Processing (' +
+          (i + 1) +
+          '/' +
+          threads.length +
+          '): ' +
+          subject +
+          ' from ' +
+          sender
+      )
+
+      var classification = deterministicRuleClassify_(
+        sender,
+        subject,
+        snippet,
+        thread,
+        config
+      )
+      if (!classification) {
+        var classifyFn =
+          services.classifyFn ||
+          (typeof classifyEmailWithGemini === 'function'
+            ? function (s, sub, sn, cfg) {
+                return classifyEmailWithGemini(
+                  cfg,
+                  s,
+                  sub,
+                  sn,
+                  services.UrlFetchApp
+                )
+              }
+            : null)
+        if (classifyFn) {
+          classification = classifyFn(sender, subject, snippet, config)
+        }
+      }
+      if (classification) {
+        cleanConflictingLabels(
+          thread,
+          classification.canonicalDomain,
+          classification.subLabel,
+          config
+        )
+
+        var primaryTag = classification.subLabel
+        if (!primaryTag || isRootDomainLabel(primaryTag)) {
+          var domainKey =
+            classification.canonicalDomain || classification.canonical_label
+          primaryTag =
+            (domainKey && DEFAULT_DOMAIN_SUBLABEL_MAP[domainKey]) ||
+            domainKey ||
+            null
+          if (primaryTag && isRootDomainLabel(primaryTag)) {
+            primaryTag = DEFAULT_DOMAIN_SUBLABEL_MAP[primaryTag] || null
+          }
+        }
+        if (primaryTag) {
+          var targetLabel = ensureGmailLabel(primaryTag, gmail, services.Gmail)
+          if (targetLabel) {
+            thread.addLabel(targetLabel)
+          }
+
+          var savedAttachments = persistCanonicalAttachmentsToDrive(
+            thread,
+            classification,
+            config,
+            services
+          )
+
+          if (config.githubToken) {
+            var notePath = getNotePathForDomain(
+              classification.canonicalDomain,
+              classification.subLabel
+            )
+            if (notePath && services.Utilities) {
+              var dateStr = services.Utilities.formatDate(
+                firstMessage.getDate(),
+                'GMT',
+                'yyyy-MM-dd'
+              )
+              var entryMd = formatProgressiveDisclosureEntry(
+                dateStr,
+                classification.title || subject,
+                sender,
+                subject,
+                classification.summary,
+                config.userAccountEmail,
+                savedAttachments
+              )
+              assertNoAsciiReplacement_(
+                (subject || '') + (classification.summary || ''),
+                entryMd
+              )
+              assertClean_(entryMd, 'new entry for ' + notePath)
+              appendMarkdownEntryToGitHubRepo(
+                notePath,
+                entryMd,
+                'feat(ingestion): ' + subject
+              )
+            }
+          }
+        }
+
+        if (
+          classification.category &&
+          classification.category !== 'Primary' &&
+          classification.action !== 'trash'
+        ) {
+          classification.action = 'archive'
+        }
+
+        var userSent = isThreadSentOrRepliedByUser(
+          thread,
+          config.userAccountEmail
+        )
+        var requestedDestructive =
+          classification.action === 'trash' ||
+          classification.action === 'archive'
+        var destructiveOk = isDestructiveActionAllowed_(classification)
+        if (userSent && requestedDestructive) {
+          console.log(
+            '[processEmailsWithAiClassifier] Shield: Preserved thread in INBOX because user sent/replied to it.'
+          )
+        } else if (requestedDestructive && !destructiveOk) {
+          console.warn(
+            '[processEmailsWithAiClassifier] Shield: Skipped destructive action "' +
+              classification.action +
+              '" (low/invalid confidence ' +
+              classification.confidence +
+              '); preserved thread in INBOX.'
+          )
+        } else if (requestedDestructive) {
+          if (classification.action === 'trash') {
+            thread.moveToTrash()
+            console.log(
+              '[processEmailsWithAiClassifier] Action: Moved spam/unwanted thread to TRASH.'
+            )
+          } else {
+            thread.moveToArchive()
+            console.log(
+              '[processEmailsWithAiClassifier] Action: Archived thread out of INBOX.'
+            )
+          }
+        }
+
+        if (classification.action === 'mark_read' || classification.markRead) {
+          thread.markRead()
+          console.log(
+            '[processEmailsWithAiClassifier] Action: Marked thread as READ.'
+          )
+        }
+
+        if (classification.category && classification.action !== 'trash') {
+          setGmailCategoryTab(thread, classification.category, services.Gmail)
+        }
+
+        if (processedLabel) {
+          thread.addLabel(processedLabel)
+        }
+      } else {
+        console.warn(
+          '[processEmailsWithAiClassifier] Classification failed or returned null; preserving thread unprocessed for retry.'
+        )
+      }
+
+      var utilsService =
+        services.Utilities ||
+        (typeof Utilities !== 'undefined' ? Utilities : null)
+      if (utilsService && typeof utilsService.sleep === 'function') {
+        utilsService.sleep(2000)
+      }
+    }
+
+    console.log('[processEmailsWithAiClassifier] Batch processing complete.')
+  } finally {
+    if (lock) {
+      try {
+        lock.releaseLock()
+      } catch (e) {
+        // ignore lock release error
+      }
+    }
+  }
+}
+
 module.exports = {
+  processEmailsWithAiClassifier,
   validateClassification,
   classifyEmailWithGemini,
   buildOntologicalPrompt,

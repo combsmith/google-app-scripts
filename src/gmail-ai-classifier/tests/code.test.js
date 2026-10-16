@@ -1722,4 +1722,173 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
       })
     })
   })
+
+  describe('deterministicRuleClassify_ Scarsella curriculum handling', () => {
+    const implementations = [
+      {
+        name: 'src/index.js',
+        fn: require('../src/index').deterministicRuleClassify_,
+      },
+      {
+        name: 'code.gs',
+        fn: require('../code.gs').deterministicRuleClassify_,
+      },
+    ]
+
+    implementations.forEach(({ name, fn }) => {
+      describe(name, () => {
+        test('classifies generic Scarsella promo as Promotions archive', () => {
+          const res = fn(
+            'info@scarsellakarate.com',
+            'Special Summer Camp Discount!',
+            'Sign up today and get 20% off uniforms'
+          )
+          expect(res).not.toBeNull()
+          expect(res.category).toBe('Promotions')
+          expect(res.canonicalDomain).toBeNull()
+        })
+
+        test('bypasses marketing promo block when Scarsella email contains curriculum or testing', () => {
+          const resCurriculum = fn(
+            'info@scarsellakarate.com',
+            'March Belt Testing & Curriculum Schedule',
+            'Attached is the testing schedule and curriculum form'
+          )
+          expect(
+            resCurriculum === null || resCurriculum.canonicalDomain !== null
+          ).toBe(true)
+          if (resCurriculum) {
+            expect(resCurriculum.category).not.toBe('Promotions')
+          }
+        })
+      })
+    })
+  })
+
+  describe('processEmailsWithAiClassifier execution & concurrency guard', () => {
+    const {
+      processEmailsWithAiClassifier: processEmailsCodeGs,
+    } = require('../code.gs')
+    const {
+      processEmailsWithAiClassifier: processEmailsIndex,
+    } = require('../src/index')
+
+    const implementations = [
+      { name: 'code.gs', fn: processEmailsCodeGs },
+      { name: 'src/index.js', fn: processEmailsIndex },
+    ]
+
+    implementations.forEach(({ name, fn }) => {
+      describe(name, () => {
+        const config = {
+          geminiApiKey: 'test-key',
+          unprocessedQuery: 'in:inbox -label:Processed',
+          processedLabel: 'Processed',
+          userAccountEmail: 'test@example.com',
+        }
+
+        test('skips processing if LockService cannot acquire script lock within 10s', () => {
+          expect(typeof fn).toBe('function')
+          const mockLock = {
+            tryLock: jest.fn(() => false),
+            releaseLock: jest.fn(),
+          }
+          const mockLockService = {
+            getScriptLock: jest.fn(() => mockLock),
+          }
+          const mockGmail = {
+            search: jest.fn(),
+          }
+
+          fn(config, {
+            LockService: mockLockService,
+            GmailApp: mockGmail,
+          })
+
+          expect(mockLockService.getScriptLock).toHaveBeenCalled()
+          expect(mockLock.tryLock).toHaveBeenCalledWith(10000)
+          expect(mockGmail.search).not.toHaveBeenCalled()
+          expect(mockLock.releaseLock).not.toHaveBeenCalled()
+        })
+
+        test('acquires lock, processes threads, and releases lock in finally block', () => {
+          expect(typeof fn).toBe('function')
+          const mockLock = {
+            tryLock: jest.fn(() => true),
+            releaseLock: jest.fn(),
+          }
+          const mockLockService = {
+            getScriptLock: jest.fn(() => mockLock),
+          }
+          const mockGmail = {
+            search: jest.fn(() => []),
+          }
+
+          fn(config, {
+            LockService: mockLockService,
+            GmailApp: mockGmail,
+          })
+
+          expect(mockLockService.getScriptLock).toHaveBeenCalled()
+          expect(mockLock.tryLock).toHaveBeenCalledWith(10000)
+          expect(mockGmail.search).toHaveBeenCalled()
+          expect(mockLock.releaseLock).toHaveBeenCalled()
+        })
+
+        test('releases lock in finally block even if search throws', () => {
+          expect(typeof fn).toBe('function')
+          const mockLock = {
+            tryLock: jest.fn(() => true),
+            releaseLock: jest.fn(),
+          }
+          const mockLockService = {
+            getScriptLock: jest.fn(() => mockLock),
+          }
+          const mockGmail = {
+            search: jest.fn(() => {
+              throw new Error('API failure')
+            }),
+          }
+
+          expect(() => {
+            fn(config, {
+              LockService: mockLockService,
+              GmailApp: mockGmail,
+            })
+          }).toThrow('API failure')
+
+          expect(mockLock.releaseLock).toHaveBeenCalled()
+        })
+
+        test('secondary sweep query includes -label:Processed to prevent infinite loop', () => {
+          expect(typeof fn).toBe('function')
+          const mockLock = {
+            tryLock: jest.fn(() => true),
+            releaseLock: jest.fn(),
+          }
+          const mockLockService = {
+            getScriptLock: jest.fn(() => mockLock),
+          }
+          const mockGmail = {
+            search: jest.fn(() => []),
+          }
+
+          fn(config, {
+            LockService: mockLockService,
+            GmailApp: mockGmail,
+          })
+
+          expect(mockGmail.search).toHaveBeenCalledTimes(2)
+          expect(mockGmail.search.mock.calls[0][0]).toBe(
+            'in:inbox -label:Processed'
+          )
+          const sweepQuery = mockGmail.search.mock.calls[1][0]
+          expect(sweepQuery).toContain('-label:Processed')
+          expect(sweepQuery).toBe(
+            'in:inbox is:unread -category:primary -label:Processed'
+          )
+        })
+      })
+    })
+  })
 })

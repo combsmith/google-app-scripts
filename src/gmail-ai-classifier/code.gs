@@ -5,253 +5,307 @@
 
 var GMAIL_AI_CLASSIFIER_VERSION = 'v1.8.0-drive-taxonomy-attachments'
 
-function processEmailsWithAiClassifier() {
-  console.log(
-    '[processEmailsWithAiClassifier] Engine Version: ' +
-      GMAIL_AI_CLASSIFIER_VERSION
-  )
-  console.log(
-    '[processEmailsWithAiClassifier] Starting AI semantic email processing...'
-  )
-  var config = getAiClassifierConfig()
-
-  if (!config.geminiApiKey) {
-    console.error(
-      '[processEmailsWithAiClassifier] GEMINI_API_KEY ScriptProperty is missing.'
-    )
-    return
-  }
-
-  var threads = GmailApp.search(config.unprocessedQuery, 0, 10)
-  console.log(
-    '[processEmailsWithAiClassifier] Found ' +
-      threads.length +
-      ' unprocessed thread(s).'
-  )
-
-  if (threads.length === 0) {
-    // Secondary sweep: Look for any unread non-primary inbox threads to realign
-    var sweepQuery = 'in:inbox is:unread -category:primary'
-    threads = GmailApp.search(sweepQuery, 0, 10)
-    console.log(
-      '[processEmailsWithAiClassifier] Secondary sweep found ' +
-        threads.length +
-        ' unread non-primary thread(s) in inbox.'
-    )
-    if (threads.length === 0) {
+function processEmailsWithAiClassifier(customConfig, customServices) {
+  var services = customServices || {}
+  var lockService =
+    services.LockService ||
+    (typeof LockService !== 'undefined' ? LockService : null)
+  var lock = null
+  if (lockService && typeof lockService.getScriptLock === 'function') {
+    lock = lockService.getScriptLock()
+    var hasLock = false
+    try {
+      hasLock = lock.tryLock(10000)
+    } catch (e) {
+      console.warn(
+        '[processEmailsWithAiClassifier] Error attempting script lock:',
+        e.message
+      )
+    }
+    if (!hasLock) {
+      console.warn(
+        '[processEmailsWithAiClassifier] Could not obtain script lock after 10s. Another execution is in progress. Exiting.'
+      )
       return
     }
   }
 
-  var processedLabel = ensureUserLabel(config.processedLabel)
+  try {
+    console.log(
+      '[processEmailsWithAiClassifier] Engine Version: ' +
+        GMAIL_AI_CLASSIFIER_VERSION
+    )
+    console.log(
+      '[processEmailsWithAiClassifier] Starting AI semantic email processing...'
+    )
+    var config =
+      customConfig ||
+      (typeof getAiClassifierConfig === 'function'
+        ? getAiClassifierConfig()
+        : {})
 
-  for (var i = 0; i < threads.length; i++) {
-    var thread = threads[i]
-    var firstMessage = thread.getMessages()[0]
-    var sender = firstMessage.getFrom()
-    var subject = firstMessage.getSubject()
-    var snippet = firstMessage.getPlainBody().substring(0, 500)
-    if (
-      snippet.trim().length < 15 &&
-      typeof firstMessage.getAttachments === 'function'
-    ) {
-      try {
-        var atts = firstMessage.getAttachments() || []
-        var attNames = atts
-          .map(function (a) {
-            return typeof a.getName === 'function' ? a.getName() : ''
-          })
-          .filter(Boolean)
-        if (attNames.length > 0) {
-          snippet =
-            (snippet.trim() ? snippet.trim() + ' ' : '') +
-            '[Attached: ' +
-            attNames.join(', ') +
-            ']'
-        }
-      } catch (attErr) {
-        // ignore attachment errors
+    if (!config.geminiApiKey) {
+      console.error(
+        '[processEmailsWithAiClassifier] GEMINI_API_KEY ScriptProperty is missing.'
+      )
+      return
+    }
+
+    var gmail =
+      services.GmailApp || (typeof GmailApp !== 'undefined' ? GmailApp : null)
+    if (!gmail) {
+      console.error(
+        '[processEmailsWithAiClassifier] GmailApp service is missing.'
+      )
+      return
+    }
+
+    var threads = gmail.search(config.unprocessedQuery, 0, 10)
+    console.log(
+      '[processEmailsWithAiClassifier] Found ' +
+        threads.length +
+        ' unprocessed thread(s).'
+    )
+
+    if (threads.length === 0) {
+      // Secondary sweep: Look for any unread non-primary inbox threads to realign
+      var sweepQuery = 'in:inbox is:unread -category:primary -label:Processed'
+      threads = gmail.search(sweepQuery, 0, 10)
+      console.log(
+        '[processEmailsWithAiClassifier] Secondary sweep found ' +
+          threads.length +
+          ' unread non-primary thread(s) in inbox.'
+      )
+      if (threads.length === 0) {
+        return
       }
     }
 
-    console.log(
-      '[processEmailsWithAiClassifier] Processing (' +
-        (i + 1) +
-        '/' +
-        threads.length +
-        '): ' +
-        subject +
-        ' from ' +
-        sender
-    )
+    var processedLabel = ensureUserLabel(config.processedLabel, gmail)
 
-    var classification = deterministicRuleClassify_(
-      sender,
-      subject,
-      snippet,
-      thread,
-      config
-    )
-    if (!classification) {
-      classification = classifyWithGemini(sender, subject, snippet, config)
-    }
-    if (classification) {
-      // Clean up any pre-existing conflicting core domain labels, sub-labels, flat labels, and Retention/Permanent
-      cleanConflictingLabels(
+    for (var i = 0; i < threads.length; i++) {
+      var thread = threads[i]
+      var firstMessage = thread.getMessages()[0]
+      var sender = firstMessage.getFrom()
+      var subject = firstMessage.getSubject()
+      var snippet = firstMessage.getPlainBody().substring(0, 500)
+      if (
+        snippet.trim().length < 15 &&
+        typeof firstMessage.getAttachments === 'function'
+      ) {
+        try {
+          var atts = firstMessage.getAttachments() || []
+          var attNames = atts
+            .map(function (a) {
+              return typeof a.getName === 'function' ? a.getName() : ''
+            })
+            .filter(Boolean)
+          if (attNames.length > 0) {
+            snippet =
+              (snippet.trim() ? snippet.trim() + ' ' : '') +
+              '[Attached: ' +
+              attNames.join(', ') +
+              ']'
+          }
+        } catch (attErr) {
+          // ignore attachment errors
+        }
+      }
+
+      console.log(
+        '[processEmailsWithAiClassifier] Processing (' +
+          (i + 1) +
+          '/' +
+          threads.length +
+          '): ' +
+          subject +
+          ' from ' +
+          sender
+      )
+
+      var classification = deterministicRuleClassify_(
+        sender,
+        subject,
+        snippet,
         thread,
-        classification.canonicalDomain,
-        classification.subLabel,
         config
       )
-
-      // 1. Single Primary Label Tagging (Sub-label preferred; fallback to domain default sub-label)
-      var primaryTag = classification.subLabel
-      if (!primaryTag || isRootDomainLabel(primaryTag)) {
-        var domainKey =
-          classification.canonicalDomain || classification.canonical_label
-        primaryTag =
-          (domainKey && DEFAULT_DOMAIN_SUBLABEL_MAP[domainKey]) ||
-          domainKey ||
-          null
-        if (primaryTag && isRootDomainLabel(primaryTag)) {
-          primaryTag = DEFAULT_DOMAIN_SUBLABEL_MAP[primaryTag] || null
+      if (!classification) {
+        var classifyFn =
+          services.classifyFn ||
+          (typeof classifyWithGemini === 'function' ? classifyWithGemini : null)
+        if (classifyFn) {
+          classification = classifyFn(sender, subject, snippet, config)
         }
       }
-      if (primaryTag) {
-        var targetLabel = ensureUserLabel(primaryTag)
-        thread.addLabel(targetLabel)
-        console.log(
-          '[processEmailsWithAiClassifier] Tagged thread with single primary label: ' +
-            primaryTag
-        )
-
-        // Note: Permanent Gmail filter auto-creation is deactivated to prevent
-        // filter duplication, cumulative rule firing, and multi-label collisions.
-
-        // Persist Canonical Attachments to Google Drive along Taxonomy Path
-        var savedAttachments = persistCanonicalAttachmentsToDrive(
+      if (classification) {
+        // Clean up any pre-existing conflicting core domain labels, sub-labels, flat labels, and Retention/Permanent
+        cleanConflictingLabels(
           thread,
-          classification,
-          config,
-          {
-            Utilities: Utilities,
-            Session: Session,
-            DriveApp: typeof DriveApp !== 'undefined' ? DriveApp : null,
-          }
+          classification.canonicalDomain,
+          classification.subLabel,
+          config
         )
 
-        // Sync Progressive Disclosure Summary to GitHub
-        if (config.githubToken) {
-          var notePath = getNotePathForDomain(
-            classification.canonicalDomain,
-            classification.subLabel
+        // 1. Single Primary Label Tagging (Sub-label preferred; fallback to domain default sub-label)
+        var primaryTag = classification.subLabel
+        if (!primaryTag || isRootDomainLabel(primaryTag)) {
+          var domainKey =
+            classification.canonicalDomain || classification.canonical_label
+          primaryTag =
+            (domainKey && DEFAULT_DOMAIN_SUBLABEL_MAP[domainKey]) ||
+            domainKey ||
+            null
+          if (primaryTag && isRootDomainLabel(primaryTag)) {
+            primaryTag = DEFAULT_DOMAIN_SUBLABEL_MAP[primaryTag] || null
+          }
+        }
+        if (primaryTag) {
+          var targetLabel = ensureUserLabel(primaryTag, gmail)
+          thread.addLabel(targetLabel)
+          console.log(
+            '[processEmailsWithAiClassifier] Tagged thread with single primary label: ' +
+              primaryTag
           )
-          if (notePath) {
-            var dateStr = Utilities.formatDate(
-              firstMessage.getDate(),
-              'GMT',
-              'yyyy-MM-dd'
+
+          // Persist Canonical Attachments to Google Drive along Taxonomy Path
+          var utils =
+            services.Utilities ||
+            (typeof Utilities !== 'undefined' ? Utilities : null)
+          var sess =
+            services.Session ||
+            (typeof Session !== 'undefined' ? Session : null)
+          var driveApp =
+            services.DriveApp ||
+            (typeof DriveApp !== 'undefined' ? DriveApp : null)
+
+          var savedAttachments = persistCanonicalAttachmentsToDrive(
+            thread,
+            classification,
+            config,
+            {
+              Utilities: utils,
+              Session: sess,
+              DriveApp: driveApp,
+            }
+          )
+
+          // Sync Progressive Disclosure Summary to GitHub
+          if (config.githubToken) {
+            var notePath = getNotePathForDomain(
+              classification.canonicalDomain,
+              classification.subLabel
             )
-            var entryMd = formatProgressiveDisclosureEntry(
-              dateStr,
-              classification.title || subject,
-              sender,
-              subject,
-              classification.summary,
-              config.userAccountEmail,
-              savedAttachments
+            if (notePath && utils) {
+              var dateStr = utils.formatDate(
+                firstMessage.getDate(),
+                'GMT',
+                'yyyy-MM-dd'
+              )
+              var entryMd = formatProgressiveDisclosureEntry(
+                dateStr,
+                classification.title || subject,
+                sender,
+                subject,
+                classification.summary,
+                config.userAccountEmail,
+                savedAttachments
+              )
+              assertNoAsciiReplacement_(
+                (subject || '') + (classification.summary || ''),
+                entryMd
+              )
+              assertClean_(entryMd, 'new entry for ' + notePath)
+              appendMarkdownEntryToGitHubRepo(
+                notePath,
+                entryMd,
+                'feat(ingestion): ' + subject
+              )
+            }
+          }
+        }
+
+        // 2. Action Handling (Trash, Archive, Mark Read)
+        if (
+          classification.category &&
+          classification.category !== 'Primary' &&
+          classification.action !== 'trash'
+        ) {
+          classification.action = 'archive'
+        }
+
+        var userSent = isThreadSentOrRepliedByUser(
+          thread,
+          config.userAccountEmail
+        )
+        var requestedDestructive =
+          classification.action === 'trash' ||
+          classification.action === 'archive'
+        var destructiveOk = isDestructiveActionAllowed_(classification)
+        if (userSent && requestedDestructive) {
+          console.log(
+            '[processEmailsWithAiClassifier] Shield: Preserved thread in INBOX because user sent/replied to it.'
+          )
+        } else if (requestedDestructive && !destructiveOk) {
+          console.warn(
+            '[processEmailsWithAiClassifier] Shield: Skipped destructive action "' +
+              classification.action +
+              '" (low/invalid confidence ' +
+              classification.confidence +
+              '); preserved thread in INBOX.'
+          )
+        } else if (requestedDestructive) {
+          if (classification.action === 'trash') {
+            thread.moveToTrash()
+            console.log(
+              '[processEmailsWithAiClassifier] Action: Moved spam/unwanted thread to TRASH.'
             )
-            assertNoAsciiReplacement_(
-              (subject || '') + (classification.summary || ''),
-              entryMd
-            )
-            assertClean_(entryMd, 'new entry for ' + notePath)
-            appendMarkdownEntryToGitHubRepo(
-              notePath,
-              entryMd,
-              'feat(ingestion): ' + subject
+          } else {
+            thread.moveToArchive()
+            console.log(
+              '[processEmailsWithAiClassifier] Action: Archived thread out of INBOX.'
             )
           }
         }
-      }
 
-      // 2. Action Handling (Trash, Archive, Mark Read)
-      // Category-Driven Action Invariant:
-      // Primary belongs in the Action Queue (Inbox).
-      // Non-Primary categories (Updates, Promotions, Social, Forums) are Informational Streams
-      // that deterministically bypass the Primary Inbox into their category tab and domain sub-label.
-      if (
-        classification.category &&
-        classification.category !== 'Primary' &&
-        classification.action !== 'trash'
-      ) {
-        classification.action = 'archive'
-      }
+        if (classification.action === 'mark_read' || classification.markRead) {
+          thread.markRead()
+          console.log(
+            '[processEmailsWithAiClassifier] Action: Marked thread as READ.'
+          )
+        }
 
-      // Safety Shield: Never trash or archive threads sent/replied by the user!
-      var userSent = isThreadSentOrRepliedByUser(
-        thread,
-        config.userAccountEmail
-      )
-      // Confidence Shield: destructive actions (trash/archive move mail out of
-      // the Inbox) must only run on a well-formed, high-confidence response.
-      // A malformed or manipulated Gemini payload (missing/low confidence,
-      // unknown action verb) can NEVER trash or hide mail — it falls through and
-      // the thread is preserved in the Inbox.
-      var requestedDestructive =
-        classification.action === 'trash' || classification.action === 'archive'
-      var destructiveOk = isDestructiveActionAllowed_(classification)
-      if (userSent && requestedDestructive) {
-        console.log(
-          '[processEmailsWithAiClassifier] Shield: Preserved thread in INBOX because user sent/replied to it.'
-        )
-      } else if (requestedDestructive && !destructiveOk) {
+        // 3. Category Tab Shifting (Push to Updates/Promotions/Social/Primary)
+        if (classification.category && classification.action !== 'trash') {
+          setGmailCategoryTab(thread, classification.category, services.Gmail)
+        }
+
+        // Apply Single Global Processed Label
+        thread.addLabel(processedLabel)
+      } else {
         console.warn(
-          '[processEmailsWithAiClassifier] Shield: Skipped destructive action "' +
-            classification.action +
-            '" (low/invalid confidence ' +
-            classification.confidence +
-            '); preserved thread in INBOX.'
-        )
-      } else if (requestedDestructive) {
-        if (classification.action === 'trash') {
-          thread.moveToTrash()
-          console.log(
-            '[processEmailsWithAiClassifier] Action: Moved spam/unwanted thread to TRASH.'
-          )
-        } else {
-          thread.moveToArchive()
-          console.log(
-            '[processEmailsWithAiClassifier] Action: Archived thread out of INBOX.'
-          )
-        }
-      }
-
-      if (classification.action === 'mark_read' || classification.markRead) {
-        thread.markRead()
-        console.log(
-          '[processEmailsWithAiClassifier] Action: Marked thread as READ.'
+          '[processEmailsWithAiClassifier] Classification failed or returned null; preserving thread unprocessed for retry.'
         )
       }
 
-      // 3. Category Tab Shifting (Push to Updates/Promotions/Social/Primary)
-      if (classification.category && classification.action !== 'trash') {
-        setGmailCategoryTab(thread, classification.category)
+      var utilsService =
+        services.Utilities ||
+        (typeof Utilities !== 'undefined' ? Utilities : null)
+      if (utilsService && typeof utilsService.sleep === 'function') {
+        utilsService.sleep(2000)
       }
-
-      // Apply Single Global Processed Label (preserves INBOX visibility unless trashed/archived)
-      thread.addLabel(processedLabel)
-    } else {
-      console.warn(
-        '[processEmailsWithAiClassifier] Classification failed or returned null; preserving thread unprocessed for retry.'
-      )
     }
 
-    // Sleep 2 seconds between emails to avoid hitting API rate limits
-    Utilities.sleep(2000)
+    console.log('[processEmailsWithAiClassifier] Batch processing complete.')
+  } finally {
+    if (lock) {
+      try {
+        lock.releaseLock()
+      } catch (e) {
+        // ignore lock release error
+      }
+    }
   }
-
-  console.log('[processEmailsWithAiClassifier] Batch processing complete.')
 }
 
 /**
@@ -601,6 +655,13 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
   }
 
   // Retail & E-Commerce Marketing Blasts
+  var isScarsella = sLower.indexOf('scarsella') !== -1
+  var isScarsellaCurriculum =
+    isScarsella &&
+    /\b(curriculum|schedule|testing|belt|forms?)\b/i.test(
+      (subject || '') + ' ' + (snippet || '')
+    )
+
   if (
     sLower.indexOf('lowes') !== -1 ||
     sLower.indexOf('mannlake') !== -1 ||
@@ -613,7 +674,7 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     sLower.indexOf('birminghamhomebuyers') !== -1 ||
     sLower.indexOf('trailerparts') !== -1 ||
     sLower.indexOf('hillco') !== -1 ||
-    sLower.indexOf('scarsella') !== -1 ||
+    (isScarsella && !isScarsellaCurriculum) ||
     sLower.indexOf('em1.cloudflare.com') !== -1
   ) {
     return {
@@ -2146,6 +2207,10 @@ var SUBLABEL_TO_FOLDER_MAP = {
   'family/medical-student': 'Medical_Records',
   'family/health-general': 'Medical_Records',
   'family/school-student': 'Students',
+  'family/school-charley': 'Students',
+  'family/school-toby': 'Students',
+  'family/school-tide': 'Students',
+  'family/parents': 'Family_General',
   'family/personal-correspondence': 'Family_General',
   'family/kids/tide': 'Students',
   'family/kids/toby': 'Students',
@@ -2238,7 +2303,10 @@ function resolveTaxonomySubfolderName(canonicalDomain, subLabel) {
       return SUBLABEL_TO_FOLDER_MAP[normalized]
     }
 
-    if (normalized.indexOf('family/kids') === 0) {
+    if (
+      normalized.indexOf('family/kids') === 0 ||
+      normalized.indexOf('family/school') === 0
+    ) {
       if (
         normalized.indexOf('health') !== -1 ||
         normalized.indexOf('medical') !== -1
@@ -2247,7 +2315,10 @@ function resolveTaxonomySubfolderName(canonicalDomain, subLabel) {
       }
       return 'Students'
     }
-    if (normalized.indexOf('family/sisters') === 0) {
+    if (
+      normalized.indexOf('family/sisters') === 0 ||
+      normalized.indexOf('family/parents') === 0
+    ) {
       return 'Family_General'
     }
 
@@ -2303,9 +2374,12 @@ function evaluateAttachmentEligibility(att) {
     size = att.size
   }
 
-  // 1. Skip empty files
+  // 1. Skip empty files or files exceeding GAS payload limit (30MB limit; cap at 25MB)
   if (size <= 0) {
     return { eligible: false, reason: 'ZERO_BYTE' }
+  }
+  if (size > 25 * 1024 * 1024) {
+    return { eligible: false, reason: 'EXCEEDS_GAS_SIZE_LIMIT (>25MB)' }
   }
 
   var cleanName = name.trim()
@@ -3732,5 +3806,6 @@ if (typeof module !== 'undefined' && module.exports) {
     isRootDomainLabel: isRootDomainLabel,
     getNotePathForDomain: getNotePathForDomain,
     resolveCanonicalDomainFromLabels: resolveCanonicalDomainFromLabels,
+    deterministicRuleClassify_: deterministicRuleClassify_,
   }
 }
