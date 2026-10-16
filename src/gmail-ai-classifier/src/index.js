@@ -4174,6 +4174,7 @@ module.exports = {
   classifyEmailWithGemini,
   buildOntologicalPrompt,
   ensureGmailLabel,
+  ensureUserLabel: ensureGmailLabel,
   createPermanentGmailFilter,
   processThreadBatch,
   RULE6_PATTERNS,

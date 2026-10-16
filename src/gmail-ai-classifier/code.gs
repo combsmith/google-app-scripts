@@ -4037,5 +4037,6 @@ if (typeof module !== 'undefined' && module.exports) {
     deterministicRuleClassify_: deterministicRuleClassify_,
     auditEmailClassifications: auditEmailClassifications,
     auditClassifications: auditClassifications,
+    formatAuditDigest: formatAuditDigest,
   }
 }
