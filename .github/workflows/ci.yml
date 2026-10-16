@@ -65,14 +65,16 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      has_patch: ${{ steps.patch.outputs.has_patch }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
@@ -87,20 +89,66 @@ jobs:
           npm run format
           npm run lint -- --fix
 
-      - name: Commit and push auto-fixes
+      # No push token is available in this job: PR-controlled tooling (npm
+      # scripts, git hooks) runs here, so the fixes are exported as a patch and
+      # applied + pushed by the separate 'autofix-push' job on a clean checkout.
+      - name: Export auto-fixes as patch
+        id: patch
         run: |
-          if git diff --quiet; then
-            echo "No formatting or lint fixes needed."
+          git add -A
+          git diff --cached --binary > "${RUNNER_TEMP}/autofix.patch"
+          if [ -s "${RUNNER_TEMP}/autofix.patch" ]; then
+            echo "has_patch=true" >> "$GITHUB_OUTPUT"
           else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "chore(ci): apply prettier/eslint auto-fixes"
-            git push
+            echo "has_patch=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # Passed as an artifact: job outputs are capped at ~1 MB.
+      - name: Upload auto-fix patch
+        if: steps.patch.outputs.has_patch == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: autofix-patch
+          path: ${{ runner.temp }}/autofix.patch
+          if-no-files-found: error
 
       - name: Verify no remaining issues after auto-fix
         run: npm run check
+
+  autofix-push:
+    needs: autofix
+    if: needs.autofix.outputs.has_patch == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code (clean, no PR-installed tooling)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          persist-credentials: false
+
+      - name: Download auto-fix patch
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: autofix-patch
+          path: ${{ runner.temp }}/autofix-patch
+
+      - name: Commit and push auto-fixes
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT_WORKFLOWS }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::GH_PAT_WORKFLOWS is required for autofix pushes."
+            exit 1
+          fi
+          git apply --index "${RUNNER_TEMP}/autofix-patch/autofix.patch"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(ci): apply prettier/eslint auto-fixes"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:"${HEAD_REF}"
 
   secret-scan:
     name: Secret scan (gitleaks)
