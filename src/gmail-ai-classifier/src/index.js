@@ -2361,10 +2361,14 @@ function isDuplicateAttachment(existingFiles, newFileBlob, helperFns) {
  * @returns {string} Safe filename
  */
 function resolveAttachmentName(folder, fileName, newFileBlob, options) {
+  const existingFiles =
+    folder && typeof folder.getFilesByName === 'function'
+      ? folder.getFilesByName(fileName)
+      : null
   if (
-    folder &&
-    typeof folder.getFilesByName === 'function' &&
-    !folder.getFilesByName(fileName).hasNext()
+    !existingFiles ||
+    typeof existingFiles.hasNext !== 'function' ||
+    !existingFiles.hasNext()
   ) {
     return fileName
   }
@@ -3292,7 +3296,11 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
           {
             DriveApp: drive,
             Utilities:
-              services && services.Utilities ? services.Utilities : Utilities,
+              services && services.Utilities
+                ? services.Utilities
+                : typeof Utilities !== 'undefined'
+                  ? Utilities
+                  : null,
           }
         )
         if (saved && saved.length > 0) {

@@ -726,8 +726,9 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
  */
 function cleanConflictingLabels(thread, targetDomain, targetSubLabel, config) {
   try {
-    var existingLabels = thread.getLabels()
-    var canonicalDomains = config.canonicalDomains || []
+    var existingLabels =
+      typeof thread.getLabels === 'function' ? thread.getLabels() : []
+    var canonicalDomains = (config && config.canonicalDomains) || []
 
     var legacyFlatLabels = [
       'Finance',
@@ -748,7 +749,8 @@ function cleanConflictingLabels(thread, targetDomain, targetSubLabel, config) {
 
     for (var j = 0; j < existingLabels.length; j++) {
       var lObj = existingLabels[j]
-      var lName = lObj.getName()
+      var lName =
+        typeof lObj.getName === 'function' ? lObj.getName() : String(lObj)
 
       // 1. Strip redundant Retention/Permanent (Inverted Model: blank = permanent)
       if (lName === 'Retention/Permanent') {
@@ -765,7 +767,7 @@ function cleanConflictingLabels(thread, targetDomain, targetSubLabel, config) {
       }
 
       // 3. Protect global status and system labels
-      if (lName === (config.processedLabel || 'Processed')) {
+      if (lName === ((config && config.processedLabel) || 'Processed')) {
         continue
       }
 
@@ -2715,10 +2717,14 @@ function isDuplicateAttachment(existingFiles, newFileBlob, helperFns) {
  * with different content, appends a timestamp before the extension.
  */
 function resolveAttachmentName(folder, fileName, newFileBlob, options) {
+  var existingFiles =
+    folder && typeof folder.getFilesByName === 'function'
+      ? folder.getFilesByName(fileName)
+      : null
   if (
-    folder &&
-    typeof folder.getFilesByName === 'function' &&
-    !folder.getFilesByName(fileName).hasNext()
+    !existingFiles ||
+    typeof existingFiles.hasNext !== 'function' ||
+    !existingFiles.hasNext()
   ) {
     return fileName
   }
@@ -3653,7 +3659,11 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
           {
             DriveApp: drive,
             Utilities:
-              services && services.Utilities ? services.Utilities : Utilities,
+              services && services.Utilities
+                ? services.Utilities
+                : typeof Utilities !== 'undefined'
+                  ? Utilities
+                  : null,
           }
         )
         if (saved && saved.length > 0) {

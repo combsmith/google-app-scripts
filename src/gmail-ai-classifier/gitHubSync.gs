@@ -157,8 +157,10 @@ function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
     } else if (statusCode === 200) {
       var fileData = JSON.parse(res.getContentText())
       sha = fileData.sha
+      // GitHub Contents API wraps Base64 in newlines every 60 chars; strip them
+      // before decoding since some decoders reject embedded whitespace.
       rawContent = Utilities.newBlob(
-        Utilities.base64Decode(fileData.content)
+        Utilities.base64Decode((fileData.content || '').replace(/[\r\n]/g, ''))
       ).getDataAsString()
 
       // Idempotency Check: Skip if entry already present
@@ -187,14 +189,18 @@ function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
 
     // Rule 6 Guards: Refuse to commit if mojibake is detected in new entry or non-ASCII chars were flattened
     assertClean_(entryMd, 'new entry for ' + filePath)
-    if (rawContent) {
-      assertNoAsciiReplacement_(rawContent, updatedContent)
-    }
-    assertNoAsciiReplacement_(entryMd, updatedContent)
 
     var base64Updated = Utilities.base64Encode(
       Utilities.newBlob(updatedContent).getBytes()
     )
+
+    // Validate the ACTUAL Base64 round trip at the payload boundary: decode what
+    // we are about to PUT and confirm no non-ASCII character was flattened to
+    // '?'.
+    var renderedContent = Utilities.newBlob(
+      Utilities.base64Decode(base64Updated)
+    ).getDataAsString()
+    assertNoAsciiReplacement_(updatedContent, renderedContent)
 
     // 3. Commit updated content back to GitHub main branch
     var putPayload = {
@@ -244,9 +250,14 @@ function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
 function extractTopicTitleFromPath(filePath) {
   var parts = filePath.split('/')
   var topic = parts.length > 1 ? parts[parts.length - 2] : parts[0]
-  return topic.replace(/-/g, ' ').replace(/\b\w/g, function (l) {
-    return l.toUpperCase()
-  })
+  // Strip any trailing file extension (e.g. ".md") before title-casing so a
+  // single-segment path like "digital-backups.md" becomes "Digital Backups".
+  return topic
+    .replace(/\.[^.]+$/, '')
+    .replace(/-/g, ' ')
+    .replace(/\b\w/g, function (l) {
+      return l.toUpperCase()
+    })
 }
 
 function insertEntryIntoLogSection(fullContent, newEntry) {

@@ -1289,6 +1289,26 @@ describe('cleanConflictingLabels Sub-Label Cleansing', () => {
         expect(removed).toContain('01_Household')
         expect(removed).toContain('05_Tech_Infrastructure')
       })
+
+      test('safely handles null/undefined config and string label objects without throwing', () => {
+        const removed = []
+        const mockLabels = ['Family', '01_Household', 'Processed']
+        const mockThread = {
+          getLabels: () => mockLabels,
+          removeLabel: jest.fn((lObj) => {
+            removed.push(
+              typeof lObj.getName === 'function' ? lObj.getName() : String(lObj)
+            )
+          }),
+        }
+
+        expect(() => {
+          fn(mockThread, '01_Household', 'Household/General', null)
+        }).not.toThrow()
+        expect(removed).toContain('Family')
+        expect(removed).toContain('01_Household')
+        expect(removed).not.toContain('Processed')
+      })
     })
   })
 })
@@ -1702,6 +1722,67 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           10
         )
         expect(report.dryRun).toBe(true)
+      })
+
+      test('safely handles missing services.Utilities when global Utilities is undefined', () => {
+        const originalUtilities = global.Utilities
+        delete global.Utilities
+        try {
+          const mockThread = {
+            getId: () => 'thread-util-test',
+            getMessages: () => [
+              {
+                getFrom: () => 'test@example.com',
+                getSubject: () => 'Doc Test',
+                getPlainBody: () => 'Test body',
+                getAttachments: () => [],
+              },
+            ],
+            getLabels: () => [],
+            addLabel: jest.fn(),
+            removeLabel: jest.fn(),
+            moveToArchive: jest.fn(),
+          }
+          const mockGmail = {
+            search: jest.fn(() => [mockThread]),
+            getUserLabelByName: jest.fn((name) => ({ getName: () => name })),
+            createLabel: jest.fn((name) => ({ getName: () => name })),
+          }
+          const mockClassify = jest.fn(() => ({
+            canonicalDomain: '01_Household',
+            subLabel: 'Household/General',
+            action: 'keep',
+            category: 'Primary',
+          }))
+          const mockDrive = {
+            getRootFolder: () => ({
+              getFoldersByName: jest.fn(() => ({
+                hasNext: () => false,
+              })),
+              createFolder: jest.fn(() => ({
+                getFoldersByName: jest.fn(() => ({ hasNext: () => false })),
+                createFolder: jest.fn(),
+                getFilesByName: jest.fn(() => ({ hasNext: () => false })),
+                createFile: jest.fn(),
+              })),
+            }),
+          }
+
+          expect(() => {
+            fn(
+              'test query',
+              { maxThreads: 1, dryRun: false },
+              { canonicalDomains: ['01_Household'] },
+              {
+                GmailApp: mockGmail,
+                DriveApp: mockDrive,
+                classifyFn: mockClassify,
+              }
+            )
+          }).not.toThrow()
+        } finally {
+          global.Utilities = originalUtilities
+        }
       })
 
       test('sweepAllUnreadInboxEmails queries in:inbox is:unread', () => {

@@ -583,6 +583,22 @@ describe('Drive Attachment Persistence along Taxonomy Path', () => {
       expect(resolved).toMatch(/^bill_[\w-]+\.pdf$/)
       expect(blob2.getName()).toBe(resolved)
     })
+
+    test('resolveAttachmentName safely returns fileName when folder.getFilesByName returns null or invalid', () => {
+      const folderNull = {
+        getFilesByName: jest.fn(() => null),
+      }
+      expect(resolveAttachmentName(folderNull, 'bill.pdf', null)).toBe(
+        'bill.pdf'
+      )
+
+      const folderNoHasNext = {
+        getFilesByName: jest.fn(() => ({})),
+      }
+      expect(resolveAttachmentName(folderNoHasNext, 'bill.pdf', null)).toBe(
+        'bill.pdf'
+      )
+    })
   })
 
   describe('persistCanonicalAttachmentsToDrive', () => {

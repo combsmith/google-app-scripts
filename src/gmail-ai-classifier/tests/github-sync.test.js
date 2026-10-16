@@ -791,4 +791,113 @@ describe('GitHub Sync & Rule 6 Mojibake Guards', () => {
       expect(range.before).toBe('2026/07/26')
     })
   })
+
+  // -------------------------------------------------------------------------
+  // gitHubSync.gs parity with src/index.js
+  // -------------------------------------------------------------------------
+  describe('gitHubSync.gs parity with src/index.js', () => {
+    const gitHubSyncGs = require('../gitHubSync.gs')
+
+    test('extractTopicTitleFromPath handles single segment paths and strips file extension', () => {
+      expect(gitHubSyncGs.extractTopicTitleFromPath('digital-backups.md')).toBe(
+        'Digital Backups'
+      )
+    })
+
+    test('executeGitHubCommit handles wrapped newlines in base64 content from GitHub Contents API', () => {
+      const rawMarkdown =
+        '# Ingested Logs\n## 3. Ingested Activity Logs\n<details open><summary>Logs</summary>\n</details>'
+      const encoded = Buffer.from(rawMarkdown, 'utf-8').toString('base64')
+      const wrappedBase64 = encoded.match(/.{1,60}/g).join('\n')
+
+      let putPayload = null
+      global.UrlFetchApp = {
+        fetch: jest.fn((url, options) => {
+          if (options.method === 'get') {
+            return {
+              getResponseCode: () => 200,
+              getContentText: () =>
+                JSON.stringify({
+                  sha: 'sha123',
+                  content: wrappedBase64,
+                }),
+            }
+          }
+          if (options.method === 'put') {
+            putPayload = JSON.parse(options.payload)
+            return {
+              getResponseCode: () => 200,
+              getContentText: () =>
+                JSON.stringify({ commit: { sha: 'sha456' } }),
+            }
+          }
+        }),
+      }
+
+      const success = gitHubSyncGs.executeGitHubCommit(
+        '01_Household/index.md',
+        '### 2026-10-15 — Test Title\n- **Subject**: Test',
+        'feat(ingestion): Test',
+        'token-xyz'
+      )
+      expect(success).toBe(true)
+      expect(putPayload).toBeDefined()
+      const decodedPut = Utilities.newBlob(
+        Utilities.base64Decode(putPayload.content)
+      ).getDataAsString()
+      expect(decodedPut).toContain('### 2026-10-15 — Test Title')
+    })
+
+    test('executeGitHubCommit validates Base64 round trip at the payload boundary', () => {
+      let putCalled = false
+      global.UrlFetchApp = {
+        fetch: jest.fn((url, options) => {
+          if (options.method === 'get') {
+            return {
+              getResponseCode: () => 200,
+              getContentText: () =>
+                JSON.stringify({
+                  sha: 'sha123',
+                  content: Utilities.base64Encode(
+                    Utilities.newBlob(
+                      '# Doc\n<details open><summary>Logs</summary>\n</details>'
+                    ).getBytes()
+                  ),
+                }),
+            }
+          }
+          if (options.method === 'put') {
+            putCalled = true
+            return {
+              getResponseCode: () => 200,
+              getContentText: () =>
+                JSON.stringify({ commit: { sha: 'sha456' } }),
+            }
+          }
+        }),
+      }
+
+      jest.spyOn(Utilities, 'base64Decode').mockImplementation((b64) => {
+        const decoded = Buffer.from(b64, 'base64').toString('utf-8')
+        const flattened = decoded.replace(/—/g, '?')
+        return {
+          getDataAsString: () => flattened,
+          getBytes: () => Buffer.from(flattened, 'utf-8'),
+        }
+      })
+
+      try {
+        const result = gitHubSyncGs.executeGitHubCommit(
+          '01_Household/index.md',
+          '### 2026-10-15 — Heading with em dash',
+          'feat(ingestion): Test',
+          'token-xyz'
+        )
+        expect(result).toBe(false)
+        expect(putCalled).toBe(false)
+      } finally {
+        Utilities.base64Decode.mockRestore()
+      }
+    })
+  })
 })
