@@ -164,9 +164,21 @@ describe('GitHub Sync & Rule 6 Mojibake Guards', () => {
         'Digital Backups'
       )
     })
+
+    test('handles null, undefined, empty string, and root slash safely without throwing', () => {
+      expect(extractTopicTitleFromPath(null)).toBe('Ingested Records')
+      expect(extractTopicTitleFromPath(undefined)).toBe('Ingested Records')
+      expect(extractTopicTitleFromPath('')).toBe('Ingested Records')
+      expect(extractTopicTitleFromPath('/')).toBe('Ingested Records')
+    })
   })
 
   describe('insertEntryIntoLogSection', () => {
+    test('handles null or empty content safely without throwing', () => {
+      expect(insertEntryIntoLogSection(null, 'entry')).toBe('entry')
+      expect(insertEntryIntoLogSection('content', null)).toBe('content')
+      expect(insertEntryIntoLogSection(null, null)).toBe('')
+    })
     test('inserts entry before </details> marker when present', () => {
       const doc =
         '# Notes\n\n## 3. Ingested Activity Logs\n<details open><summary><b>Activity Logs</b></summary>\n### Older Entry\n</details>\n'
@@ -898,6 +910,24 @@ describe('GitHub Sync & Rule 6 Mojibake Guards', () => {
       } finally {
         Utilities.base64Decode.mockRestore()
       }
+    })
+
+    test('extractTopicTitleFromPath and insertEntryIntoLogSection handle null inputs safely in gitHubSync.gs', () => {
+      expect(gitHubSyncGs.extractTopicTitleFromPath(null)).toBe(
+        'Ingested Records'
+      )
+      expect(gitHubSyncGs.extractTopicTitleFromPath(undefined)).toBe(
+        'Ingested Records'
+      )
+      expect(gitHubSyncGs.extractTopicTitleFromPath('')).toBe(
+        'Ingested Records'
+      )
+      expect(gitHubSyncGs.insertEntryIntoLogSection(null, 'entry')).toBe(
+        'entry'
+      )
+      expect(gitHubSyncGs.insertEntryIntoLogSection('content', null)).toBe(
+        'content'
+      )
     })
   })
 })

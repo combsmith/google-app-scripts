@@ -1347,6 +1347,31 @@ describe('cleanConflictingLabels Sub-Label Cleansing', () => {
         expect(removed).toContain('01_Household')
         expect(removed).not.toContain('Processed')
       })
+
+      test('safely handles null thread without throwing or aborting', () => {
+        expect(() => {
+          fn(null, '01_Household', 'Household/General', null)
+        }).not.toThrow()
+      })
+
+      test('continues removing other labels even if one label removal throws', () => {
+        const removed = []
+        const mockLabels = [
+          { getName: () => '01_Household' },
+          { getName: () => 'Finance/Purchases' },
+        ]
+        const mockThread = {
+          getLabels: () => mockLabels,
+          removeLabel: jest.fn((lObj) => {
+            if (lObj.getName() === '01_Household') throw new Error('API locked')
+            removed.push(lObj.getName())
+          }),
+        }
+        fn(mockThread, '02_Finance_Legal', 'Finance/Banking', {
+          canonicalDomains: ['01_Household'],
+        })
+        expect(removed).toContain('Finance/Purchases')
+      })
     })
   })
 })
@@ -1823,6 +1848,51 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
         }
       })
 
+      test('resolves oldDomain and detects tldChanged when historical thread carries only a sub-label', () => {
+        const mockThread = {
+          getId: () => 't-single-sublabel',
+          getMessages: () => [
+            {
+              getFrom: () => 'partner@example.com',
+              getSubject: () => 'Invoice Note',
+              getPlainBody: () => 'Invoice details',
+              getAttachments: () => [],
+            },
+          ],
+          getLabels: () => [
+            { getName: () => 'Finance/Banking' },
+            { getName: () => 'Processed' },
+          ],
+          addLabel: jest.fn(),
+          removeLabel: jest.fn(),
+          moveToArchive: jest.fn(),
+        }
+        const mockGmail = {
+          search: jest.fn(() => [mockThread]),
+        }
+        const mockClassify = jest.fn(() => ({
+          canonicalDomain: '01_Household',
+          subLabel: 'Household/Property',
+          action: 'archive',
+          category: 'Updates',
+        }))
+
+        const report = fn(
+          'test query',
+          { maxThreads: 1, dryRun: true },
+          { canonicalDomains: ['01_Household', '02_Finance_Legal'] },
+          {
+            GmailApp: mockGmail,
+            classifyFn: mockClassify,
+          }
+        )
+
+        expect(report.scanned).toBe(1)
+        expect(report.items[0].oldDomain).toBe('02_Finance_Legal')
+        expect(report.items[0].newDomain).toBe('01_Household')
+        expect(report.items[0].tldChanged).toBe(true)
+      })
+
       test('sweepAllUnreadInboxEmails queries in:inbox is:unread', () => {
         const mockGmail = {
           search: jest.fn(() => []),
@@ -1886,6 +1956,20 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             'asmith@bcs-lions.org',
             'Student - Math Progress & Tutoring Schedule',
             'Hello Parents, the student did great on the algebra quiz today...'
+          )
+          expect(res).not.toBeNull()
+          expect(res.canonicalDomain).toBe('04_Family_Health')
+          expect(res.subLabel).toBe('Family/School-Student')
+          expect(res.category).toBe('Primary')
+          expect(res.action).toBe('keep')
+          expect(res.reasoning).toBe('Teacher 1:1 Shield')
+        })
+
+        test('shields school 1:1 teacher correspondence (briarwoodchristianschool.org) into Primary', () => {
+          const res = fn(
+            'teacher@briarwoodchristianschool.org',
+            'Student - Chemistry Study Guide & Quiz Update',
+            'Hello Parents, here is the study guide for tomorrow...'
           )
           expect(res).not.toBeNull()
           expect(res.canonicalDomain).toBe('04_Family_Health')
@@ -2346,6 +2430,91 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             expect(throwingThread.moveToTrash).toHaveBeenCalled()
             expect(followingThread.moveToTrash).toHaveBeenCalled()
             expect(result.trashedCount).toBe(2)
+          })
+        })
+      })
+    })
+
+    describe('auditEmailClassifications daily audit sweep', () => {
+      const { auditEmailClassifications: auditCodeGs } = require('../code.gs')
+      const {
+        auditEmailClassifications: auditIndexJs,
+      } = require('../src/index.js')
+
+      const implementations = [
+        { name: 'code.gs', fn: auditCodeGs },
+        { name: 'src/index.js', fn: auditIndexJs },
+      ]
+
+      implementations.forEach(({ name, fn }) => {
+        describe(name, () => {
+          test('scans processed threads, generates report, and dispatches email digest when anomalies found', () => {
+            const anomalousThread = {
+              getId: () => 't-anomaly',
+              getFirstMessageSubject: () => 'Huge Clearance Sale 70% Off',
+              getMessages: () => [{ getFrom: () => 'store@deals.example.com' }],
+              getLabels: () => [
+                { getName: () => 'Processed' },
+                { getName: () => '01_Household' },
+              ],
+            }
+            const mockSendEmail = jest.fn()
+            const mockGmail = {
+              search: jest.fn(() => [anomalousThread]),
+              sendEmail: mockSendEmail,
+            }
+            const testConfig = {
+              processedLabel: 'Processed',
+              auditLookbackDays: 2,
+              auditDigestEmail: 'digest@example.com',
+              canonicalDomains: ['01_Household'],
+            }
+
+            const report = fn(testConfig, { GmailApp: mockGmail })
+
+            expect(mockGmail.search).toHaveBeenCalledWith(
+              'label:Processed newer_than:2d',
+              0,
+              50
+            )
+            expect(report.scannedCount).toBe(1)
+            expect(report.flaggedCount).toBe(1)
+            expect(mockSendEmail).toHaveBeenCalledWith(
+              'digest@example.com',
+              expect.stringContaining(
+                'Daily Classification Audit: 1 anomalies detected'
+              ),
+              expect.stringContaining('GMAIL AI CLASSIFICATION AUDIT REPORT')
+            )
+          })
+
+          test('does not send email when all threads are compliant', () => {
+            const compliantThread = {
+              getId: () => 't-compliant',
+              getFirstMessageSubject: () => 'Quarterly Bank Statement',
+              getMessages: () => [{ getFrom: () => 'bank@example.com' }],
+              getLabels: () => [
+                { getName: () => 'Processed' },
+                { getName: () => 'Finance/Banking' },
+              ],
+            }
+            const mockSendEmail = jest.fn()
+            const mockGmail = {
+              search: jest.fn(() => [compliantThread]),
+              sendEmail: mockSendEmail,
+            }
+            const testConfig = {
+              processedLabel: 'Processed',
+              auditLookbackDays: 2,
+              auditDigestEmail: 'digest@example.com',
+              canonicalDomains: ['02_Finance_Legal'],
+            }
+
+            const report = fn(testConfig, { GmailApp: mockGmail })
+
+            expect(report.scannedCount).toBe(1)
+            expect(report.flaggedCount).toBe(0)
+            expect(mockSendEmail).not.toHaveBeenCalled()
           })
         })
       })

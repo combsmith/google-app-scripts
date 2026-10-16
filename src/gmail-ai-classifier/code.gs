@@ -407,13 +407,18 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
   var isSchoolDomain =
     sLower.indexOf('bcsk12.org') !== -1 ||
     sLower.indexOf('bcs-lions.org') !== -1 ||
+    sLower.indexOf('briarwoodchristianschool.org') !== -1 ||
     sLower.indexOf('mcaabhm.org') !== -1 ||
     sLower.indexOf('jeffersonstate.edu') !== -1
   var isBroadcastSubject = [
     'weekly',
     'newsletter',
     'bulletin',
-    'update',
+    'school update',
+    'campus update',
+    'district update',
+    'bcs update',
+    'lions update',
     'digest',
     'progress is ready',
     'lunch',
@@ -726,9 +731,9 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
  * and redundant 'Retention/Permanent' tags to enforce a strict, clean label budget.
  */
 function cleanConflictingLabels(thread, targetDomain, targetSubLabel, config) {
+  if (!thread || typeof thread.getLabels !== 'function') return
   try {
-    var existingLabels =
-      typeof thread.getLabels === 'function' ? thread.getLabels() : []
+    var existingLabels = thread.getLabels() || []
     var canonicalDomains = (config && config.canonicalDomains) || []
 
     var legacyFlatLabels = [
@@ -755,10 +760,19 @@ function cleanConflictingLabels(thread, targetDomain, targetSubLabel, config) {
 
       // 1. Strip redundant Retention/Permanent (Inverted Model: blank = permanent)
       if (lName === 'Retention/Permanent') {
-        thread.removeLabel(lObj)
-        console.log(
-          '[cleanConflictingLabels] Stripped Retention/Permanent: ' + lName
-        )
+        try {
+          thread.removeLabel(lObj)
+          console.log(
+            '[cleanConflictingLabels] Stripped Retention/Permanent: ' + lName
+          )
+        } catch (err) {
+          console.warn(
+            '[cleanConflictingLabels] Failed removing label ' +
+              lName +
+              ': ' +
+              err.message
+          )
+        }
         continue
       }
 
@@ -773,15 +787,27 @@ function cleanConflictingLabels(thread, targetDomain, targetSubLabel, config) {
       }
 
       // 4. Clean legacy flat labels
+      var isLegacy = false
       for (var f = 0; f < legacyFlatLabels.length; f++) {
         if (lName.toLowerCase() === legacyFlatLabels[f].toLowerCase()) {
-          thread.removeLabel(lObj)
-          console.log(
-            '[cleanConflictingLabels] Stripped legacy flat label: ' + lName
-          )
+          try {
+            thread.removeLabel(lObj)
+            console.log(
+              '[cleanConflictingLabels] Stripped legacy flat label: ' + lName
+            )
+          } catch (err) {
+            console.warn(
+              '[cleanConflictingLabels] Failed removing legacy flat label ' +
+                lName +
+                ': ' +
+                err.message
+            )
+          }
+          isLegacy = true
           break
         }
       }
+      if (isLegacy) continue
 
       // 5. Clean ALL Core Domain labels (threads only carry Sub-Labels, never raw domain codes)
       var isDomainCode = isRootDomainLabel(lName)
@@ -794,10 +820,19 @@ function cleanConflictingLabels(thread, targetDomain, targetSubLabel, config) {
         }
       }
       if (isDomainCode) {
-        thread.removeLabel(lObj)
-        console.log(
-          '[cleanConflictingLabels] Removed domain code label: ' + lName
-        )
+        try {
+          thread.removeLabel(lObj)
+          console.log(
+            '[cleanConflictingLabels] Removed domain code label: ' + lName
+          )
+        } catch (err) {
+          console.warn(
+            '[cleanConflictingLabels] Failed removing domain code label ' +
+              lName +
+              ': ' +
+              err.message
+          )
+        }
         continue
       }
 
@@ -808,10 +843,19 @@ function cleanConflictingLabels(thread, targetDomain, targetSubLabel, config) {
         lName.indexOf('Archives') === -1 &&
         lName.indexOf('Retention/') === -1
       ) {
-        thread.removeLabel(lObj)
-        console.log(
-          '[cleanConflictingLabels] Removed conflicting sub-label: ' + lName
-        )
+        try {
+          thread.removeLabel(lObj)
+          console.log(
+            '[cleanConflictingLabels] Removed conflicting sub-label: ' + lName
+          )
+        } catch (err) {
+          console.warn(
+            '[cleanConflictingLabels] Failed removing conflicting sub-label ' +
+              lName +
+              ': ' +
+              err.message
+          )
+        }
       }
     }
   } catch (e) {
@@ -1049,16 +1093,34 @@ function setupDailyAuditTrigger() {
  * Daily audit routine that inspects recently processed threads for classification anomalies,
  * missing or duplicate domain labels, and potential prompt tuning opportunities.
  * Logs anomalies to console and optionally emails a digest if AUDIT_DIGEST_EMAIL is configured.
+ *
+ * @param {Object} [customConfig] - Optional override configuration
+ * @param {Object} [customServices] - Optional injected services (GmailApp)
+ * @returns {Object} report - { scannedCount, flaggedCount, findings, summary }
  */
-function auditEmailClassifications() {
+function auditEmailClassifications(customConfig, customServices) {
   console.log(
     '[auditEmailClassifications] Starting daily classification audit sweep...'
   )
-  var config = getAiClassifierConfig()
+  var services = customServices || {}
+  var config =
+    customConfig ||
+    (typeof getAiClassifierConfig === 'function' ? getAiClassifierConfig() : {})
+  var gmail =
+    (services && services.GmailApp) ||
+    (typeof GmailApp !== 'undefined' ? GmailApp : null)
   var lookback = config.auditLookbackDays || 2
-  var query = 'label:' + config.processedLabel + ' newer_than:' + lookback + 'd'
+  var query =
+    'label:' +
+    (config.processedLabel || 'Processed') +
+    ' newer_than:' +
+    lookback +
+    'd'
 
-  var threads = GmailApp.search(query, 0, 50)
+  var threads =
+    gmail && typeof gmail.search === 'function'
+      ? gmail.search(query, 0, 50)
+      : []
   console.log(
     '[auditEmailClassifications] Found ' +
       threads.length +
@@ -1074,9 +1136,13 @@ function auditEmailClassifications() {
     var digest = formatAuditDigest(report)
     console.warn('[auditEmailClassifications] Anomalies detected:\n' + digest)
 
-    if (config.auditDigestEmail) {
+    if (
+      config.auditDigestEmail &&
+      gmail &&
+      typeof gmail.sendEmail === 'function'
+    ) {
       try {
-        GmailApp.sendEmail(
+        gmail.sendEmail(
           config.auditDigestEmail,
           '[Gmail AI Classifier] Daily Classification Audit: ' +
             report.flaggedCount +
@@ -3596,17 +3662,26 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
       )
     }
     if (!classification) continue
-    var oldCanonical = rawLabels.filter(function (l) {
-      return (
-        (cfg.canonicalDomains || []).indexOf(l) !== -1 || /^0[1-7]_/.test(l)
+    var oldDomain = null
+    if (typeof resolveCanonicalDomainFromLabels === 'function') {
+      oldDomain = resolveCanonicalDomainFromLabels(
+        rawLabels,
+        cfg.canonicalDomains
       )
-    })
-    var oldDomain = oldCanonical.length > 0 ? oldCanonical[0] : null
+    }
+    if (!oldDomain) {
+      var oldCanonical = rawLabels.filter(function (l) {
+        return (
+          (cfg.canonicalDomains || []).indexOf(l) !== -1 || /^0[1-7]_/.test(l)
+        )
+      })
+      oldDomain = oldCanonical.length > 0 ? oldCanonical[0] : null
+    }
     var oldSubLabel =
       rawLabels.find(function (l) {
         return (
           l.indexOf('/') !== -1 &&
-          (!oldDomain || l.indexOf(oldDomain) === -1) &&
+          l !== oldDomain &&
           l.indexOf('Archives') === -1 &&
           l.indexOf('Retention/') === -1
         )
@@ -3960,5 +4035,7 @@ if (typeof module !== 'undefined' && module.exports) {
     getNotePathForDomain: getNotePathForDomain,
     resolveCanonicalDomainFromLabels: resolveCanonicalDomainFromLabels,
     deterministicRuleClassify_: deterministicRuleClassify_,
+    auditEmailClassifications: auditEmailClassifications,
+    auditClassifications: auditClassifications,
   }
 }

@@ -110,6 +110,10 @@ function appendMarkdownEntryToGitHubRepo(filePath, entryMd, commitMessage) {
  * Performs a single commit transaction via GitHub REST API with 404 Auto-Create & 409 SHA retry handling.
  */
 function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
+  if (!filePath || !entryMd) {
+    console.warn('[gitHubSync] Missing filePath or entryMd for GitHub commit.')
+    return false
+  }
   var url =
     'https://api.github.com/repos/' +
     GITHUB_REPO_OWNER +
@@ -248,19 +252,32 @@ function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
 }
 
 function extractTopicTitleFromPath(filePath) {
-  var parts = filePath.split('/')
+  if (!filePath || typeof filePath !== 'string') {
+    return 'Ingested Records'
+  }
+  var trimmed = filePath.trim()
+  if (!trimmed || trimmed === '/') {
+    return 'Ingested Records'
+  }
+  var parts = trimmed.split('/').filter(Boolean)
+  if (parts.length === 0) {
+    return 'Ingested Records'
+  }
   var topic = parts.length > 1 ? parts[parts.length - 2] : parts[0]
   // Strip any trailing file extension (e.g. ".md") before title-casing so a
   // single-segment path like "digital-backups.md" becomes "Digital Backups".
-  return topic
-    .replace(/\.[^.]+$/, '')
-    .replace(/-/g, ' ')
-    .replace(/\b\w/g, function (l) {
-      return l.toUpperCase()
-    })
+  var cleaned = topic.replace(/\.[^.]+$/, '').replace(/-/g, ' ')
+  if (!cleaned) return 'Ingested Records'
+  return cleaned.replace(/\b\w/g, function (l) {
+    return l.toUpperCase()
+  })
 }
 
 function insertEntryIntoLogSection(fullContent, newEntry) {
+  if (!fullContent && !newEntry) return ''
+  if (!fullContent) return String(newEntry)
+  if (!newEntry) return String(fullContent)
+
   var detailsMarker = '</details>'
   var detailsIndex = fullContent.indexOf(detailsMarker)
 
