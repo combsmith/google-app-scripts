@@ -225,6 +225,66 @@ describe('Gmail AI Classifier Audit System', () => {
         expect.stringContaining('COMMERCIAL_TOS_IN_LEGAL')
       )
     })
+
+    test('does not flag compliant non-canonical processed threads (retail promos, newsletters, surveys, TOS)', () => {
+      const promoThread = {
+        getId: () => 't-promo-noncanon',
+        getFirstMessageSubject: () => 'Flash Sale! 50% Off Everything Today',
+        getMessages: () => [{ getFrom: () => 'deals@retailer.example.com' }],
+        getLabels: () => [{ getName: () => 'Processed' }],
+      }
+
+      const newsletterThread = {
+        getId: () => 't-news-noncanon',
+        getFirstMessageSubject: () => 'Weekly Digest: Top Stories in Tech',
+        getMessages: () => [{ getFrom: () => 'digest@technews.example.com' }],
+        getLabels: () => [{ getName: () => 'Processed' }],
+      }
+
+      const surveyThread = {
+        getId: () => 't-survey-noncanon',
+        getFirstMessageSubject: () =>
+          'How did we do? Rate your recent experience',
+        getMessages: () => [{ getFrom: () => 'feedback@airline.example.com' }],
+        getLabels: () => [{ getName: () => 'Processed' }],
+      }
+
+      const tosThread = {
+        getId: () => 't-tos-noncanon',
+        getFirstMessageSubject: () =>
+          'Upcoming updates to our Terms of Service',
+        getMessages: () => [
+          { getFrom: () => 'notifications@cloudservice.example.com' },
+        ],
+        getLabels: () => [{ getName: () => 'Processed' }],
+      }
+
+      const categoryThread = {
+        getId: () => 't-category-noncanon',
+        getFirstMessageSubject: () => 'New connection request',
+        getMessages: () => [
+          { getFrom: () => 'invitations@social.example.com' },
+        ],
+        getLabels: () => [
+          { getName: () => 'Processed' },
+          { getName: () => 'Promotions' },
+        ],
+      }
+
+      const report = auditClassifications(
+        [
+          promoThread,
+          newsletterThread,
+          surveyThread,
+          tosThread,
+          categoryThread,
+        ],
+        config
+      )
+      expect(report.scannedCount).toBe(5)
+      expect(report.flaggedCount).toBe(0)
+      expect(report.findings).toHaveLength(0)
+    })
   })
 
   describe('formatAuditDigest', () => {

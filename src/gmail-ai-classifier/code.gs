@@ -1216,6 +1216,10 @@ function auditClassifications(threads, config) {
     /\b(order confirmation|your order|receipt|payment received|invoice|shipped)\b/i
   var TOS_KEYWORDS =
     /\b(terms of service|privacy policy|terms and conditions|user agreement|arbitration terms)\b/i
+  var SURVEY_KEYWORDS =
+    /\b(survey|feedback|net promoter|nps|rate your experience|how did we do|review us)\b/i
+  var POLITICAL_KEYWORDS =
+    /\b(campaign|pac|fundraiser|election|candidate|contribute now|donate to our campaign)\b/i
 
   var findings = []
 
@@ -1311,9 +1315,23 @@ function auditClassifications(threads, config) {
     })
 
     var flags = []
+    var fullText = (subject + ' ' + sender).toLowerCase()
+    var isReceiptOrOrder = ORDER_KEYWORDS.test(fullText)
+    var isNonCanonicalStream =
+      !isReceiptOrOrder &&
+      (rawLabels.some(function (l) {
+        return /promotions|social|forums|marketing|promo|deal|newsletter/i.test(
+          l
+        )
+      }) ||
+        PROMO_KEYWORDS.test(subject) ||
+        NEWSLETTER_KEYWORDS.test(subject) ||
+        TOS_KEYWORDS.test(subject) ||
+        SURVEY_KEYWORDS.test(subject) ||
+        POLITICAL_KEYWORDS.test(subject))
 
     // 1. Missing Domain
-    if (assignedCanonical.length === 0) {
+    if (assignedCanonical.length === 0 && !isNonCanonicalStream) {
       flags.push(
         'MISSING_CANONICAL_DOMAIN: Thread marked as processed has no canonical domain label.'
       )
@@ -1328,7 +1346,6 @@ function auditClassifications(threads, config) {
     }
 
     // 3. Heuristic Checks
-    var fullText = (subject + ' ' + sender).toLowerCase()
     if (ORDER_KEYWORDS.test(fullText)) {
       var hasFinanceOrHousehold = assignedCanonical.some(function (l) {
         return (
