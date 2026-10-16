@@ -1693,15 +1693,24 @@ function classifyWithGemini(sender, subject, snippet, config) {
         parts: [{ text: prompt }],
       },
     ],
+    generationConfig: { response_mime_type: 'application/json' },
   }
 
   // Cascading Gemini Model Matrix (Production GA models preferred)
-  var endpoints = [
+  var endpoints = []
+  if (config && config.modelEndpoint) {
+    endpoints.push(config.modelEndpoint)
+  }
+  var fallbackModels = [
     'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
     'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent',
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent',
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
   ]
+  for (var f = 0; f < fallbackModels.length; f++) {
+    if (endpoints.indexOf(fallbackModels[f]) === -1) {
+      endpoints.push(fallbackModels[f])
+    }
+  }
 
   for (var e = 0; e < endpoints.length; e++) {
     var url = endpoints[e] + '?key=' + config.geminiApiKey
