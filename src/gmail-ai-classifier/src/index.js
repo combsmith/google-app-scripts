@@ -1920,9 +1920,20 @@ function auditClassifications(threads, config) {
       rawLabels = thread.labels
     }
 
-    const assignedCanonical = rawLabels.filter(
-      (l) => canonicalDomains.includes(l) || /^0[1-7]_/.test(l)
-    )
+    const assignedCanonical = []
+    rawLabels.forEach((l) => {
+      if (!l || typeof l !== 'string') return
+      if (canonicalDomains.includes(l)) {
+        if (!assignedCanonical.includes(l)) assignedCanonical.push(l)
+        return
+      }
+      const match = l.match(/^(0[1-7]_[A-Za-z_]+)/)
+      if (match && canonicalDomains.includes(match[1])) {
+        if (!assignedCanonical.includes(match[1])) {
+          assignedCanonical.push(match[1])
+        }
+      }
+    })
 
     // Collect any canonical domains represented via sub-labels (e.g. "Finance/Banking" -> "02_Finance_Legal")
     const sublabelDomains = []
@@ -2064,7 +2075,13 @@ function auditClassifications(threads, config) {
     ) {
       const domain = assignedCanonical[0]
       const subLabel =
-        rawLabels.find((l) => l.includes('/') && !l.includes(domain)) || ''
+        rawLabels.find((l) => {
+          if (!l || typeof l !== 'string' || !l.includes('/')) return false
+          if (/^0[1-7]_/.test(l)) {
+            return l.startsWith(domain + '/')
+          }
+          return true
+        }) || ''
       const subfolderName = resolveTaxonomySubfolderName(domain, subLabel)
       const msgs = thread.getMessages() || []
       msgs.forEach((msg) => {

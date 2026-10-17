@@ -1001,6 +1001,38 @@ describe('Drive Attachment Persistence along Taxonomy Path', () => {
 
       expect(report.flaggedCount).toBe(0)
     })
+
+    test('correctly identifies folder when label is compound domain-prefixed (02_Finance_Legal/Purchases)', () => {
+      const mockDriveApp = createMockDriveApp()
+      const targetFolder = ensureDriveTaxonomyFolder(
+        '02_Finance_Legal',
+        'Purchases',
+        mockDriveApp
+      )
+      const file = targetFolder.createFile({
+        getName: () => 'Tagged_Receipt.pdf',
+        getBytes: () => Buffer.from('Receipt content', 'utf-8'),
+      })
+      file.setDescription('[AI_INDEXED] Tagged description')
+
+      const att = createMockAttachment({
+        name: 'Tagged_Receipt.pdf',
+        content: 'Receipt content',
+      })
+      const thread = {
+        getId: () => 'th-compound-1',
+        getFirstMessageSubject: () => 'Order Receipt',
+        sender: 'orders@vendor.com',
+        labels: ['02_Finance_Legal/Purchases'],
+        getMessages: () => [{ getAttachments: () => [att] }],
+      }
+
+      const report = auditClassifications([thread], {
+        driveApp: mockDriveApp,
+      })
+
+      expect(report.flaggedCount).toBe(0)
+    })
   })
 
   describe('auditAndBackfillCanonicalAttachments', () => {

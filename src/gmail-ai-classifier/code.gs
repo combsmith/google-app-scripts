@@ -1247,8 +1247,19 @@ function auditClassifications(threads, config) {
       rawLabels = thread.labels
     }
 
-    var assignedCanonical = rawLabels.filter(function (l) {
-      return canonicalDomains.indexOf(l) !== -1 || /^0[1-7]_/.test(l)
+    var assignedCanonical = []
+    rawLabels.forEach(function (l) {
+      if (!l || typeof l !== 'string') return
+      if (canonicalDomains.indexOf(l) !== -1) {
+        if (assignedCanonical.indexOf(l) === -1) assignedCanonical.push(l)
+        return
+      }
+      var match = l.match(/^(0[1-7]_[A-Za-z_]+)/)
+      if (match && canonicalDomains.indexOf(match[1]) !== -1) {
+        if (assignedCanonical.indexOf(match[1]) === -1) {
+          assignedCanonical.push(match[1])
+        }
+      }
     })
 
     // Collect any canonical domains represented via sub-labels (e.g. "Finance/Banking" -> "02_Finance_Legal")
@@ -1398,7 +1409,11 @@ function auditClassifications(threads, config) {
       var domain = assignedCanonical[0]
       var subLabel =
         rawLabels.find(function (l) {
-          return l.indexOf('/') !== -1 && l.indexOf(domain) === -1
+          if (!l || typeof l !== 'string' || l.indexOf('/') === -1) return false
+          if (/^0[1-7]_/.test(l)) {
+            return l.indexOf(domain + '/') === 0
+          }
+          return true
         }) || ''
       var subfolderName = resolveTaxonomySubfolderName(domain, subLabel)
       var msgs = thread.getMessages() || []

@@ -99,6 +99,23 @@ describe('Gmail AI Classifier Audit System', () => {
       )
     })
 
+    test('does not flag conflicting domains when thread carries both domain and domain-prefixed sub-label', () => {
+      const threadWithSublabel = {
+        getId: () => 't-same-domain',
+        getFirstMessageSubject: () => 'Monthly Statement',
+        getMessages: () => [{ getFrom: () => 'statements@mybank.example.com' }],
+        getLabels: () => [
+          { getName: () => 'Processed' },
+          { getName: () => '02_Finance_Legal' },
+          { getName: () => '02_Finance_Legal/Purchases' },
+        ],
+      }
+
+      const report = auditClassifications([threadWithSublabel], config)
+      expect(report.scannedCount).toBe(1)
+      expect(report.flaggedCount).toBe(0)
+    })
+
     test('flags purchase/receipt keywords when routed to non-finance domain', () => {
       const misroutedReceiptThread = {
         getId: () => 't4',
