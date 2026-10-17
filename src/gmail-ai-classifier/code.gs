@@ -123,6 +123,7 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
         thread,
         config
       )
+      var usedRemoteApi = false
       if (!classification) {
         var classifyFn =
           services.classifyFn ||
@@ -133,6 +134,7 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
             : null)
         if (classifyFn) {
           classification = classifyFn(sender, subject, snippet, config)
+          usedRemoteApi = true
         }
       }
       if (classification) {
@@ -293,18 +295,22 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
         }
 
         // Apply Single Global Processed Label
-        thread.addLabel(processedLabel)
+        if (processedLabel) {
+          thread.addLabel(processedLabel)
+        }
       } else {
         console.warn(
           '[processEmailsWithAiClassifier] Classification failed or returned null; preserving thread unprocessed for retry.'
         )
       }
 
-      var utilsService =
-        services.Utilities ||
-        (typeof Utilities !== 'undefined' ? Utilities : null)
-      if (utilsService && typeof utilsService.sleep === 'function') {
-        utilsService.sleep(2000)
+      if (usedRemoteApi) {
+        var utilsService =
+          services.Utilities ||
+          (typeof Utilities !== 'undefined' ? Utilities : null)
+        if (utilsService && typeof utilsService.sleep === 'function') {
+          utilsService.sleep(2000)
+        }
       }
     }
 

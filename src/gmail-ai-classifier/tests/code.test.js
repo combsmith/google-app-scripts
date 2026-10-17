@@ -2433,7 +2433,94 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
               GmailApp: mockGmail,
             })
           }).not.toThrow()
-          expect(mockLock.releaseLock).toHaveBeenCalled()
+        })
+
+        test('skips inter-thread rate-limit sleep when thread is classified deterministically', () => {
+          const mockLock = {
+            tryLock: jest.fn(() => true),
+            releaseLock: jest.fn(),
+          }
+          const mockLockService = {
+            getScriptLock: jest.fn(() => mockLock),
+          }
+          const mockThread = {
+            getId: () => 'th-det-1',
+            getMessages: () => [
+              {
+                getFrom: () => 'alerts@broodminder.com',
+                getSubject: () => 'BroodMinder Apiary Telemetry Alert',
+                getPlainBody: () => 'Hive temperature reading normal.',
+                getDate: () => new Date(),
+              },
+            ],
+            getLabels: () => [],
+            addLabel: jest.fn(),
+            moveToArchive: jest.fn(),
+            moveToTrash: jest.fn(),
+            markRead: jest.fn(),
+          }
+          const mockGmail = {
+            search: jest.fn(() => [mockThread]),
+            getUserLabelByName: jest.fn(() => ({ getName: () => 'Processed' })),
+          }
+          const mockSleep = jest.fn()
+
+          fn(config, {
+            LockService: mockLockService,
+            GmailApp: mockGmail,
+            Utilities: { sleep: mockSleep },
+          })
+
+          expect(mockSleep).not.toHaveBeenCalled()
+          expect(mockThread.addLabel).toHaveBeenCalled()
+        })
+
+        test('invokes inter-thread rate-limit sleep when remote API classification is performed', () => {
+          const mockLock = {
+            tryLock: jest.fn(() => true),
+            releaseLock: jest.fn(),
+          }
+          const mockLockService = {
+            getScriptLock: jest.fn(() => mockLock),
+          }
+          const mockThread = {
+            getId: () => 'th-remote-1',
+            getMessages: () => [
+              {
+                getFrom: () => 'random-contact@example.com',
+                getSubject: () => 'Custom Inquiry',
+                getPlainBody: () => 'Unrecognized email body text.',
+                getDate: () => new Date(),
+              },
+            ],
+            getLabels: () => [],
+            addLabel: jest.fn(),
+            moveToArchive: jest.fn(),
+            moveToTrash: jest.fn(),
+            markRead: jest.fn(),
+          }
+          const mockGmail = {
+            search: jest.fn(() => [mockThread]),
+            getUserLabelByName: jest.fn(() => ({ getName: () => 'Processed' })),
+          }
+          const mockSleep = jest.fn()
+          const mockClassifyFn = jest.fn(() => ({
+            canonicalDomain: '01_Household',
+            subLabel: 'Household/Property',
+            category: 'Updates',
+            action: 'keep',
+            confidence: 0.95,
+          }))
+
+          fn(config, {
+            LockService: mockLockService,
+            GmailApp: mockGmail,
+            Utilities: { sleep: mockSleep },
+            classifyFn: mockClassifyFn,
+          })
+
+          expect(mockClassifyFn).toHaveBeenCalled()
+          expect(mockSleep).toHaveBeenCalledWith(2000)
         })
 
         test('treats GitHub sync failures as non-blocking and preserves thread labeling', () => {

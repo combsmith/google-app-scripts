@@ -4402,6 +4402,7 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
         thread,
         config
       )
+      var usedRemoteApi = false
       if (!classification) {
         var classifyFn =
           services.classifyFn ||
@@ -4422,6 +4423,7 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
               : null)
         if (classifyFn) {
           classification = classifyFn(sender, subject, snippet, config)
+          usedRemoteApi = true
         }
       }
       if (classification) {
@@ -4568,11 +4570,13 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
         )
       }
 
-      var utilsService =
-        services.Utilities ||
-        (typeof Utilities !== 'undefined' ? Utilities : null)
-      if (utilsService && typeof utilsService.sleep === 'function') {
-        utilsService.sleep(2000)
+      if (usedRemoteApi) {
+        var utilsService =
+          services.Utilities ||
+          (typeof Utilities !== 'undefined' ? Utilities : null)
+        if (utilsService && typeof utilsService.sleep === 'function') {
+          utilsService.sleep(2000)
+        }
       }
     }
 
