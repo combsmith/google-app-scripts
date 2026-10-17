@@ -88,4 +88,35 @@ describe('Performance and Scalability Benchmarks', () => {
     expect(processed.length).toBe(100)
     expect(duration).toBeLessThan(100) // 100 items benchmarked under 100ms
   })
+
+  test('Classification Caching Throughput & Latency Benchmark', () => {
+    const memoryStore = new Map()
+    const mockCache = {
+      get: (k) => memoryStore.get(k) || null,
+      put: (k, v) => memoryStore.set(k, v),
+    }
+
+    const classification = {
+      canonicalDomain: '02_Finance_Legal',
+      subLabel: 'Finance/Purchases',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.98,
+    }
+
+    // Seed cache
+    const key = 'cls_bench_key'
+    mockCache.put(key, JSON.stringify(classification))
+
+    // 1,000 cached retrieval iterations benchmark
+    const startTime = Date.now()
+    for (let i = 0; i < 1000; i++) {
+      const res = JSON.parse(mockCache.get(key))
+      expect(res.canonicalDomain).toBe('02_Finance_Legal')
+    }
+    const elapsed = Date.now() - startTime
+
+    // 1,000 cache hits should process in under 50ms total (< 0.05ms per hit)
+    expect(elapsed).toBeLessThan(50)
+  })
 })

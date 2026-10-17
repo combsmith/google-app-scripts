@@ -126,7 +126,11 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
       if (!classification) {
         var classifyFn =
           services.classifyFn ||
-          (typeof classifyWithGemini === 'function' ? classifyWithGemini : null)
+          (typeof classifyWithGemini === 'function'
+            ? function (s, sub, sn, cfg) {
+                return classifyWithGemini(s, sub, sn, cfg, services)
+              }
+            : null)
         if (classifyFn) {
           classification = classifyFn(sender, subject, snippet, config)
         }
@@ -1683,7 +1687,89 @@ function buildOntologicalPrompt(config, sender, subject, snippet) {
   return prompt
 }
 
-function classifyWithGemini(sender, subject, snippet, config) {
+function computeStringHash(str, services) {
+  if (!str) return ''
+  try {
+    if (
+      services &&
+      services.Utilities &&
+      typeof services.Utilities.computeDigest === 'function'
+    ) {
+      var digest = services.Utilities.computeDigest(
+        services.Utilities.DigestAlgorithm.MD5,
+        str
+      )
+      return digest
+        .map(function (b) {
+          return ('0' + (b & 0xff).toString(16)).slice(-2)
+        })
+        .join('')
+    }
+    if (
+      typeof Utilities !== 'undefined' &&
+      Utilities &&
+      typeof Utilities.computeDigest === 'function'
+    ) {
+      var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, str)
+      return digest
+        .map(function (b) {
+          return ('0' + (b & 0xff).toString(16)).slice(-2)
+        })
+        .join('')
+    }
+    if (typeof require !== 'undefined') {
+      var crypto = require('crypto')
+      return crypto.createHash('md5').update(str).digest('hex')
+    }
+  } catch (e) {
+    // Non-blocking fallback
+  }
+  var hash = 0
+  for (var i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i)
+    hash |= 0
+  }
+  return 'h_' + Math.abs(hash).toString(16)
+}
+
+function classifyWithGemini(sender, subject, snippet, config, services) {
+  var urlFetch =
+    (services && services.UrlFetchApp) ||
+    (typeof UrlFetchApp !== 'undefined' ? UrlFetchApp : null)
+  var sleepFn =
+    (services && services.sleepFn) ||
+    (services && services.Utilities && services.Utilities.sleep) ||
+    (typeof Utilities !== 'undefined' && Utilities && Utilities.sleep
+      ? Utilities.sleep
+      : function () {})
+  var cache =
+    (services && services.CacheService) ||
+    (typeof CacheService !== 'undefined' &&
+    CacheService &&
+    CacheService.getScriptCache
+      ? CacheService.getScriptCache()
+      : null)
+
+  // 1. Check classification cache
+  var cacheKey = null
+  if (cache) {
+    var rawKey = (sender || '') + '|' + (subject || '') + '|' + (snippet || '')
+    var hashed = computeStringHash(rawKey, services)
+    if (hashed) {
+      cacheKey = 'cls_' + hashed
+      try {
+        var cachedJson = cache.get(cacheKey)
+        if (cachedJson) {
+          var cachedResult = JSON.parse(cachedJson)
+          console.log('[classifyWithGemini] Cache hit for: ' + subject)
+          return cachedResult
+        }
+      } catch (cErr) {
+        // Cache read is non-blocking
+      }
+    }
+  }
+
   var prompt = buildOntologicalPrompt(config, sender, subject, snippet)
 
   var payload = {
@@ -1711,8 +1797,15 @@ function classifyWithGemini(sender, subject, snippet, config) {
     }
   }
 
+  if (!urlFetch) {
+    console.error('[classifyWithGemini] UrlFetchApp service is not available.')
+    return null
+  }
+
   for (var e = 0; e < endpoints.length; e++) {
-    var url = endpoints[e] + '?key=' + config.geminiApiKey
+    var separator = endpoints[e].indexOf('?') === -1 ? '?' : '&'
+    var url =
+      endpoints[e] + separator + 'key=' + (config && config.geminiApiKey)
     var options = {
       method: 'post',
       contentType: 'application/json',
@@ -1721,7 +1814,7 @@ function classifyWithGemini(sender, subject, snippet, config) {
     }
 
     try {
-      var response = UrlFetchApp.fetch(url, options)
+      var response = urlFetch.fetch(url, options)
       var statusCode = response.getResponseCode()
       var jsonText = response.getContentText()
 
@@ -1740,6 +1833,13 @@ function classifyWithGemini(sender, subject, snippet, config) {
             console.log(
               '[classifyWithGemini] Success using endpoint: ' + endpoints[e]
             )
+            if (cache && cacheKey) {
+              try {
+                cache.put(cacheKey, JSON.stringify(parsedObj), 21600)
+              } catch (cPutErr) {
+                // Cache write is non-blocking
+              }
+            }
             return parsedObj
           }
         }
@@ -1752,7 +1852,7 @@ function classifyWithGemini(sender, subject, snippet, config) {
             delayMs / 1000 +
             's before fallback...'
         )
-        Utilities.sleep(delayMs)
+        sleepFn(delayMs)
       } else {
         console.warn(
           '[classifyWithGemini] Endpoint ' +
@@ -1802,10 +1902,15 @@ function extractJsonSubstring(text) {
     try {
       return JSON.parse(rawJson)
     } catch (e) {
-      console.warn(
-        '[extractJsonSubstring] JSON parse error on raw substring:',
-        e.message
-      )
+      try {
+        var cleaned = rawJson.replace(/,\s*([\]}])/g, '$1')
+        return JSON.parse(cleaned)
+      } catch (e2) {
+        console.warn(
+          '[extractJsonSubstring] JSON parse error on raw substring:',
+          e2.message
+        )
+      }
     }
   }
   return null
@@ -1813,7 +1918,10 @@ function extractJsonSubstring(text) {
 
 function parseRetryDelayMs(response) {
   try {
-    var headers = response.getHeaders()
+    var headers =
+      (response && typeof response.getHeaders === 'function'
+        ? response.getHeaders()
+        : null) || {}
     var retryHeader = headers['Retry-After'] || headers['retry-after']
     if (retryHeader) {
       var seconds = parseInt(retryHeader, 10)
@@ -1822,16 +1930,21 @@ function parseRetryDelayMs(response) {
       }
     }
 
-    var jsonText = response.getContentText()
-    var resData = JSON.parse(jsonText)
-    if (resData.error && resData.error.details) {
-      for (var i = 0; i < resData.error.details.length; i++) {
-        var detail = resData.error.details[i]
-        if (detail.retryDelay) {
-          var secStr = detail.retryDelay.replace('s', '')
-          var sec = parseFloat(secStr)
-          if (!isNaN(sec) && sec > 0) {
-            return Math.min(Math.ceil(sec * 1000), 30000)
+    var jsonText =
+      (response && typeof response.getContentText === 'function'
+        ? response.getContentText()
+        : null) || ''
+    if (jsonText) {
+      var resData = JSON.parse(jsonText)
+      if (resData.error && resData.error.details) {
+        for (var i = 0; i < resData.error.details.length; i++) {
+          var detail = resData.error.details[i]
+          if (detail.retryDelay) {
+            var secStr = detail.retryDelay.replace('s', '')
+            var sec = parseFloat(secStr)
+            if (!isNaN(sec) && sec > 0) {
+              return Math.min(Math.ceil(sec * 1000), 30000)
+            }
           }
         }
       }
@@ -3672,7 +3785,11 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
     (typeof GmailApp !== 'undefined' ? GmailApp : null)
   var classifyFn =
     (services && services.classifyFn) ||
-    (typeof classifyWithGemini === 'function' ? classifyWithGemini : null)
+    (typeof classifyWithGemini === 'function'
+      ? function (s, sub, sn, cfg) {
+          return classifyWithGemini(s, sub, sn, cfg, services)
+        }
+      : null)
 
   if (!gmail) {
     throw new Error('GmailApp service is required for reclassifying threads.')
@@ -4124,5 +4241,9 @@ if (typeof module !== 'undefined' && module.exports) {
     formatAuditDigest: formatAuditDigest,
     setupDailyAuditTrigger: setupDailyAuditTrigger,
     setupFourHourAuditTrigger: setupFourHourAuditTrigger,
+    computeStringHash: computeStringHash,
+    extractJsonSubstring: extractJsonSubstring,
+    parseRetryDelayMs: parseRetryDelayMs,
+    listAvailableGeminiModels: listAvailableGeminiModels,
   }
 }

@@ -264,6 +264,311 @@ function classifyEmailWithGemini(
   }
 }
 
+function computeStringHash(str, services) {
+  if (!str) return ''
+  try {
+    if (
+      services &&
+      services.Utilities &&
+      typeof services.Utilities.computeDigest === 'function'
+    ) {
+      var digest = services.Utilities.computeDigest(
+        services.Utilities.DigestAlgorithm.MD5,
+        str
+      )
+      return digest
+        .map(function (b) {
+          return ('0' + (b & 0xff).toString(16)).slice(-2)
+        })
+        .join('')
+    }
+    if (
+      typeof Utilities !== 'undefined' &&
+      Utilities &&
+      typeof Utilities.computeDigest === 'function'
+    ) {
+      var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, str)
+      return digest
+        .map(function (b) {
+          return ('0' + (b & 0xff).toString(16)).slice(-2)
+        })
+        .join('')
+    }
+    if (typeof require !== 'undefined') {
+      var crypto = require('crypto')
+      return crypto.createHash('md5').update(str).digest('hex')
+    }
+  } catch (e) {
+    // Non-blocking fallback
+  }
+  var hash = 0
+  for (var i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i)
+    hash |= 0
+  }
+  return 'h_' + Math.abs(hash).toString(16)
+}
+
+function classifyWithGemini(sender, subject, snippet, config, services) {
+  var urlFetch =
+    (services && services.UrlFetchApp) ||
+    (typeof UrlFetchApp !== 'undefined' ? UrlFetchApp : null)
+  var sleepFn =
+    (services && services.sleepFn) ||
+    (services && services.Utilities && services.Utilities.sleep) ||
+    (typeof Utilities !== 'undefined' && Utilities && Utilities.sleep
+      ? Utilities.sleep
+      : function () {})
+  var cache =
+    (services && services.CacheService) ||
+    (typeof CacheService !== 'undefined' &&
+    CacheService &&
+    CacheService.getScriptCache
+      ? CacheService.getScriptCache()
+      : null)
+
+  // 1. Check classification cache
+  var cacheKey = null
+  if (cache) {
+    var rawKey = (sender || '') + '|' + (subject || '') + '|' + (snippet || '')
+    var hashed = computeStringHash(rawKey, services)
+    if (hashed) {
+      cacheKey = 'cls_' + hashed
+      try {
+        var cachedJson = cache.get(cacheKey)
+        if (cachedJson) {
+          var cachedResult = JSON.parse(cachedJson)
+          console.log('[classifyWithGemini] Cache hit for: ' + subject)
+          return cachedResult
+        }
+      } catch (cErr) {
+        // Cache read is non-blocking
+      }
+    }
+  }
+
+  var prompt = buildOntologicalPrompt(config, sender, subject, snippet)
+
+  var payload = {
+    contents: [
+      {
+        parts: [{ text: prompt }],
+      },
+    ],
+    generationConfig: { response_mime_type: 'application/json' },
+  }
+
+  // Cascading Gemini Model Matrix (Production GA models preferred)
+  var endpoints = []
+  if (config && config.modelEndpoint) {
+    endpoints.push(config.modelEndpoint)
+  }
+  var fallbackModels = [
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+  ]
+  for (var f = 0; f < fallbackModels.length; f++) {
+    if (endpoints.indexOf(fallbackModels[f]) === -1) {
+      endpoints.push(fallbackModels[f])
+    }
+  }
+
+  if (!urlFetch) {
+    console.error('[classifyWithGemini] UrlFetchApp service is not available.')
+    return null
+  }
+
+  for (var e = 0; e < endpoints.length; e++) {
+    var separator = endpoints[e].indexOf('?') === -1 ? '?' : '&'
+    var url =
+      endpoints[e] + separator + 'key=' + (config && config.geminiApiKey)
+    var options = {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true,
+    }
+
+    try {
+      var response = urlFetch.fetch(url, options)
+      var statusCode = response.getResponseCode()
+      var jsonText = response.getContentText()
+
+      if (statusCode === 200) {
+        var resData = JSON.parse(jsonText)
+        if (
+          resData.candidates &&
+          resData.candidates[0] &&
+          resData.candidates[0].content &&
+          resData.candidates[0].content.parts &&
+          resData.candidates[0].content.parts[0]
+        ) {
+          var textOutput = resData.candidates[0].content.parts[0].text
+          var parsedObj = extractJsonSubstring(textOutput)
+          if (parsedObj) {
+            console.log(
+              '[classifyWithGemini] Success using endpoint: ' + endpoints[e]
+            )
+            if (cache && cacheKey) {
+              try {
+                cache.put(cacheKey, JSON.stringify(parsedObj), 21600)
+              } catch (cPutErr) {
+                // Cache write is non-blocking
+              }
+            }
+            return parsedObj
+          }
+        }
+      } else if (statusCode === 429) {
+        var delayMs = parseRetryDelayMs(response)
+        console.warn(
+          '[classifyWithGemini] Endpoint ' +
+            endpoints[e] +
+            ' HTTP 429 Rate Limit. Honoring Retry-After / retryDelay: sleeping ' +
+            delayMs / 1000 +
+            's before fallback...'
+        )
+        sleepFn(delayMs)
+      } else {
+        console.warn(
+          '[classifyWithGemini] Endpoint ' +
+            endpoints[e] +
+            ' HTTP ' +
+            statusCode +
+            ': ' +
+            jsonText
+        )
+      }
+    } catch (err) {
+      console.warn(
+        '[classifyWithGemini] Exception on endpoint ' +
+          endpoints[e] +
+          ': ' +
+          err.message
+      )
+      if (
+        err.message &&
+        err.message.indexOf('Service invoked too many times') !== -1
+      ) {
+        console.error(
+          '[classifyWithGemini] UrlFetchApp daily quota exhausted. Halting remote API calls.'
+        )
+        break
+      }
+    }
+  }
+
+  console.error(
+    '[classifyWithGemini] All model endpoints failed or rate-limited.'
+  )
+  return null
+}
+
+function extractJsonSubstring(text) {
+  if (!text) return null
+  text = text
+    .replace(/```json/gi, '')
+    .replace(/```/gi, '')
+    .trim()
+
+  var start = text.indexOf('{')
+  var end = text.lastIndexOf('}')
+  if (start !== -1 && end !== -1 && end > start) {
+    var rawJson = text.substring(start, end + 1)
+    try {
+      return JSON.parse(rawJson)
+    } catch (e) {
+      try {
+        var cleaned = rawJson.replace(/,\s*([\]}])/g, '$1')
+        return JSON.parse(cleaned)
+      } catch (e2) {
+        console.warn(
+          '[extractJsonSubstring] JSON parse error on raw substring:',
+          e2.message
+        )
+      }
+    }
+  }
+  return null
+}
+
+function parseRetryDelayMs(response) {
+  try {
+    var headers =
+      (response && typeof response.getHeaders === 'function'
+        ? response.getHeaders()
+        : null) || {}
+    var retryHeader = headers['Retry-After'] || headers['retry-after']
+    if (retryHeader) {
+      var seconds = parseInt(retryHeader, 10)
+      if (!isNaN(seconds) && seconds > 0) {
+        return Math.min(seconds * 1000, 30000)
+      }
+    }
+
+    var jsonText =
+      (response && typeof response.getContentText === 'function'
+        ? response.getContentText()
+        : null) || ''
+    if (jsonText) {
+      var resData = JSON.parse(jsonText)
+      if (resData.error && resData.error.details) {
+        for (var i = 0; i < resData.error.details.length; i++) {
+          var detail = resData.error.details[i]
+          if (detail.retryDelay) {
+            var secStr = detail.retryDelay.replace('s', '')
+            var sec = parseFloat(secStr)
+            if (!isNaN(sec) && sec > 0) {
+              return Math.min(Math.ceil(sec * 1000), 30000)
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[parseRetryDelayMs] Failed to parse retry delay:', e.message)
+  }
+  return 5000
+}
+
+function listAvailableGeminiModels(config, services) {
+  var urlFetch =
+    (services && services.UrlFetchApp) ||
+    (typeof UrlFetchApp !== 'undefined' ? UrlFetchApp : null)
+  if (!urlFetch) return []
+  var url =
+    'https://generativelanguage.googleapis.com/v1beta/models?key=' +
+    (config && config.geminiApiKey)
+  try {
+    var response = urlFetch.fetch(url, { muteHttpExceptions: true })
+    if (response.getResponseCode() === 200) {
+      var data = JSON.parse(response.getContentText())
+      var modelNames = (data.models || []).map(function (m) {
+        return m.name
+      })
+      console.log(
+        '[listAvailableGeminiModels] Available models for key:',
+        JSON.stringify(modelNames)
+      )
+      return modelNames
+    } else {
+      console.warn(
+        '[listAvailableGeminiModels] HTTP ' +
+          response.getResponseCode() +
+          ': ' +
+          response.getContentText()
+      )
+    }
+  } catch (e) {
+    console.warn(
+      '[listAvailableGeminiModels] Error querying models:',
+      e.message
+    )
+  }
+  return []
+}
+
 /**
  * Ensures a Gmail user label exists, creating it if necessary.
  *
@@ -3362,9 +3667,21 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
     (typeof GmailApp !== 'undefined' ? GmailApp : null)
   var classifyFn =
     (services && services.classifyFn) ||
-    (typeof classifyEmailWithGemini === 'function'
-      ? classifyEmailWithGemini
-      : null)
+    (typeof classifyWithGemini === 'function'
+      ? function (s, sub, sn, cfg) {
+          return classifyWithGemini(s, sub, sn, cfg, services)
+        }
+      : typeof classifyEmailWithGemini === 'function'
+        ? function (s, sub, sn, cfg) {
+            return classifyEmailWithGemini(
+              cfg,
+              s,
+              sub,
+              sn,
+              services && services.UrlFetchApp
+            )
+          }
+        : null)
 
   if (!gmail) {
     throw new Error('GmailApp service is required for reclassifying threads.')
@@ -4071,17 +4388,21 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
       if (!classification) {
         var classifyFn =
           services.classifyFn ||
-          (typeof classifyEmailWithGemini === 'function'
+          (typeof classifyWithGemini === 'function'
             ? function (s, sub, sn, cfg) {
-                return classifyEmailWithGemini(
-                  cfg,
-                  s,
-                  sub,
-                  sn,
-                  services.UrlFetchApp
-                )
+                return classifyWithGemini(s, sub, sn, cfg, services)
               }
-            : null)
+            : typeof classifyEmailWithGemini === 'function'
+              ? function (s, sub, sn, cfg) {
+                  return classifyEmailWithGemini(
+                    cfg,
+                    s,
+                    sub,
+                    sn,
+                    services.UrlFetchApp
+                  )
+                }
+              : null)
         if (classifyFn) {
           classification = classifyFn(sender, subject, snippet, config)
         }
@@ -4301,4 +4622,9 @@ module.exports = {
   deterministicRuleClassify_,
   enrichSnippetWithAttachments_,
   getFileHash,
+  classifyWithGemini,
+  extractJsonSubstring,
+  parseRetryDelayMs,
+  computeStringHash,
+  listAvailableGeminiModels,
 }

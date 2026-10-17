@@ -1046,6 +1046,175 @@ describe('Ontological Knowledge Graph and Triage Matrix Prompt Architecture', ()
     })
   })
 
+  test('classifyWithGemini returns cached classification immediately on cache hit', () => {
+    const cachedObj = {
+      canonicalDomain: '01_Household',
+      subLabel: 'Household/Property',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.99,
+      title: 'Plumbing Receipt',
+      summary: 'Water heater repair receipt.',
+    }
+    const mockCache = {
+      get: jest.fn(() => JSON.stringify(cachedObj)),
+      put: jest.fn(),
+    }
+    const mockFetch = jest.fn()
+
+    const result = codeGs.classifyWithGemini(
+      'contractor@plumbing.com',
+      'Invoice #1042',
+      'Water heater repaired.',
+      { geminiApiKey: 'test-key' },
+      { CacheService: mockCache, UrlFetchApp: { fetch: mockFetch } }
+    )
+
+    expect(result).toEqual(cachedObj)
+    expect(mockCache.get).toHaveBeenCalled()
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  test('classifyWithGemini stores result in CacheService with 21600s TTL on cache miss', () => {
+    const freshObj = {
+      canonicalDomain: '02_Finance_Legal',
+      subLabel: 'Finance/Banking',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.95,
+      title: 'Monthly Statement',
+      summary: 'Bank statement available.',
+    }
+    const mockCache = {
+      get: jest.fn(() => null),
+      put: jest.fn(),
+    }
+    const mockFetch = jest.fn(() => ({
+      getResponseCode: () => 200,
+      getContentText: () =>
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [{ text: JSON.stringify(freshObj) }],
+              },
+            },
+          ],
+        }),
+    }))
+
+    const result = codeGs.classifyWithGemini(
+      'alerts@bank.com',
+      'e-Statement Ready',
+      'Your monthly bank statement is now ready.',
+      { geminiApiKey: 'test-key' },
+      { CacheService: mockCache, UrlFetchApp: { fetch: mockFetch } }
+    )
+
+    expect(result).toEqual(freshObj)
+    expect(mockCache.get).toHaveBeenCalled()
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    expect(mockCache.put).toHaveBeenCalledWith(
+      expect.stringMatching(/^cls_[a-f0-9]+$/),
+      JSON.stringify(freshObj),
+      21600
+    )
+  })
+
+  test('classifyWithGemini cascades through fallback models on HTTP 429 and parses retry delay', () => {
+    let callCount = 0
+    const sleepMock = jest.fn()
+    const mockFetch = jest.fn(() => {
+      callCount++
+      if (callCount === 1) {
+        return {
+          getResponseCode: () => 429,
+          getHeaders: () => ({ 'Retry-After': '2' }),
+          getContentText: () =>
+            JSON.stringify({ error: { message: 'Quota exceeded' } }),
+        }
+      }
+      return {
+        getResponseCode: () => 200,
+        getContentText: () =>
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      text: '```json\n{"canonicalDomain": "05_Tech_Infrastructure", "subLabel": "Tech/Alerts", "category": "Updates", "action": "archive", "confidence": 0.92, "title": "Server Alert", "summary": "High CPU alert."}\n```',
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+      }
+    })
+
+    const result = codeGs.classifyWithGemini(
+      'alerts@cloud.com',
+      'CPU Warning',
+      'Server CPU at 95%',
+      {
+        modelEndpoint:
+          'https://generativelanguage.googleapis.com/v1beta/models/gemini-custom:generateContent',
+        geminiApiKey: 'test-key',
+      },
+      { UrlFetchApp: { fetch: mockFetch }, sleepFn: sleepMock }
+    )
+
+    expect(callCount).toBe(2)
+    expect(sleepMock).toHaveBeenCalledWith(2000)
+    expect(result.canonicalDomain).toBe('05_Tech_Infrastructure')
+  })
+
+  test('extractJsonSubstring parses JSON and rescues trailing commas before closing braces/brackets', () => {
+    const rawWithTrailingCommas =
+      '```json\n{\n  "canonicalDomain": "01_Household",\n  "subLabel": "Household/Property",\n  "items": [1, 2, ],\n}\n```'
+    const parsed = codeGs.extractJsonSubstring(rawWithTrailingCommas)
+    expect(parsed).toEqual({
+      canonicalDomain: '01_Household',
+      subLabel: 'Household/Property',
+      items: [1, 2],
+    })
+  })
+
+  test('parseRetryDelayMs parses Retry-After header and clamps between 1000ms and 30000ms', () => {
+    const mockResponse1 = {
+      getHeaders: () => ({ 'Retry-After': '12' }),
+      getContentText: () => '',
+    }
+    expect(codeGs.parseRetryDelayMs(mockResponse1)).toBe(12000)
+
+    const mockResponseMax = {
+      getHeaders: () => ({ 'Retry-After': '90' }),
+      getContentText: () => '',
+    }
+    expect(codeGs.parseRetryDelayMs(mockResponseMax)).toBe(30000)
+
+    const mockResponseDetail = {
+      getHeaders: () => ({}),
+      getContentText: () =>
+        JSON.stringify({
+          error: {
+            details: [{ retryDelay: '3.5s' }],
+          },
+        }),
+    }
+    expect(codeGs.parseRetryDelayMs(mockResponseDetail)).toBe(3500)
+  })
+
+  test('computeStringHash generates stable MD5 digest', () => {
+    const hash1 = codeGs.computeStringHash('test string')
+    const hash2 = codeGs.computeStringHash('test string')
+    const hash3 = codeGs.computeStringHash('different string')
+    expect(hash1).toBe(hash2)
+    expect(hash1).not.toBe(hash3)
+    expect(hash1).toMatch(/^[a-f0-9]{32}$/)
+  })
+
   test('getNotePathForDomain supports CUSTOM_NOTE_PATHS from PropertiesService', () => {
     expect(codeGs.getNotePathForDomain('04_Family_Health')).toBe(
       '04_Family_Health/index.md'
