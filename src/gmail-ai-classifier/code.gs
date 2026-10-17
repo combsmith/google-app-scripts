@@ -1212,6 +1212,8 @@ function auditClassifications(threads, config) {
     /\b(survey|feedback|net promoter|nps|rate your experience|how did we do|review us)\b/i
   var POLITICAL_KEYWORDS =
     /\b(campaign|pac|fundraiser|election|candidate|contribute now|donate to our campaign)\b/i
+  var NON_CANONICAL_SENDER_PATTERNS =
+    /@.*(substack|redditmail|nextdoor|facebookmail|instagram|twitter|x\.com|pinterest|quora)\.com\b|newsletters?@/i
 
   var findings = []
 
@@ -1317,21 +1319,32 @@ function auditClassifications(threads, config) {
       }
     })
 
+    var isInTrash = false
+    if (typeof thread.isInTrash === 'function') {
+      try {
+        isInTrash = thread.isInTrash()
+      } catch (tErr) {}
+    } else if (thread.isInTrash === true || thread.isTrash === true) {
+      isInTrash = true
+    }
+
     var flags = []
     var fullText = (subject + ' ' + sender).toLowerCase()
     var isReceiptOrOrder = ORDER_KEYWORDS.test(fullText)
     var isNonCanonicalStream =
-      !isReceiptOrOrder &&
-      (rawLabels.some(function (l) {
-        return /promotions|social|forums|marketing|promo|deal|newsletter/i.test(
-          l
-        )
-      }) ||
-        PROMO_KEYWORDS.test(subject) ||
-        NEWSLETTER_KEYWORDS.test(subject) ||
-        TOS_KEYWORDS.test(subject) ||
-        SURVEY_KEYWORDS.test(subject) ||
-        POLITICAL_KEYWORDS.test(subject))
+      isInTrash ||
+      (!isReceiptOrOrder &&
+        (rawLabels.some(function (l) {
+          return /promotions|social|forums|marketing|promo|deal|newsletter/i.test(
+            l
+          )
+        }) ||
+          NON_CANONICAL_SENDER_PATTERNS.test(sender) ||
+          PROMO_KEYWORDS.test(subject) ||
+          NEWSLETTER_KEYWORDS.test(subject) ||
+          TOS_KEYWORDS.test(subject) ||
+          SURVEY_KEYWORDS.test(subject) ||
+          POLITICAL_KEYWORDS.test(subject)))
 
     // 1. Missing Domain
     if (assignedCanonical.length === 0 && !isNonCanonicalStream) {
@@ -1810,7 +1823,7 @@ function classifyWithGemini(sender, subject, snippet, config, services) {
   var fallbackModels = [
     'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
     'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent',
   ]
   for (var f = 0; f < fallbackModels.length; f++) {
     if (endpoints.indexOf(fallbackModels[f]) === -1) {

@@ -302,6 +302,43 @@ describe('Gmail AI Classifier Audit System', () => {
       expect(report.flaggedCount).toBe(0)
       expect(report.findings).toHaveLength(0)
     })
+
+    test('does not flag trashed threads or non-canonical sender stream threads as missing domain', () => {
+      const trashedThread = {
+        getId: () => 't-trashed',
+        getFirstMessageSubject: () => 'Unwanted Cold Pitch',
+        getMessages: () => [
+          { getFrom: () => 'spammer@coldoutreach.example.com' },
+        ],
+        getLabels: () => [{ getName: () => 'Processed' }],
+        isInTrash: () => true,
+      }
+
+      const redditThread = {
+        getId: () => 't-reddit',
+        getFirstMessageSubject: () => 'Antigravity posted in r/google',
+        getMessages: () => [{ getFrom: () => 'noreply@redditmail.com' }],
+        getLabels: () => [{ getName: () => 'Processed' }],
+        isInTrash: () => false,
+      }
+
+      const substackThread = {
+        getId: () => 't-substack',
+        getFirstMessageSubject: () => 'Thoughts on Autumn',
+        getMessages: () => [
+          { getFrom: () => 'writer@newsletter.substack.com' },
+        ],
+        getLabels: () => [{ getName: () => 'Processed' }],
+      }
+
+      const report = auditClassifications(
+        [trashedThread, redditThread, substackThread],
+        config
+      )
+      expect(report.scannedCount).toBe(3)
+      expect(report.flaggedCount).toBe(0)
+      expect(report.findings).toHaveLength(0)
+    })
   })
 
   describe('formatAuditDigest', () => {
