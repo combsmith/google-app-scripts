@@ -199,6 +199,33 @@ describe('Drive Attachment Persistence along Taxonomy Path', () => {
       ).toBe('NAS_Backups')
     })
 
+    test('resolves ontology prompt sublabels (Family/Correspondence, Family/Legal, Tech/Cloud, Work/Employer)', () => {
+      expect(
+        resolveTaxonomySubfolderName(
+          '04_Family_Health',
+          'Family/Correspondence'
+        )
+      ).toBe('Family_General')
+      expect(
+        resolveTaxonomySubfolderName('04_Family_Health', 'Family/Legal')
+      ).toBe('Family_General')
+      expect(
+        resolveTaxonomySubfolderName('05_Tech_Infrastructure', 'Tech/Cloud')
+      ).toBe('NAS_Backups')
+      expect(
+        resolveTaxonomySubfolderName('05_Tech_Infrastructure', 'Tech/Security')
+      ).toBe('Hardware_Licenses')
+      expect(
+        resolveTaxonomySubfolderName('05_Tech_Infrastructure', 'Tech/Alerts')
+      ).toBe('NAS_Backups')
+      expect(
+        resolveTaxonomySubfolderName('06_Work_Career', 'Work/Employer')
+      ).toBe('Career_Interviews')
+      expect(
+        resolveTaxonomySubfolderName('02_Finance_Legal', 'Finance/Donations')
+      ).toBe('Taxes')
+    })
+
     test('sanitizes unknown sublabels cleanly', () => {
       expect(
         resolveTaxonomySubfolderName(

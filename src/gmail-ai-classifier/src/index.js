@@ -2095,6 +2095,7 @@ const SUBLABEL_TO_FOLDER_MAP = {
   'finance/purchases': 'Purchases',
   'finance/legal': 'Legal_Court',
   'finance/legal_court': 'Legal_Court',
+  'finance/donations': 'Taxes',
   'finance/charitable-donations': 'Taxes',
   'finance/estate-planning': 'Estate_Planning',
   'finance/estate_planning': 'Estate_Planning',
@@ -2111,6 +2112,9 @@ const SUBLABEL_TO_FOLDER_MAP = {
 
   // 04_Family_Health
   'family/general': 'Family_General',
+  'family/correspondence': 'Family_General',
+  'family/personal-correspondence': 'Family_General',
+  'family/legal': 'Family_General',
   'family/medical': 'Medical_Records',
   'family/medical-records': 'Medical_Records',
   'family/medical-student': 'Medical_Records',
@@ -2120,7 +2124,6 @@ const SUBLABEL_TO_FOLDER_MAP = {
   'family/school-toby': 'Students',
   'family/school-tide': 'Students',
   'family/parents': 'Family_General',
-  'family/personal-correspondence': 'Family_General',
   'family/kids/tide': 'Students',
   'family/kids/toby': 'Students',
   'family/kids/david': 'Students',
@@ -2130,11 +2133,15 @@ const SUBLABEL_TO_FOLDER_MAP = {
   'family/kids/school': 'Students',
   'family/kids/tide-health': 'Medical_Records',
   'family/kids/toby-health': 'Medical_Records',
-  'family/parents': 'Family_General',
+  'family/activities': 'Activities_Camps',
+  'family/camps': 'Activities_Camps',
   'family/sisters': 'Family_General',
 
   // 05_Tech_Infrastructure
   'tech/infrastructure': 'Hardware_Licenses',
+  'tech/cloud': 'NAS_Backups',
+  'tech/security': 'Hardware_Licenses',
+  'tech/alerts': 'NAS_Backups',
   'tech/alerts-monitoring': 'NAS_Backups',
   'tech/backups': 'NAS_Backups',
   'tech/hardware': 'Hardware_Licenses',
@@ -2144,6 +2151,7 @@ const SUBLABEL_TO_FOLDER_MAP = {
   // 06_Work_Career
   'work/general': 'Career_Interviews',
   'work/career': 'Career_Interviews',
+  'work/employer': 'Career_Interviews',
   'work/notes': 'Career_Interviews',
   'work/expenses': 'Expenses_Admin',
   'work/expenses-admin': 'Expenses_Admin',
@@ -2776,6 +2784,11 @@ function persistCanonicalAttachmentsToDrive(
   const helperFns = {
     getFileHash: services?.getFileHash || getFileHash,
   }
+  const subject =
+    classification?.title ||
+    (typeof thread.getFirstMessageSubject === 'function'
+      ? thread.getFirstMessageSubject()
+      : thread.subject || '')
 
   messages.forEach((msg) => {
     const attachments = getMessageAttachments_(msg)
@@ -2850,7 +2863,8 @@ function persistCanonicalAttachmentsToDrive(
               '\nThread-ID: ' +
               (typeof thread.getId === 'function'
                 ? thread.getId()
-                : thread.id || '')
+                : thread.id || '') +
+              (subject ? '\nEmail-Subject: ' + subject : '')
             file.setDescription(tagBlock)
           } catch {
             // Non-blocking metadata description tagging
