@@ -2654,6 +2654,87 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             Date.now.mockRestore()
           }
         })
+
+        test('disables remote API for remainder of batch after consecutive remote failures while allowing deterministic rules to succeed', () => {
+          const mockLock = {
+            tryLock: jest.fn(() => true),
+            releaseLock: jest.fn(),
+          }
+          const mockLockService = {
+            getScriptLock: jest.fn(() => mockLock),
+          }
+
+          const threadRemote1 = {
+            getId: () => 'th-remote-1',
+            getMessages: () => [
+              {
+                getFrom: () => 'unknown1@custom.com',
+                getSubject: () => 'Unrecognized Subject 1',
+                getPlainBody: () => 'Custom body 1',
+                getDate: () => new Date(),
+              },
+            ],
+            addLabel: jest.fn(),
+          }
+          const threadRemote2 = {
+            getId: () => 'th-remote-2',
+            getMessages: () => [
+              {
+                getFrom: () => 'unknown2@custom.com',
+                getSubject: () => 'Unrecognized Subject 2',
+                getPlainBody: () => 'Custom body 2',
+                getDate: () => new Date(),
+              },
+            ],
+            addLabel: jest.fn(),
+          }
+          const threadDeterministic = {
+            getId: () => 'th-det-3',
+            getMessages: () => [
+              {
+                getFrom: () => 'alerts@broodminder.com',
+                getSubject: () => 'BroodMinder Apiary Telemetry Alert',
+                getPlainBody: () => 'Hive temperature reading normal.',
+                getDate: () => new Date(),
+              },
+            ],
+            addLabel: jest.fn(),
+            moveToArchive: jest.fn(),
+          }
+          const threadRemote3 = {
+            getId: () => 'th-remote-3',
+            getMessages: () => [
+              {
+                getFrom: () => 'unknown3@custom.com',
+                getSubject: () => 'Unrecognized Subject 3',
+                getPlainBody: () => 'Custom body 3',
+                getDate: () => new Date(),
+              },
+            ],
+            addLabel: jest.fn(),
+          }
+
+          const mockGmail = {
+            search: jest.fn(() => [
+              threadRemote1,
+              threadRemote2,
+              threadDeterministic,
+              threadRemote3,
+            ]),
+            getUserLabelByName: jest.fn((name) => ({ getName: () => name })),
+          }
+          const mockClassifyFn = jest.fn(() => null)
+
+          fn(config, {
+            LockService: mockLockService,
+            GmailApp: mockGmail,
+            classifyFn: mockClassifyFn,
+          })
+
+          expect(mockClassifyFn).toHaveBeenCalledTimes(2)
+          expect(threadDeterministic.addLabel).toHaveBeenCalled()
+          expect(threadRemote3.addLabel).not.toHaveBeenCalled()
+        })
       })
     })
 

@@ -84,6 +84,8 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
     var processedLabel = ensureUserLabel(config.processedLabel, gmail)
 
     var startTime = Date.now()
+    var consecutiveRemoteFailures = 0
+    var remoteQuotaExhausted = false
 
     for (var i = 0; i < threads.length; i++) {
       if (Date.now() - startTime > 270000) {
@@ -124,7 +126,7 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
         config
       )
       var usedRemoteApi = false
-      if (!classification) {
+      if (!classification && !remoteQuotaExhausted) {
         var classifyFn =
           services.classifyFn ||
           (typeof classifyWithGemini === 'function'
@@ -135,6 +137,17 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
         if (classifyFn) {
           classification = classifyFn(sender, subject, snippet, config)
           usedRemoteApi = true
+          if (!classification) {
+            consecutiveRemoteFailures++
+            if (consecutiveRemoteFailures >= 2) {
+              console.warn(
+                '[processEmailsWithAiClassifier] Multiple consecutive remote API failures detected; disabling remote API for remainder of batch to preserve execution budget.'
+              )
+              remoteQuotaExhausted = true
+            }
+          } else {
+            consecutiveRemoteFailures = 0
+          }
         }
       }
       if (classification) {
