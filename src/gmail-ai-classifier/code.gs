@@ -1586,12 +1586,20 @@ function stopAllTriggers() {
   console.log('[stopAllTriggers] All script triggers removed.')
 }
 
-function listAvailableGeminiModels(config) {
+function listAvailableGeminiModels(config, services) {
+  var urlFetch =
+    (services && services.UrlFetchApp) ||
+    (typeof UrlFetchApp !== 'undefined' ? UrlFetchApp : null)
+  if (!urlFetch) return []
+  var cfg =
+    config ||
+    (typeof getAiClassifierConfig === 'function' ? getAiClassifierConfig() : {})
+  if (!cfg || !cfg.geminiApiKey) return []
   var url =
     'https://generativelanguage.googleapis.com/v1beta/models?key=' +
-    config.geminiApiKey
+    cfg.geminiApiKey
   try {
-    var response = UrlFetchApp.fetch(url, { muteHttpExceptions: true })
+    var response = urlFetch.fetch(url, { muteHttpExceptions: true })
     if (response.getResponseCode() === 200) {
       var data = JSON.parse(response.getContentText())
       var modelNames = (data.models || []).map(function (m) {

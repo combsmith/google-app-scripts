@@ -2908,6 +2908,86 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             expect(mockSendEmail).not.toHaveBeenCalled()
           })
         })
+
+        describe('listAvailableGeminiModels', () => {
+          const {
+            listAvailableGeminiModels: listCodeGs,
+          } = require('../code.gs')
+          const {
+            listAvailableGeminiModels: listIndexJs,
+          } = require('../src/index.js')
+
+          const implementations = [
+            { name: 'code.gs', fn: listCodeGs },
+            { name: 'src/index.js', fn: listIndexJs },
+          ]
+
+          implementations.forEach(({ name, fn }) => {
+            describe(name, () => {
+              test('returns empty array when UrlFetchApp or config/API key is missing', () => {
+                expect(fn(null, null)).toEqual([])
+                expect(fn({}, null)).toEqual([])
+                expect(fn({ geminiApiKey: '' }, { UrlFetchApp: {} })).toEqual(
+                  []
+                )
+              })
+
+              test('queries models API and returns list of model names', () => {
+                const mockFetch = jest.fn(() => ({
+                  getResponseCode: () => 200,
+                  getContentText: () =>
+                    JSON.stringify({
+                      models: [
+                        { name: 'models/gemini-2.0-flash' },
+                        { name: 'models/gemini-1.5-flash' },
+                        { name: 'models/gemini-1.5-pro' },
+                      ],
+                    }),
+                }))
+
+                const models = fn(
+                  { geminiApiKey: 'test-api-key' },
+                  { UrlFetchApp: { fetch: mockFetch } }
+                )
+
+                expect(mockFetch).toHaveBeenCalledWith(
+                  'https://generativelanguage.googleapis.com/v1beta/models?key=test-api-key',
+                  { muteHttpExceptions: true }
+                )
+                expect(models).toEqual([
+                  'models/gemini-2.0-flash',
+                  'models/gemini-1.5-flash',
+                  'models/gemini-1.5-pro',
+                ])
+              })
+
+              test('handles non-200 responses and exceptions gracefully', () => {
+                const mockFetchError = jest.fn(() => ({
+                  getResponseCode: () => 403,
+                  getContentText: () => JSON.stringify({ error: 'Forbidden' }),
+                }))
+
+                expect(
+                  fn(
+                    { geminiApiKey: 'test-api-key' },
+                    { UrlFetchApp: { fetch: mockFetchError } }
+                  )
+                ).toEqual([])
+
+                const mockFetchThrow = jest.fn(() => {
+                  throw new Error('Network error')
+                })
+
+                expect(
+                  fn(
+                    { geminiApiKey: 'test-api-key' },
+                    { UrlFetchApp: { fetch: mockFetchThrow } }
+                  )
+                ).toEqual([])
+              })
+            })
+          })
+        })
       })
     })
   })

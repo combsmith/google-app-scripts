@@ -537,9 +537,13 @@ function listAvailableGeminiModels(config, services) {
     (services && services.UrlFetchApp) ||
     (typeof UrlFetchApp !== 'undefined' ? UrlFetchApp : null)
   if (!urlFetch) return []
+  var cfg =
+    config ||
+    (typeof getAiClassifierConfig === 'function' ? getAiClassifierConfig() : {})
+  if (!cfg || !cfg.geminiApiKey) return []
   var url =
     'https://generativelanguage.googleapis.com/v1beta/models?key=' +
-    (config && config.geminiApiKey)
+    cfg.geminiApiKey
   try {
     var response = urlFetch.fetch(url, { muteHttpExceptions: true })
     if (response.getResponseCode() === 200) {
