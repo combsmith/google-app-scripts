@@ -1093,6 +1093,24 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       reasoning: 'GitHub Alert',
     }
   }
+  if (
+    sLower.indexOf('sonarcloud.io') !== -1 ||
+    sLower.indexOf('sentry.io') !== -1 ||
+    sLower.indexOf('vercel.com') !== -1
+  ) {
+    return {
+      canonicalDomain: '05_Tech_Infrastructure',
+      canonical_label: '05_Tech_Infrastructure',
+      subLabel: 'Tech/Alerts',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary:
+        'CI/CD code quality, error monitoring, or deployment alert routed to Tech/Alerts.',
+      reasoning: 'Developer Monitoring Alert',
+    }
+  }
 
   // IoT, Weather & Automation Alerts (IFTTT)
   if (
@@ -1199,13 +1217,16 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     sLower.indexOf('bankofamerica.com') !== -1 ||
     sLower.indexOf('spireenergy.com') !== -1 ||
     sLower.indexOf('spectrum') !== -1 ||
+    sLower.indexOf('alabamapower.com') !== -1 ||
+    sLower.indexOf('bwwb.org') !== -1 ||
     sLower.indexOf('message.att-mail.com') !== -1
   ) {
     if (
       subLower.indexOf('statement') !== -1 ||
       subLower.indexOf('autopay') !== -1 ||
       subLower.indexOf('payment processed') !== -1 ||
-      subLower.indexOf('bill is ready') !== -1
+      subLower.indexOf('bill is ready') !== -1 ||
+      subLower.indexOf('bill is available') !== -1
     ) {
       return {
         canonicalDomain: '02_Finance_Legal',

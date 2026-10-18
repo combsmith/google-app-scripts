@@ -2282,6 +2282,58 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(res.action).toBe('keep')
           expect(res.reasoning).toBe('Teacher 1:1 Shield')
         })
+
+        test('classifies developer CI/CD monitoring alerts (SonarCloud, Sentry, Vercel) into Tech/Alerts', () => {
+          const sonarRes = fn(
+            'notifications@sonarcloud.io',
+            'Quality Gate passed on project',
+            'Analysis report complete',
+            null,
+            {}
+          )
+          expect(sonarRes).not.toBeNull()
+          expect(sonarRes.canonicalDomain).toBe('05_Tech_Infrastructure')
+          expect(sonarRes.subLabel).toBe('Tech/Alerts')
+          expect(sonarRes.category).toBe('Updates')
+          expect(sonarRes.action).toBe('archive')
+
+          const vercelRes = fn(
+            'notifications@vercel.com',
+            'Deployment Succeeded',
+            'Preview ready',
+            null,
+            {}
+          )
+          expect(vercelRes).not.toBeNull()
+          expect(vercelRes.canonicalDomain).toBe('05_Tech_Infrastructure')
+          expect(vercelRes.subLabel).toBe('Tech/Alerts')
+        })
+
+        test('classifies utility bills (Alabama Power, BWWB) into Finance/Bills', () => {
+          const powerRes = fn(
+            'ebill@alabamapower.com',
+            'Your monthly electric bill is ready to view',
+            'Account ending in 1234',
+            null,
+            {}
+          )
+          expect(powerRes).not.toBeNull()
+          expect(powerRes.canonicalDomain).toBe('02_Finance_Legal')
+          expect(powerRes.subLabel).toBe('Finance/Bills')
+          expect(powerRes.category).toBe('Updates')
+          expect(powerRes.action).toBe('archive')
+
+          const waterRes = fn(
+            'ebilling@bwwb.org',
+            'Water service statement available',
+            'Your current statement',
+            null,
+            {}
+          )
+          expect(waterRes).not.toBeNull()
+          expect(waterRes.canonicalDomain).toBe('02_Finance_Legal')
+          expect(waterRes.subLabel).toBe('Finance/Bills')
+        })
       })
     })
   })
