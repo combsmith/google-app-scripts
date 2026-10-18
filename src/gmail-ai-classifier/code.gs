@@ -538,7 +538,8 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
   if (
     sLower.indexOf('sonarcloud.io') !== -1 ||
     sLower.indexOf('sentry.io') !== -1 ||
-    sLower.indexOf('vercel.com') !== -1
+    sLower.indexOf('vercel.com') !== -1 ||
+    sLower.indexOf('noreply-apps-scripts-notifications@google.com') !== -1
   ) {
     return {
       canonicalDomain: '05_Tech_Infrastructure',
@@ -554,10 +555,11 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     }
   }
 
-  // IoT, Weather & Automation Alerts (IFTTT)
+  // IoT, Weather & Automation Alerts (IFTTT, Vera/MiOS)
   if (
     sLower.indexOf('action@ifttt.com') !== -1 ||
-    sLower.indexOf('ifttt.com') !== -1
+    sLower.indexOf('ifttt.com') !== -1 ||
+    sLower.indexOf('notify.mios.com') !== -1
   ) {
     return {
       canonicalDomain: '01_Household',
@@ -685,14 +687,26 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     sLower.indexOf('spectrum') !== -1 ||
     sLower.indexOf('alabamapower.com') !== -1 ||
     sLower.indexOf('bwwb.org') !== -1 ||
-    sLower.indexOf('message.att-mail.com') !== -1
+    sLower.indexOf('message.att-mail.com') !== -1 ||
+    sLower.indexOf('citi.com') !== -1 ||
+    sLower.indexOf('citicards') !== -1 ||
+    sLower.indexOf('americanexpress.com') !== -1 ||
+    sLower.indexOf('apcocu.org') !== -1 ||
+    sLower.indexOf('rocketmortgage.com') !== -1 ||
+    sLower.indexOf('mycirclecard.target.com') !== -1
   ) {
     if (
       subLower.indexOf('statement') !== -1 ||
       subLower.indexOf('autopay') !== -1 ||
       subLower.indexOf('payment processed') !== -1 ||
+      subLower.indexOf('payment confirmation') !== -1 ||
+      subLower.indexOf('payment scheduled') !== -1 ||
+      subLower.indexOf('payment received') !== -1 ||
+      subLower.indexOf('scheduled payment') !== -1 ||
       subLower.indexOf('bill is ready') !== -1 ||
-      subLower.indexOf('bill is available') !== -1
+      subLower.indexOf('bill is available') !== -1 ||
+      subLower.indexOf('e-statement') !== -1 ||
+      subLower.indexOf('estatement') !== -1
     ) {
       return {
         canonicalDomain: '02_Finance_Legal',
@@ -705,6 +719,51 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
         summary: 'Routine billing statement, receipt, or AutoPay confirmation.',
         reasoning: 'Routine Billing',
       }
+    }
+  }
+
+  // Payment Processors & Retail Receipts (PayPal, Home Depot)
+  if (
+    sLower.indexOf('paypal.com') !== -1 &&
+    (subLower.indexOf('receipt') !== -1 ||
+      subLower.indexOf('payment') !== -1 ||
+      subLower.indexOf('transaction') !== -1 ||
+      subLower.indexOf('you sent') !== -1 ||
+      subLower.indexOf('you paid') !== -1 ||
+      subLower.indexOf('you received') !== -1 ||
+      subLower.indexOf('authorized') !== -1 ||
+      subLower.indexOf('usd') !== -1)
+  ) {
+    return {
+      canonicalDomain: '02_Finance_Legal',
+      canonical_label: '02_Finance_Legal',
+      subLabel: 'Finance/Purchases',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.98,
+      title: subject,
+      summary:
+        'Electronic payment transaction receipt or transfer confirmation.',
+      reasoning: 'Payment Receipt',
+    }
+  }
+  if (
+    sLower.indexOf('homedepot.com') !== -1 &&
+    (subLower.indexOf('order') !== -1 ||
+      subLower.indexOf('receipt') !== -1 ||
+      subLower.indexOf('picked up') !== -1 ||
+      subLower.indexOf('ready for pickup') !== -1)
+  ) {
+    return {
+      canonicalDomain: '02_Finance_Legal',
+      canonical_label: '02_Finance_Legal',
+      subLabel: 'Finance/Purchases',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.98,
+      title: subject,
+      summary: 'Home Depot store receipt or order pickup confirmation.',
+      reasoning: 'Retail Order / Receipt',
     }
   }
 

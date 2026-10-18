@@ -2372,6 +2372,112 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(uspsRes.canonicalDomain).toBe('02_Finance_Legal')
           expect(uspsRes.subLabel).toBe('Finance/Purchases')
         })
+
+        test('classifies extended banking statements and payment confirmations (Citi, Amex, APCO CU, Rocket Mortgage)', () => {
+          const citiRes = fn(
+            'citicards@info.citi.com',
+            'Your Costco Anywhere Visa statement is available',
+            'Your monthly statement is ready to view',
+            null,
+            {}
+          )
+          expect(citiRes).not.toBeNull()
+          expect(citiRes.canonicalDomain).toBe('02_Finance_Legal')
+          expect(citiRes.subLabel).toBe('Finance/Bills')
+          expect(citiRes.category).toBe('Updates')
+          expect(citiRes.action).toBe('archive')
+
+          const amexRes = fn(
+            'AmericanExpress@welcome.americanexpress.com',
+            'Payment Confirmation',
+            'Your payment scheduled for today was received',
+            null,
+            {}
+          )
+          expect(amexRes).not.toBeNull()
+          expect(amexRes.canonicalDomain).toBe('02_Finance_Legal')
+          expect(amexRes.subLabel).toBe('Finance/Bills')
+
+          const apcoRes = fn(
+            'noreplies@apcocu.org',
+            'Credit Union e-Statement Notification',
+            'Your e-statement is ready',
+            null,
+            {}
+          )
+          expect(apcoRes).not.toBeNull()
+          expect(apcoRes.canonicalDomain).toBe('02_Finance_Legal')
+          expect(apcoRes.subLabel).toBe('Finance/Bills')
+
+          const mortgageRes = fn(
+            'RocketMortgage@tc.rocketmortgage.com',
+            'Monthly Mortgage Statement Available',
+            'Your statement is ready',
+            null,
+            {}
+          )
+          expect(mortgageRes).not.toBeNull()
+          expect(mortgageRes.canonicalDomain).toBe('02_Finance_Legal')
+          expect(mortgageRes.subLabel).toBe('Finance/Bills')
+        })
+
+        test('classifies payment receipts and retail orders (PayPal, Home Depot) into Finance/Purchases', () => {
+          const paypalRes = fn(
+            'service@paypal.com',
+            'Receipt for your PayPal payment',
+            'You sent a payment of $25.00 USD',
+            null,
+            {}
+          )
+          expect(paypalRes).not.toBeNull()
+          expect(paypalRes.canonicalDomain).toBe('02_Finance_Legal')
+          expect(paypalRes.subLabel).toBe('Finance/Purchases')
+          expect(paypalRes.category).toBe('Updates')
+          expect(paypalRes.action).toBe('archive')
+          expect(paypalRes.reasoning).toBe('Payment Receipt')
+
+          const hdRes = fn(
+            'HomeDepotPro@order.homedepot.com',
+            'Your Home Depot Order Confirmation',
+            'Your order has been received and is being processed',
+            null,
+            {}
+          )
+          expect(hdRes).not.toBeNull()
+          expect(hdRes.canonicalDomain).toBe('02_Finance_Legal')
+          expect(hdRes.subLabel).toBe('Finance/Purchases')
+          expect(hdRes.category).toBe('Updates')
+          expect(hdRes.action).toBe('archive')
+          expect(hdRes.reasoning).toBe('Retail Order / Receipt')
+        })
+
+        test('classifies Vera/MiOS alerts into Household/Property and Apps Script alerts into Tech/Alerts', () => {
+          const veraRes = fn(
+            'noreply3@notify.mios.com',
+            'Vera Home Automation: Garage Door Opened',
+            'Sensor triggered at front garage',
+            null,
+            {}
+          )
+          expect(veraRes).not.toBeNull()
+          expect(veraRes.canonicalDomain).toBe('01_Household')
+          expect(veraRes.subLabel).toBe('Household/Property')
+          expect(veraRes.category).toBe('Updates')
+          expect(veraRes.action).toBe('archive')
+
+          const appsScriptRes = fn(
+            'noreply-apps-scripts-notifications@google.com',
+            'Apps Script: Authorization Notification',
+            'Summary of failures for Google Apps Script',
+            null,
+            {}
+          )
+          expect(appsScriptRes).not.toBeNull()
+          expect(appsScriptRes.canonicalDomain).toBe('05_Tech_Infrastructure')
+          expect(appsScriptRes.subLabel).toBe('Tech/Alerts')
+          expect(appsScriptRes.category).toBe('Updates')
+          expect(appsScriptRes.action).toBe('archive')
+        })
       })
     })
   })
