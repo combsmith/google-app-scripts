@@ -1190,6 +1190,30 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     }
   }
   if (
+    (sLower.indexOf('ups.com') !== -1 ||
+      sLower.indexOf('fedex.com') !== -1 ||
+      sLower.indexOf('usps.com') !== -1 ||
+      sLower.indexOf('usps.gov') !== -1) &&
+    (subLower.indexOf('delivered') !== -1 ||
+      subLower.indexOf('out for delivery') !== -1 ||
+      subLower.indexOf('tracking') !== -1 ||
+      subLower.indexOf('scheduled delivery') !== -1 ||
+      subLower.indexOf('package') !== -1 ||
+      subLower.indexOf('shipment') !== -1)
+  ) {
+    return {
+      canonicalDomain: '02_Finance_Legal',
+      canonical_label: '02_Finance_Legal',
+      subLabel: 'Finance/Purchases',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.98,
+      title: subject,
+      summary: 'Carrier parcel shipment or package delivery notification.',
+      reasoning: 'Carrier Tracking',
+    }
+  }
+  if (
     sLower.indexOf('amazon.com') !== -1 &&
     (subLower.indexOf('ordered:') !== -1 ||
       subLower.indexOf('shipped:') !== -1 ||

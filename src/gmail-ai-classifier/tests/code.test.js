@@ -2334,6 +2334,44 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(waterRes.canonicalDomain).toBe('02_Finance_Legal')
           expect(waterRes.subLabel).toBe('Finance/Bills')
         })
+
+        test('classifies carrier parcel shipments (UPS, FedEx, USPS) into Finance/Purchases', () => {
+          const upsRes = fn(
+            'pkginfo@ups.com',
+            'UPS Update: Package Scheduled Delivery',
+            'Tracking number 1Z9999999999999999',
+            null,
+            {}
+          )
+          expect(upsRes).not.toBeNull()
+          expect(upsRes.canonicalDomain).toBe('02_Finance_Legal')
+          expect(upsRes.subLabel).toBe('Finance/Purchases')
+          expect(upsRes.category).toBe('Updates')
+          expect(upsRes.action).toBe('archive')
+          expect(upsRes.reasoning).toBe('Carrier Tracking')
+
+          const fedexRes = fn(
+            'TrackingUpdates@fedex.com',
+            'FedEx Shipment Delivered',
+            'Your shipment was delivered to your front door',
+            null,
+            {}
+          )
+          expect(fedexRes).not.toBeNull()
+          expect(fedexRes.canonicalDomain).toBe('02_Finance_Legal')
+          expect(fedexRes.subLabel).toBe('Finance/Purchases')
+
+          const uspsRes = fn(
+            'auto-reply@usps.com',
+            'USPS Tracking: Package Out for Delivery',
+            'Your item is out for delivery today',
+            null,
+            {}
+          )
+          expect(uspsRes).not.toBeNull()
+          expect(uspsRes.canonicalDomain).toBe('02_Finance_Legal')
+          expect(uspsRes.subLabel).toBe('Finance/Purchases')
+        })
       })
     })
   })
