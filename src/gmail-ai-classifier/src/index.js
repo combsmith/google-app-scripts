@@ -3089,17 +3089,20 @@ function isDuplicateAttachment(existingFiles, newFileBlob, helperFns) {
   const hashFn = helperFns?.getFileHash || getFileHash
   const newFileBytes = extractBlobBytes_(newFileBlob)
   const newFileLength = newFileBytes.length
-  let newFileHash = ''
-  try {
-    newFileHash = hashFn(newFileBlob)
-  } catch {
-    return false
-  }
+  let newFileHash = null
 
   while (existingFiles.hasNext()) {
     const existingFile = existingFiles.next()
     if (extractFileSize_(existingFile) !== newFileLength) {
       continue
+    }
+
+    if (newFileHash === null) {
+      try {
+        newFileHash = hashFn(newFileBlob)
+      } catch {
+        return false
+      }
     }
 
     const existingBlob =

@@ -3201,11 +3201,22 @@ function ensureDriveTaxonomyFolder(canonicalDomain, subfolderName, driveApp) {
 }
 
 function extractBlobBytes_(blob) {
-  if (blob && typeof blob.getBytes === 'function') {
-    return blob.getBytes()
-  }
-  if (blob && blob.bytes) {
-    return blob.bytes
+  if (!blob) return []
+  try {
+    if (typeof blob.getBytes === 'function') {
+      return blob.getBytes()
+    }
+    if (blob && blob.bytes) {
+      return blob.bytes
+    }
+    if (
+      Array.isArray(blob) ||
+      (typeof Buffer !== 'undefined' && Buffer.isBuffer(blob))
+    ) {
+      return blob
+    }
+  } catch (e) {
+    return []
   }
   return []
 }
@@ -3225,18 +3236,30 @@ function extractFileSize_(file) {
  * Checks if an exact duplicate file already exists in target folder (size match + MD5 hash).
  */
 function isDuplicateAttachment(existingFiles, newFileBlob, helperFns) {
-  if (!existingFiles || typeof existingFiles.hasNext !== 'function') {
+  if (
+    !existingFiles ||
+    typeof existingFiles.hasNext !== 'function' ||
+    !newFileBlob
+  ) {
     return false
   }
   var hashFn = (helperFns && helperFns.getFileHash) || getFileHash
   var newFileBytes = extractBlobBytes_(newFileBlob)
   var newFileLength = newFileBytes.length
-  var newFileHash = hashFn(newFileBlob)
+  var newFileHash = null
 
   while (existingFiles.hasNext()) {
     var existingFile = existingFiles.next()
     if (extractFileSize_(existingFile) !== newFileLength) {
       continue
+    }
+
+    if (newFileHash === null) {
+      try {
+        newFileHash = hashFn(newFileBlob)
+      } catch (e) {
+        return false
+      }
     }
 
     var existingBlob =
