@@ -922,7 +922,11 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     try {
       var msgs = thread.getMessages() || []
       for (var m = 0; m < msgs.length; m++) {
-        var fromA = (msgs[m].getFrom() || '').toLowerCase()
+        var fromA = (
+          msgs[m] && typeof msgs[m].getFrom === 'function'
+            ? msgs[m].getFrom()
+            : (msgs[m] && msgs[m].from) || ''
+        ).toLowerCase()
         if (fromA.indexOf(userEmail) !== -1) {
           return {
             canonicalDomain: null,
@@ -1415,19 +1419,30 @@ function processThreadBatch(threads, config, services) {
   const results = []
 
   threads.forEach(function (thread) {
-    const messages = thread.getMessages()
+    const threadId =
+      typeof thread.getId === 'function'
+        ? thread.getId()
+        : thread.id || 'unknown'
+    const messages =
+      typeof thread.getMessages === 'function' ? thread.getMessages() : []
     if (!messages || messages.length === 0) {
-      results.push({ threadId: thread.getId(), status: 'empty' })
+      results.push({ threadId: threadId, status: 'empty' })
       return
     }
 
     const latestMsg = messages[0]
-    const sender = latestMsg.getFrom()
-    const subject = latestMsg.getSubject()
+    const sender =
+      typeof latestMsg.getFrom === 'function'
+        ? latestMsg.getFrom()
+        : latestMsg.from || ''
+    const subject =
+      typeof latestMsg.getSubject === 'function'
+        ? latestMsg.getSubject()
+        : latestMsg.subject || ''
     let bodySnippet =
       typeof latestMsg.getPlainBody === 'function'
         ? latestMsg.getPlainBody().substring(0, 1200)
-        : ''
+        : latestMsg.snippet || ''
     bodySnippet = enrichSnippetWithAttachments_(bodySnippet, latestMsg)
 
     let classification = deterministicRuleClassify_(
@@ -1447,11 +1462,8 @@ function processThreadBatch(threads, config, services) {
       )
     }
     if (!classification) {
-      console.log(
-        '[processThreadBatch] Could not classify thread:',
-        thread.getId()
-      )
-      results.push({ threadId: thread.getId(), status: 'unclassified' })
+      console.log('[processThreadBatch] Could not classify thread:', threadId)
+      results.push({ threadId: threadId, status: 'unclassified' })
       return
     }
 
@@ -1493,7 +1505,7 @@ function processThreadBatch(threads, config, services) {
           primaryTag
         )
         results.push({
-          threadId: thread.getId(),
+          threadId: threadId,
           status: 'label_creation_failed',
         })
         return
@@ -1540,7 +1552,7 @@ function processThreadBatch(threads, config, services) {
     }
 
     let savedAttachments = []
-    if (services?.DriveApp) {
+    if (services && services.DriveApp) {
       savedAttachments = persistCanonicalAttachmentsToDrive(
         thread,
         classification,
@@ -1550,7 +1562,7 @@ function processThreadBatch(threads, config, services) {
     }
 
     results.push({
-      threadId: thread.getId(),
+      threadId: threadId,
       status: 'classified',
       label: classification.canonical_label,
       confidence: classification.confidence,

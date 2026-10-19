@@ -370,7 +370,11 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     try {
       var msgs = thread.getMessages() || []
       for (var m = 0; m < msgs.length; m++) {
-        var fromA = (msgs[m].getFrom() || '').toLowerCase()
+        var fromA = (
+          msgs[m] && typeof msgs[m].getFrom === 'function'
+            ? msgs[m].getFrom()
+            : (msgs[m] && msgs[m].from) || ''
+        ).toLowerCase()
         if (fromA.indexOf(userEmail) !== -1) {
           return {
             canonicalDomain: null,
@@ -2285,16 +2289,31 @@ function searchGmailForOriginalHeader_(senderEmail, dateStr, damagedSubject) {
     // Gmail search does not guarantee ordering; sort by last-message date
     // (newest first) so the closest matching thread is selected deterministically.
     threads.sort(function (a, b) {
-      return b.getLastMessageDate() - a.getLastMessageDate()
+      var dateA =
+        a && typeof a.getLastMessageDate === 'function'
+          ? a.getLastMessageDate()
+          : 0
+      var dateB =
+        b && typeof b.getLastMessageDate === 'function'
+          ? b.getLastMessageDate()
+          : 0
+      return dateB - dateA
     })
     var normDamaged = damagedSubject.toLowerCase().replace(/[^a-z0-9]/g, '')
     if (!normDamaged) return null
 
     for (var t = 0; t < threads.length; t++) {
-      var messages = threads[t].getMessages()
+      var messages =
+        threads[t] && typeof threads[t].getMessages === 'function'
+          ? threads[t].getMessages()
+          : []
       for (var m = 0; m < messages.length; m++) {
         var msg = messages[m]
-        var realSub = msg.getSubject()
+        if (!msg) continue
+        var realSub =
+          typeof msg.getSubject === 'function'
+            ? msg.getSubject()
+            : msg.subject || ''
         var normReal = realSub.toLowerCase().replace(/[^a-z0-9]/g, '')
         if (
           normReal === normDamaged ||
@@ -2304,7 +2323,10 @@ function searchGmailForOriginalHeader_(senderEmail, dateStr, damagedSubject) {
         ) {
           return {
             subject: realSub,
-            from: msg.getFrom(),
+            from:
+              typeof msg.getFrom === 'function'
+                ? msg.getFrom()
+                : msg.from || '',
           }
         }
       }

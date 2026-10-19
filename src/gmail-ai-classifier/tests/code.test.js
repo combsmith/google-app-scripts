@@ -894,6 +894,39 @@ describe('processThreadBatch', () => {
     expect(results[0].threadId).toBe('t-attach')
     expect(Array.isArray(results[0].savedAttachments)).toBe(true)
   })
+
+  test('handles messages with plain object fallback properties without throwing', () => {
+    const plainMsgThread = {
+      id: 't-plain',
+      getMessages: () => [
+        {
+          from: 'alert@apcocu.org',
+          subject: 'Monthly Statement Ready',
+          snippet: 'Your account statement is available.',
+        },
+      ],
+      addLabel: jest.fn(),
+      getId: () => 't-plain',
+    }
+    const services = makeServices()
+    const results = processThreadBatch([plainMsgThread], config, services)
+    expect(results).toHaveLength(1)
+    expect(results[0].status).toBe('classified')
+    expect(results[0].threadId).toBe('t-plain')
+  })
+
+  test('falls back to thread.id when getId is missing', () => {
+    const threadWithoutGetId = {
+      id: 't-noid',
+      getMessages: () => [],
+      addLabel: jest.fn(),
+    }
+    const services = makeServices()
+    const results = processThreadBatch([threadWithoutGetId], config, services)
+    expect(results).toHaveLength(1)
+    expect(results[0].status).toBe('empty')
+    expect(results[0].threadId).toBe('t-noid')
+  })
 })
 
 describe('Ontological Knowledge Graph and Triage Matrix Prompt Architecture', () => {
@@ -2477,6 +2510,24 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(appsScriptRes.subLabel).toBe('Tech/Alerts')
           expect(appsScriptRes.category).toBe('Updates')
           expect(appsScriptRes.action).toBe('archive')
+        })
+
+        test('shields thread containing user-sent message with plain object fallback', () => {
+          const mockThread = {
+            getMessages: () => [{ from: 'testuser@example.com' }],
+          }
+          const config = { userAccountEmail: 'testuser@example.com' }
+          const res = fn(
+            'other@example.com',
+            'Subject',
+            'Snippet',
+            mockThread,
+            config
+          )
+          expect(res).not.toBeNull()
+          expect(res.category).toBe('Primary')
+          expect(res.action).toBe('keep')
+          expect(res.reasoning).toBe('User-Sent Shield')
         })
       })
     })
