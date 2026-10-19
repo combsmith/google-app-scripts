@@ -339,6 +339,80 @@ describe('Gmail AI Classifier Audit System', () => {
       expect(report.flaggedCount).toBe(0)
       expect(report.findings).toHaveLength(0)
     })
+
+    test('flags canonical thread archived from inbox without user action as ARCHIVED_WITHOUT_ACTION', () => {
+      const archivedWithoutActionThread = {
+        getId: () => 't-archived',
+        getFirstMessageSubject: () => 'Empower Cash APY Increase',
+        isInInbox: () => false,
+        isStarred: () => false,
+        getMessages: () => [{ getFrom: () => 'EPC@email.empower.com' }],
+        getLabels: () => [
+          { getName: () => 'Processed' },
+          { getName: () => '02_Finance_Legal' },
+        ],
+      }
+
+      const report = auditClassifications([archivedWithoutActionThread], config)
+      expect(report.flaggedCount).toBe(1)
+      expect(report.findings[0].flags[0]).toContain('ARCHIVED_WITHOUT_ACTION')
+      expect(report.findings[0].flags[0]).toContain(
+        'candidate for secondary stream routing'
+      )
+    })
+
+    test('does not flag archived thread if it already carries a secondary category label', () => {
+      const archivedWithUpdatesLabel = {
+        getId: () => 't-archived-updates',
+        getFirstMessageSubject: () => 'Empower Cash APY Increase',
+        isInInbox: () => false,
+        isStarred: () => false,
+        getMessages: () => [{ getFrom: () => 'EPC@email.empower.com' }],
+        getLabels: () => [
+          { getName: () => 'Processed' },
+          { getName: () => '02_Finance_Legal' },
+          { getName: () => 'Updates' },
+        ],
+      }
+
+      const report = auditClassifications([archivedWithUpdatesLabel], config)
+      expect(report.flaggedCount).toBe(0)
+    })
+
+    test('does not flag archived thread if user starred or replied to it', () => {
+      const starredThread = {
+        getId: () => 't-starred',
+        getFirstMessageSubject: () => 'Important Tax Notice',
+        isInInbox: () => false,
+        isStarred: () => true,
+        getMessages: () => [{ getFrom: () => 'tax@cpa.example.com' }],
+        getLabels: () => [
+          { getName: () => 'Processed' },
+          { getName: () => '02_Finance_Legal' },
+        ],
+      }
+
+      const repliedThread = {
+        getId: () => 't-replied',
+        getFirstMessageSubject: () => 'Contract Revision',
+        isInInbox: () => false,
+        isStarred: () => false,
+        getMessages: () => [
+          { getFrom: () => 'lawyer@example.com' },
+          { getFrom: () => 'user@example.com' },
+        ],
+        getLabels: () => [
+          { getName: () => 'Processed' },
+          { getName: () => '02_Finance_Legal' },
+        ],
+      }
+
+      const report = auditClassifications([starredThread, repliedThread], {
+        ...config,
+        userAccountEmail: 'user@example.com',
+      })
+      expect(report.flaggedCount).toBe(0)
+    })
   })
 
   describe('formatAuditDigest', () => {

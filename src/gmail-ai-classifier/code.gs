@@ -1614,6 +1614,34 @@ function auditClassifications(threads, config) {
       })
     }
 
+    // 5. Archived from Inbox Without Action Check
+    var isArchived =
+      (typeof thread.isInInbox === 'function' &&
+        thread.isInInbox() === false) ||
+      thread.isInInbox === false
+    if (isArchived && assignedCanonical.length > 0) {
+      var isStarred =
+        (typeof thread.isStarred === 'function' &&
+          thread.isStarred() === true) ||
+        thread.isStarred === true
+      var userEmail = (config && config.userAccountEmail) || ''
+      var isSentOrReplied =
+        typeof isThreadSentOrRepliedByUser === 'function'
+          ? isThreadSentOrRepliedByUser(thread, userEmail)
+          : false
+      var hasSecondaryCategory = rawLabels.some(function (l) {
+        return /promotions|updates|social|forums|archive/i.test(l)
+      })
+
+      if (!isStarred && !isSentOrReplied && !hasSecondaryCategory) {
+        flags.push(
+          'ARCHIVED_WITHOUT_ACTION: Thread tagged under ' +
+            assignedCanonical.join(', ') +
+            ' was archived from Inbox without user reply or star; candidate for secondary stream routing (Updates).'
+        )
+      }
+    }
+
     if (flags.length > 0) {
       findings.push({
         threadId: id,
