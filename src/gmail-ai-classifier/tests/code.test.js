@@ -2625,6 +2625,37 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           }
         })
 
+        test('classifies "Events in your apiaries" and apiary telemetry into Projects/Telemetry archive', () => {
+          const apiaryEvents = fn(
+            'alerts@broodminder.com',
+            'Events in your apiaries',
+            'An automated alert notification regarding device issues and status updates for hives in your apiaries.',
+            null,
+            {}
+          )
+          expect(apiaryEvents).not.toBeNull()
+          expect(apiaryEvents.canonicalDomain).toBe('07_Community_NonProfit')
+          expect(apiaryEvents.subLabel).toBe('Projects/Telemetry')
+          expect(apiaryEvents.category).toBe('Updates')
+          expect(apiaryEvents.action).toBe('archive')
+          expect(apiaryEvents.reasoning).toBe('BroodMinder Telemetry')
+
+          const myBroodminderAlert = fn(
+            'notifications@mybroodminder.com',
+            'Apiary Alert: Scale weight threshold exceeded',
+            'Battery and weight report for yard',
+            null,
+            {}
+          )
+          expect(myBroodminderAlert).not.toBeNull()
+          expect(myBroodminderAlert.canonicalDomain).toBe(
+            '07_Community_NonProfit'
+          )
+          expect(myBroodminderAlert.subLabel).toBe('Projects/Telemetry')
+          expect(myBroodminderAlert.category).toBe('Updates')
+          expect(myBroodminderAlert.action).toBe('archive')
+        })
+
         test('shields thread containing user-sent message with plain object fallback', () => {
           const mockThread = {
             getMessages: () => [{ from: 'testuser@example.com' }],

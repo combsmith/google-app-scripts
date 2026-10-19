@@ -97,7 +97,7 @@ function buildOntologicalPrompt(config, sender, subject, snippet) {
     "• General news or unassigned media mention -> canonicalDomain: null (category: 'Updates', action: 'archive').\n" +
     '• Student or school sub-labels apply only when the monitored alert query specifically targets an academic program or school.\n\n' +
     'AUTOMATED MACHINE & SENSOR TELEMETRY (BroodMinder, weather stations, IoT sensors, server metrics, device status pings, cron logs, uptime monitors):\n' +
-    '• Community/beehive telemetry (BroodMinder monitors) -> "07_Community_NonProfit", sub-label "Projects/Telemetry" or "Projects/Beekeeping".\n' +
+    '• Community/beehive telemetry (BroodMinder monitors, "Events in your apiaries", hive alerts) -> "07_Community_NonProfit", sub-label "Projects/Telemetry" or "Projects/Beekeeping".\n' +
     '• Tech infrastructure/server telemetry (device pings, server metrics, cron logs) -> "05_Tech_Infrastructure", sub-label "Tech/Alerts".\n' +
     '• MANDATORY ROUTING: Always route machine telemetry to category "Updates" with action "archive". Keep telemetry completely archived out of the Inbox.\n\n' +
     'SCHOOL & STUDENT ANNOUNCEMENTS VS DIRECT CORRESPONDENCE (MCAA, Briarwood, FACTS, PowerSchool, ParentSquare, Canvas, Google Classroom, Colleges):\n' +
@@ -121,7 +121,7 @@ function buildOntologicalPrompt(config, sender, subject, snippet) {
     "   -> category: 'Primary', action: 'keep'\n" +
     '2. Informational_Feed (Routine school bulletins/newsletters/ParentSquare updates, non-profit newsletters/appeals, automated search/monitoring alerts, active orders in transit, routine tax forms/receipts, volunteer reminders, upcoming travel itineraries):\n' +
     "   -> category: 'Updates', action: 'archive'\n" +
-    '3. Completed_Transaction (Confirmed scheduled auto-payments, delivered packages, successful SSO/sign-ins, routine lunch menu digests, bank transfers, automated machine/sensor telemetry [BroodMinder, HoneyBeeham], device/server pings):\n' +
+    '3. Completed_Transaction (Confirmed scheduled auto-payments, delivered packages, successful SSO/sign-ins, routine lunch menu digests, bank transfers, automated machine/sensor telemetry [BroodMinder, apiary events, HoneyBeeham], device/server pings):\n' +
     "   -> category: 'Updates', action: 'archive'\n" +
     '4. Broadcast_Marketing (Commercial promos, retail discounts, vendor newsletters, terms of service and privacy policy updates):\n' +
     "   -> category: 'Promotions', action: 'archive'\n" +
@@ -1085,10 +1085,17 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     }
   }
 
-  // Bee Telemetry (BroodMinder)
+  // Bee Telemetry (BroodMinder & Apiaries)
   if (
     sLower.indexOf('broodminder') !== -1 ||
+    sLower.indexOf('mybroodminder') !== -1 ||
     subLower.indexOf('hive alert') !== -1 ||
+    subLower.indexOf('events in your apiaries') !== -1 ||
+    subLower.indexOf('events in your apiary') !== -1 ||
+    subLower.indexOf('event in your apiaries') !== -1 ||
+    subLower.indexOf('event in your apiary') !== -1 ||
+    subLower.indexOf('apiary alert') !== -1 ||
+    subLower.indexOf('apiary event') !== -1 ||
     sLower.indexOf('alerts@broodminder.com') !== -1
   ) {
     return {
@@ -1099,7 +1106,8 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       action: 'archive',
       confidence: 0.99,
       title: subject,
-      summary: 'Automated hive telemetry alert routed to Projects/Telemetry.',
+      summary:
+        'Automated hive and apiary telemetry alert routed to Projects/Telemetry.',
       reasoning: 'BroodMinder Telemetry',
     }
   }
