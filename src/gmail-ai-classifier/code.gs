@@ -425,6 +425,9 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     sLower.indexOf('briarwoodchristianschool.org') !== -1 ||
     sLower.indexOf('mcaabhm.org') !== -1 ||
     sLower.indexOf('jeffersonstate.edu') !== -1
+  var isBrightArrow =
+    sLower.indexOf('brightarrow.com') !== -1 ||
+    sLower.indexOf('brightarrow') !== -1
   var isBroadcastSubject = [
     'weekly',
     'newsletter',
@@ -443,11 +446,23 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     'noteworthy',
     'announcement',
     'athletics',
+    'e learning',
+    'e-learning',
+    'report card update',
+    'trunk or treat',
+    'spirit week',
+    'pto',
+    'pta',
+    'open house',
+    'picture day',
+    'fall festival',
+    'spring festival',
+    'school announcement',
   ].some(function (w) {
     return subLower.indexOf(w) !== -1
   })
 
-  if (isSchoolDomain && !isBroadcastSubject) {
+  if (isSchoolDomain && !isBroadcastSubject && !isBrightArrow) {
     return {
       canonicalDomain: '04_Family_Health',
       canonical_label: '04_Family_Health',
@@ -475,6 +490,46 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       title: subject,
       summary: 'Automated daily agenda digest routed to Updates.',
       reasoning: 'Daily Digest',
+    }
+  }
+
+  // Smart Reorder & Device Consumables Replenishment (Amazon Smart Reorder, Alexa ink/toner alerts, Dash)
+  if (
+    sLower.indexOf('amazon.com') !== -1 ||
+    sLower.indexOf('auto-reorder@amazon.com') !== -1 ||
+    sLower.indexOf('dash@amazon.com') !== -1 ||
+    sLower.indexOf('instantink') !== -1 ||
+    sLower.indexOf('hp.com') !== -1 ||
+    sLower.indexOf('brother.com') !== -1 ||
+    sLower.indexOf('canon.com') !== -1 ||
+    sLower.indexOf('epson.com') !== -1
+  ) {
+    if (
+      subLower.indexOf('time to order the') !== -1 ||
+      subLower.indexOf('time to reorder') !== -1 ||
+      subLower.indexOf('smart reorder') !== -1 ||
+      subLower.indexOf('auto-reorder') !== -1 ||
+      subLower.indexOf('replenishment') !== -1 ||
+      subLower.indexOf('low ink') !== -1 ||
+      subLower.indexOf('ink alert') !== -1 ||
+      subLower.indexOf('toner low') !== -1 ||
+      subLower.indexOf('toner alert') !== -1 ||
+      subLower.indexOf('toner for your') !== -1 ||
+      subLower.indexOf('replacement filter') !== -1 ||
+      subLower.indexOf('reorder your') !== -1
+    ) {
+      return {
+        canonicalDomain: '01_Household',
+        canonical_label: '01_Household',
+        subLabel: 'Household/Supplies',
+        category: 'Updates',
+        action: 'archive',
+        confidence: 0.99,
+        title: subject,
+        summary:
+          'Automated smart reorder or consumable replenishment alert routed to Updates.',
+        reasoning: 'Smart Reorder',
+      }
     }
   }
 
@@ -585,13 +640,14 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     }
   }
 
-  // School Broadcasts & Bulletins (including ParentSquare & College parent newsletters)
+  // School Broadcasts & Bulletins (including BrightArrow, ParentSquare & College parent newsletters)
   if (
-    (isSchoolDomain ||
+    isBrightArrow ||
+    ((isSchoolDomain ||
       sLower.indexOf('parentsquare.com') !== -1 ||
       sLower.indexOf('briarwoodchristianschool.org') !== -1 ||
       sLower.indexOf('admissions@ua.edu') !== -1) &&
-    (isBroadcastSubject || sLower.indexOf('parentsquare.com') !== -1)
+      (isBroadcastSubject || sLower.indexOf('parentsquare.com') !== -1))
   ) {
     return {
       canonicalDomain: '04_Family_Health',
@@ -602,7 +658,7 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       confidence: 0.98,
       title: subject,
       summary:
-        'Routine school bulletin, newsletter, or ParentSquare digest routed to Updates.',
+        'Routine school bulletin, newsletter, BrightArrow broadcast, or ParentSquare digest routed to Updates.',
       reasoning: 'School Broadcast',
     }
   }
@@ -732,6 +788,45 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     }
   }
 
+  // Credit Scores & Monitoring Bulletins (Capital One CreditWise, Experian, Credit Karma, etc.)
+  if (
+    sLower.indexOf('creditwise') !== -1 ||
+    sLower.indexOf('creditkarma') !== -1 ||
+    sLower.indexOf('experian') !== -1 ||
+    sLower.indexOf('equifax') !== -1 ||
+    sLower.indexOf('transunion') !== -1 ||
+    sLower.indexOf('myfico') !== -1 ||
+    sLower.indexOf('capitalone') !== -1 ||
+    sLower.indexOf('chase.com') !== -1 ||
+    sLower.indexOf('discover.com') !== -1
+  ) {
+    if (
+      subLower.indexOf('credit score') !== -1 ||
+      subLower.indexOf('score went up') !== -1 ||
+      subLower.indexOf('score went down') !== -1 ||
+      subLower.indexOf('creditwise') !== -1 ||
+      subLower.indexOf('score changed') !== -1 ||
+      subLower.indexOf('credit alert') !== -1 ||
+      subLower.indexOf('credit monitoring') !== -1 ||
+      subLower.indexOf('credit report') !== -1 ||
+      subLower.indexOf('fico score') !== -1 ||
+      subLower.indexOf('new credit inquiry') !== -1
+    ) {
+      return {
+        canonicalDomain: '02_Finance_Legal',
+        canonical_label: '02_Finance_Legal',
+        subLabel: 'Finance/Banking',
+        category: 'Updates',
+        action: 'archive',
+        confidence: 0.99,
+        title: subject,
+        summary:
+          'Automated credit score update or credit monitoring notification routed to Updates.',
+        reasoning: 'Credit Score Alert',
+      }
+    }
+  }
+
   // Payment Processors & Retail Receipts (PayPal, Home Depot)
   if (
     sLower.indexOf('paypal.com') !== -1 &&
@@ -813,6 +908,20 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       (subject || '') + ' ' + (snippet || '')
     )
 
+  var isPromoSubject =
+    /\b(sale|\d+%\s*off|deal of the day|clearance|limited time offer|coupon|shop now|exclusive offer|special offer|flash sale|black friday|cyber monday|memorial day sale|labor day sale|presidents day sale|discount code|save \$\d+|free shipping on orders|buy one get one|bogo)\b/i.test(
+      subject || ''
+    )
+  var isNonTransactional =
+    subLower.indexOf('order') === -1 &&
+    subLower.indexOf('receipt') === -1 &&
+    subLower.indexOf('invoice') === -1 &&
+    subLower.indexOf('statement') === -1 &&
+    subLower.indexOf('autopay') === -1 &&
+    subLower.indexOf('tracking') === -1 &&
+    subLower.indexOf('shipped') === -1 &&
+    subLower.indexOf('delivered') === -1
+
   if (
     sLower.indexOf('lowes') !== -1 ||
     sLower.indexOf('mannlake') !== -1 ||
@@ -826,7 +935,8 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     sLower.indexOf('trailerparts') !== -1 ||
     sLower.indexOf('hillco') !== -1 ||
     (isScarsella && !isScarsellaCurriculum) ||
-    sLower.indexOf('em1.cloudflare.com') !== -1
+    sLower.indexOf('em1.cloudflare.com') !== -1 ||
+    (isPromoSubject && isNonTransactional)
   ) {
     return {
       canonicalDomain: null,

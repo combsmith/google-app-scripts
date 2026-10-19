@@ -2512,6 +2512,119 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(appsScriptRes.action).toBe('archive')
         })
 
+        test('classifies credit score notifications (CreditWise, Experian) into Finance/Banking archive', () => {
+          const capOneScore = fn(
+            'capitalone@notification.capitalone.com',
+            'Hi Alex, your score went up',
+            'Your credit score increased on CreditWise.',
+            null,
+            {}
+          )
+          expect(capOneScore).not.toBeNull()
+          expect(capOneScore.canonicalDomain).toBe('02_Finance_Legal')
+          expect(capOneScore.subLabel).toBe('Finance/Banking')
+          expect(capOneScore.category).toBe('Updates')
+          expect(capOneScore.action).toBe('archive')
+          expect(capOneScore.reasoning).toBe('Credit Score Alert')
+
+          const experianScore = fn(
+            'creditmonitoring@experian.com',
+            'Your Experian Credit Report and Score Changed',
+            'A new credit alert has been detected.',
+            null,
+            {}
+          )
+          expect(experianScore).not.toBeNull()
+          expect(experianScore.canonicalDomain).toBe('02_Finance_Legal')
+          expect(experianScore.subLabel).toBe('Finance/Banking')
+          expect(experianScore.category).toBe('Updates')
+          expect(experianScore.action).toBe('archive')
+        })
+
+        test('classifies smart reorder and consumable replenishments into Household/Supplies archive', () => {
+          const inkAlert = fn(
+            'no-reply@amazon.com',
+            "It's time to order the Canon CLI-281 Yellow Toner for your Canon TS6300 series-AirPrint",
+            'Yellow toner level is at 0%',
+            null,
+            {}
+          )
+          expect(inkAlert).not.toBeNull()
+          expect(inkAlert.canonicalDomain).toBe('01_Household')
+          expect(inkAlert.subLabel).toBe('Household/Supplies')
+          expect(inkAlert.category).toBe('Updates')
+          expect(inkAlert.action).toBe('archive')
+          expect(inkAlert.reasoning).toBe('Smart Reorder')
+
+          const hpReplenish = fn(
+            'instantink@hp.com',
+            'Low ink alert: Replacement cartridges shipped automatically',
+            'Smart reorder auto-replenishment status',
+            null,
+            {}
+          )
+          expect(hpReplenish).not.toBeNull()
+          expect(hpReplenish.canonicalDomain).toBe('01_Household')
+          expect(hpReplenish.subLabel).toBe('Household/Supplies')
+          expect(hpReplenish.category).toBe('Updates')
+          expect(hpReplenish.action).toBe('archive')
+        })
+
+        test('classifies BrightArrow broadcasts and school announcements into Family/School-Student archive', () => {
+          const brightArrow = fn(
+            'Notification@target10112.brightarrow.com',
+            'Oakridge Community School for (Student, Alex)',
+            'PowerSchool semester grades glitch is resolved',
+            null,
+            {}
+          )
+          expect(brightArrow).not.toBeNull()
+          expect(brightArrow.canonicalDomain).toBe('04_Family_Health')
+          expect(brightArrow.subLabel).toBe('Family/School-Student')
+          expect(brightArrow.category).toBe('Updates')
+          expect(brightArrow.action).toBe('archive')
+          expect(brightArrow.reasoning).toBe('School Broadcast')
+
+          const elearningDay = fn(
+            'announcements@bcsk12.org',
+            'E Learning Day Tomorrow: Weather Announcement',
+            'Campus closed for e-learning day tomorrow',
+            null,
+            {}
+          )
+          expect(elearningDay).not.toBeNull()
+          expect(elearningDay.canonicalDomain).toBe('04_Family_Health')
+          expect(elearningDay.subLabel).toBe('Family/School-Student')
+          expect(elearningDay.category).toBe('Updates')
+          expect(elearningDay.action).toBe('archive')
+        })
+
+        test('classifies general retail promo and marketing blasts with promotional subjects into Promotions archive', () => {
+          const promoRes = fn(
+            'deals@store.example.com',
+            'Flash Sale: 40% Off Limited Time Offer!',
+            'Shop now and save on all clearance items',
+            null,
+            {}
+          )
+          expect(promoRes).not.toBeNull()
+          expect(promoRes.canonicalDomain).toBeNull()
+          expect(promoRes.category).toBe('Promotions')
+          expect(promoRes.action).toBe('archive')
+          expect(promoRes.reasoning).toBe('Retail Promo')
+
+          const receiptRes = fn(
+            'store@example.com',
+            'Order Receipt #12345 for your purchase',
+            'Thank you for your order',
+            null,
+            {}
+          )
+          if (receiptRes) {
+            expect(receiptRes.category).not.toBe('Promotions')
+          }
+        })
+
         test('shields thread containing user-sent message with plain object fallback', () => {
           const mockThread = {
             getMessages: () => [{ from: 'testuser@example.com' }],
