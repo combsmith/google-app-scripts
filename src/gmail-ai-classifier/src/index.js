@@ -4502,12 +4502,18 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
         typeof thread.getMessages === 'function' ? thread.getMessages() : []
       if (!messages || messages.length === 0) continue
       var firstMessage = messages[0]
-      var sender = firstMessage.getFrom()
-      var subject = firstMessage.getSubject()
+      var sender =
+        typeof firstMessage.getFrom === 'function'
+          ? firstMessage.getFrom()
+          : firstMessage.from || ''
+      var subject =
+        typeof firstMessage.getSubject === 'function'
+          ? firstMessage.getSubject()
+          : firstMessage.subject || ''
       var snippet =
         typeof firstMessage.getPlainBody === 'function'
           ? firstMessage.getPlainBody().substring(0, 500)
-          : ''
+          : firstMessage.snippet || ''
       snippet = enrichSnippetWithAttachments_(snippet, firstMessage)
 
       console.log(
@@ -4602,12 +4608,15 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
                 classification.canonicalDomain,
                 classification.subLabel
               )
-              if (notePath && services.Utilities) {
-                var dateStr = services.Utilities.formatDate(
-                  firstMessage.getDate(),
-                  'GMT',
-                  'yyyy-MM-dd'
-                )
+              var utils =
+                services.Utilities ||
+                (typeof Utilities !== 'undefined' ? Utilities : null)
+              if (notePath && utils) {
+                var msgDate =
+                  typeof firstMessage.getDate === 'function'
+                    ? firstMessage.getDate()
+                    : new Date()
+                var dateStr = utils.formatDate(msgDate, 'GMT', 'yyyy-MM-dd')
                 var entryMd = formatProgressiveDisclosureEntry(
                   dateStr,
                   classification.title || subject,
