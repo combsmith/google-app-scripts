@@ -2120,20 +2120,23 @@ function parseRetryDelayMs(response) {
   return 5000
 }
 
-function ensureUserLabel(labelName, gmailApp) {
+function ensureUserLabel(labelName, gmailApp, gmailAdvanced) {
   var app = gmailApp || (typeof GmailApp !== 'undefined' ? GmailApp : null)
-  if (!app) return null
-  var label = app.getUserLabelByName(labelName)
-  if (!label) {
+  if (!app || !labelName) return null
+  try {
+    var label = app.getUserLabelByName(labelName)
+    if (label) return label
+
+    var adv =
+      gmailAdvanced || (typeof Gmail !== 'undefined' && Gmail ? Gmail : null)
     if (
-      typeof Gmail !== 'undefined' &&
-      Gmail &&
-      Gmail.Users &&
-      Gmail.Users.Labels &&
-      Gmail.Users.Labels.create
+      adv &&
+      adv.Users &&
+      adv.Users.Labels &&
+      typeof adv.Users.Labels.create === 'function'
     ) {
       try {
-        Gmail.Users.Labels.create(
+        adv.Users.Labels.create(
           {
             name: labelName,
             labelListVisibility: 'labelShow',
@@ -2141,17 +2144,24 @@ function ensureUserLabel(labelName, gmailApp) {
           },
           'me'
         )
-        label = app.getUserLabelByName(labelName)
+        var created = app.getUserLabelByName(labelName)
+        if (created) return created
       } catch (advancedErr) {
-        label = app.createLabel(labelName)
+        // Fall back to standard createLabel
       }
-    } else {
-      label = app.createLabel(labelName)
     }
+    label = app.createLabel(labelName)
     console.log('[ensureUserLabel] Created new label: ' + labelName)
+    return label
+  } catch (e) {
+    console.error(
+      '[ensureUserLabel] Error creating label: ' + labelName + ' ' + e.message
+    )
+    return null
   }
-  return label
 }
+
+var ensureGmailLabel = ensureUserLabel
 
 function createGmailFilterRule(senderEmail, targetLabelName) {
   // Decommissioned: Static filter auto-creation causes multi-label collisions,
@@ -4395,6 +4405,7 @@ if (typeof module !== 'undefined' && module.exports) {
     classifyWithGemini: classifyWithGemini,
     buildOntologicalPrompt: buildOntologicalPrompt,
     ensureUserLabel: ensureUserLabel,
+    ensureGmailLabel: ensureGmailLabel,
     createGmailFilterRule: createGmailFilterRule,
     backfillOriginalEmailHeaders: backfillOriginalEmailHeaders,
     getSearchDateRange_: getSearchDateRange_,
