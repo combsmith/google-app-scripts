@@ -67,14 +67,16 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
         ' unprocessed thread(s).'
     )
 
+    var isSecondarySweep = false
     if (threads.length === 0) {
-      // Secondary sweep: Look for any unread non-primary inbox threads to realign
-      var sweepQuery = 'in:inbox is:unread -category:primary -label:Processed'
-      threads = gmail.search(sweepQuery, 0, 10)
+      // Secondary sweep: Look for unread unstarred inbox threads to realign non-Primary items
+      var sweepQuery = 'in:inbox is:unread -is:starred -from:me'
+      threads = gmail.search(sweepQuery, 0, 15)
+      isSecondarySweep = true
       console.log(
         '[processEmailsWithAiClassifier] Secondary sweep found ' +
           threads.length +
-          ' unread non-primary thread(s) in inbox.'
+          ' unread inbox thread(s) for realignment.'
       )
       if (threads.length === 0) {
         return
@@ -124,6 +126,19 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
           sender
       )
 
+      var threadLabels = []
+      if (typeof thread.getLabels === 'function') {
+        try {
+          var lList = thread.getLabels() || []
+          threadLabels = lList.map(function (l) {
+            return typeof l.getName === 'function' ? l.getName() : String(l)
+          })
+        } catch (e) {}
+      }
+      var isAlreadyProcessed =
+        config.processedLabel &&
+        threadLabels.indexOf(config.processedLabel) !== -1
+
       var classification = deterministicRuleClassify_(
         sender,
         subject,
@@ -132,7 +147,11 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
         config
       )
       var usedRemoteApi = false
-      if (!classification && !remoteQuotaExhausted) {
+      if (
+        !classification &&
+        !remoteQuotaExhausted &&
+        (!isSecondarySweep || !isAlreadyProcessed)
+      ) {
         var classifyFn =
           services.classifyFn ||
           (typeof classifyWithGemini === 'function'
@@ -458,6 +477,17 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     'fall festival',
     'spring festival',
     'school announcement',
+    'absent',
+    'attendance',
+    'tardy',
+    'tuition',
+    'billing statement',
+    'assignment posted',
+    'new assignment',
+    'grade updated',
+    'score published',
+    'family portal',
+    'parent portal',
   ].some(function (w) {
     return subLower.indexOf(w) !== -1
   })
@@ -625,6 +655,138 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       summary:
         'CI/CD code quality, error monitoring, or deployment alert routed to Tech/Alerts.',
       reasoning: 'Developer Monitoring Alert',
+    }
+  }
+
+  // Authentication, 2FA, OTP & Account Security Alerts
+  if (
+    subLower.indexOf('verification code') !== -1 ||
+    subLower.indexOf('security code') !== -1 ||
+    subLower.indexOf('one-time passcode') !== -1 ||
+    subLower.indexOf('one-time password') !== -1 ||
+    subLower.indexOf('your login code') !== -1 ||
+    subLower.indexOf('new sign-in') !== -1 ||
+    subLower.indexOf('signed in from a new') !== -1 ||
+    subLower.indexOf('new device signed in') !== -1 ||
+    subLower.indexOf('sign-in from new device') !== -1 ||
+    subLower.indexOf('security alert for your') !== -1 ||
+    subLower.indexOf('password changed') !== -1 ||
+    subLower.indexOf('password reset confirmation') !== -1
+  ) {
+    return {
+      canonicalDomain: '05_Tech_Infrastructure',
+      canonical_label: '05_Tech_Infrastructure',
+      subLabel: 'Tech/Security',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary:
+        'Automated authentication verification code or device sign-in alert routed to Tech/Security.',
+      reasoning: 'Authentication/Sign-in Ping',
+    }
+  }
+
+  // Healthcare & Pharmacy Appointment Reminders & Prescription Alerts
+  if (
+    sLower.indexOf('mychart') !== -1 ||
+    sLower.indexOf('cvs.com') !== -1 ||
+    sLower.indexOf('cvshealth') !== -1 ||
+    sLower.indexOf('walgreens.com') !== -1 ||
+    sLower.indexOf('questdiagnostics.com') !== -1 ||
+    sLower.indexOf('labcorp.com') !== -1 ||
+    sLower.indexOf('zocdoc.com') !== -1 ||
+    sLower.indexOf('athenahealth.com') !== -1 ||
+    subLower.indexOf('appointment reminder') !== -1 ||
+    subLower.indexOf('upcoming appointment') !== -1 ||
+    subLower.indexOf('appointment confirmation') !== -1 ||
+    subLower.indexOf('appointment is confirmed') !== -1 ||
+    subLower.indexOf('prescription is ready') !== -1 ||
+    subLower.indexOf('prescription ready') !== -1 ||
+    subLower.indexOf('refill reminder') !== -1 ||
+    subLower.indexOf('refill confirmation') !== -1
+  ) {
+    return {
+      canonicalDomain: '04_Family_Health',
+      canonical_label: '04_Family_Health',
+      subLabel: 'Family/Health-Medical',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary:
+        'Automated patient portal appointment reminder or pharmacy prescription status notice.',
+      reasoning: 'Healthcare/Pharmacy Alert',
+    }
+  }
+
+  // Travel, Flight, Hotel & Rideshare Confirmations
+  if (
+    sLower.indexOf('delta.com') !== -1 ||
+    sLower.indexOf('southwest.com') !== -1 ||
+    sLower.indexOf('aa.com') !== -1 ||
+    sLower.indexOf('united.com') !== -1 ||
+    sLower.indexOf('airbnb.com') !== -1 ||
+    sLower.indexOf('vrbo.com') !== -1 ||
+    sLower.indexOf('marriott.com') !== -1 ||
+    sLower.indexOf('hilton.com') !== -1 ||
+    sLower.indexOf('uber.com') !== -1 ||
+    sLower.indexOf('lyft.com') !== -1
+  ) {
+    if (
+      subLower.indexOf('flight confirmation') !== -1 ||
+      subLower.indexOf('flight status') !== -1 ||
+      subLower.indexOf('boarding pass') !== -1 ||
+      subLower.indexOf('check in for your flight') !== -1 ||
+      subLower.indexOf('reservation confirmed') !== -1 ||
+      subLower.indexOf('reservation confirmation') !== -1 ||
+      subLower.indexOf('upcoming stay') !== -1 ||
+      subLower.indexOf('trip with uber') !== -1 ||
+      subLower.indexOf('ride with lyft') !== -1 ||
+      subLower.indexOf('receipt') !== -1
+    ) {
+      return {
+        canonicalDomain: '01_Household',
+        canonical_label: '01_Household',
+        subLabel: 'Household/Travel',
+        category: 'Updates',
+        action: 'archive',
+        confidence: 0.99,
+        title: subject,
+        summary:
+          'Travel itinerary reservation, flight check-in, or rideshare receipt.',
+        reasoning: 'Travel Confirmation',
+      }
+    }
+  }
+
+  // Customer Feedback Surveys & Reviews
+  if (
+    subLower.indexOf('how was your experience') !== -1 ||
+    subLower.indexOf('how did we do') !== -1 ||
+    subLower.indexOf('rate your recent') !== -1 ||
+    subLower.indexOf('rate your experience') !== -1 ||
+    subLower.indexOf('rate your stay') !== -1 ||
+    subLower.indexOf('tell us what you think') !== -1 ||
+    subLower.indexOf('take our survey') !== -1 ||
+    subLower.indexOf('take our quick survey') !== -1 ||
+    subLower.indexOf('quick survey') !== -1 ||
+    subLower.indexOf('feedback requested') !== -1 ||
+    subLower.indexOf('review your purchase') !== -1 ||
+    subLower.indexOf('leave a review') !== -1 ||
+    subLower.indexOf('your opinion matters') !== -1
+  ) {
+    return {
+      canonicalDomain: null,
+      canonical_label: null,
+      subLabel: null,
+      category: 'Promotions',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary:
+        'Automated post-transaction customer satisfaction feedback or survey request.',
+      reasoning: 'Customer Survey',
     }
   }
 
@@ -880,6 +1042,32 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     }
   }
 
+  // General Retail Purchases & Order Receipts (Target, Costco, Best Buy, Walmart)
+  if (
+    (sLower.indexOf('target.com') !== -1 ||
+      sLower.indexOf('costco.com') !== -1 ||
+      sLower.indexOf('bestbuy.com') !== -1 ||
+      sLower.indexOf('walmart.com') !== -1) &&
+    (subLower.indexOf('order') !== -1 ||
+      subLower.indexOf('receipt') !== -1 ||
+      subLower.indexOf('ready for pickup') !== -1 ||
+      subLower.indexOf('picked up') !== -1 ||
+      subLower.indexOf('shipped') !== -1 ||
+      subLower.indexOf('delivered') !== -1)
+  ) {
+    return {
+      canonicalDomain: '02_Finance_Legal',
+      canonical_label: '02_Finance_Legal',
+      subLabel: 'Finance/Purchases',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.98,
+      title: subject,
+      summary: 'Retail store order confirmation, receipt, or pickup notice.',
+      reasoning: 'Retail Order / Receipt',
+    }
+  }
+
   // Newsletters, Digests, Political Blasts, Social Media
   if (
     sLower.indexOf('nytimes.com') !== -1 ||
@@ -892,7 +1080,13 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     sLower.indexOf('daily.therundown.ai') !== -1 ||
     sLower.indexOf('aibreakfast') !== -1 ||
     sLower.indexOf('mail.instagram.com') !== -1 ||
-    sLower.indexOf('facebookmail.com') !== -1
+    sLower.indexOf('facebookmail.com') !== -1 ||
+    sLower.indexOf('linkedin.com') !== -1 ||
+    sLower.indexOf('pinterest.com') !== -1 ||
+    sLower.indexOf('quora.com') !== -1 ||
+    sLower.indexOf('youtube.com') !== -1 ||
+    sLower.indexOf('twitter.com') !== -1 ||
+    sLower.indexOf('x.com') !== -1
   ) {
     return {
       canonicalDomain: null,
@@ -903,7 +1097,7 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       confidence: 0.98,
       title: subject,
       summary:
-        'Routine media newsletter, Substack digest, or political appeal.',
+        'Routine media newsletter, Substack digest, social media alert, or political appeal.',
       reasoning: 'News/Newsletter/Social',
     }
   }
@@ -917,7 +1111,7 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     )
 
   var isPromoSubject =
-    /\b(sale|\d+%\s*off|deal of the day|clearance|limited time offer|coupon|shop now|exclusive offer|special offer|flash sale|black friday|cyber monday|memorial day sale|labor day sale|presidents day sale|discount code|save \$\d+|free shipping on orders|buy one get one|bogo)\b/i.test(
+    /\b(sale|\d+%\s*off|deal of the day|daily deals?|clearance|limited time offer|coupon|promo code|shop now|shop today|exclusive offer|special offer|flash sale|black friday|cyber monday|memorial day sale|labor day sale|presidents day sale|discount code|save \$\d+|save up to|free shipping|buy one get one|bogo|don't miss out|last chance to save|doorbusters?|rewards balance|earn bonus points|member exclusive)\b/i.test(
       subject || ''
     )
   var isNonTransactional =
@@ -930,7 +1124,7 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     subLower.indexOf('shipped') === -1 &&
     subLower.indexOf('delivered') === -1
 
-  if (
+  var isRetailVendor =
     sLower.indexOf('lowes') !== -1 ||
     sLower.indexOf('mannlake') !== -1 ||
     sLower.indexOf('urotuning') !== -1 ||
@@ -942,8 +1136,18 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     sLower.indexOf('birminghamhomebuyers') !== -1 ||
     sLower.indexOf('trailerparts') !== -1 ||
     sLower.indexOf('hillco') !== -1 ||
+    sLower.indexOf('target.com') !== -1 ||
+    sLower.indexOf('costco.com') !== -1 ||
+    sLower.indexOf('bestbuy.com') !== -1 ||
+    sLower.indexOf('walmart.com') !== -1 ||
+    sLower.indexOf('doordash.com') !== -1 ||
+    sLower.indexOf('kohls.com') !== -1 ||
+    sLower.indexOf('samsclub.com') !== -1 ||
+    sLower.indexOf('em1.cloudflare.com') !== -1
+
+  if (
+    (isRetailVendor && isNonTransactional) ||
     (isScarsella && !isScarsellaCurriculum) ||
-    sLower.indexOf('em1.cloudflare.com') !== -1 ||
     (isPromoSubject && isNonTransactional)
   ) {
     return {
@@ -1972,8 +2176,9 @@ function buildOntologicalPrompt(config, sender, subject, snippet) {
     "   -> category: 'Promotions', action: 'archive'\n" +
     '5. Spam_Solicitation (Phishing, scam attempts, cold wholesaler pitches):\n' +
     "   -> category: 'Promotions', action: 'trash'\n\n" +
-    'CATEGORY-DRIVEN INBOX RETENTION INVARIANT:\n' +
+    'CATEGORY-DRIVEN INBOX RETENTION INVARIANT & PRIMARY INBOX PURITY RULE (ACTION-FIRST INBOX):\n' +
     '• Primary Inbox is an Action Queue: Only emails categorized as "Primary" belong in the Primary Inbox (action: "keep").\n' +
+    '• Emails that do not require prompt, personalized human action (such as automated newsletters, order receipts, shipping updates, travel confirmations, account alerts, credit scores, smart reorders, school bulletins, marketing promos, and social pings) MUST NOT stay in Primary (they must be categorized as "Updates", "Promotions", or "Social" with action: "archive"). Reserve category: "Primary" and action: "keep" ONLY for authentic human-to-human correspondence, critical urgent action items, or manual bills needing immediate human review.\n' +
     '• All non-Primary streams ("Updates", "Promotions", "Social", "Forums") are Informational Feeds that must be archived out of the Inbox (action: "archive") into their respective category tab and domain sub-label.\n\n' +
     '=== CONSTRAINTS ===\n' +
     '• Single Sub-Label Invariant: Return AT MOST ONE sub-label string (e.g. "Finance/Banking" or "Family/School-Student"). Do not stack or combine multiple sub-labels.\n\n'
@@ -4219,7 +4424,16 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
 
     var classification = null
     try {
-      if (classifyFn) {
+      if (typeof deterministicRuleClassify_ === 'function') {
+        classification = deterministicRuleClassify_(
+          sender,
+          subject,
+          snippet,
+          thread,
+          cfg
+        )
+      }
+      if (!classification && classifyFn) {
         classification = classifyFn(sender, subject, snippet, cfg)
       }
     } catch (e) {
@@ -4554,7 +4768,7 @@ function runRealignmentAudit(query, options, config, services) {
 function sweepAllUnreadInboxEmails(options, customConfig, customServices) {
   var opts = Object.assign({ maxThreads: 50, dryRun: false }, options || {})
   return reclassifyThreadsByQuery(
-    'in:inbox is:unread',
+    'in:inbox is:unread -is:starred -from:me',
     opts,
     customConfig,
     customServices

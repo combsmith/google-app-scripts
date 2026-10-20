@@ -2230,7 +2230,44 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
         expect(report.items[0].tldChanged).toBe(true)
       })
 
-      test('sweepAllUnreadInboxEmails queries in:inbox is:unread', () => {
+      test('reclassifyThreadsByQuery uses deterministicRuleClassify_ prior to remote classifyFn', () => {
+        const mockThread = {
+          getId: () => 't-deterministic',
+          getMessages: () => [
+            {
+              getFrom: () => 'security@example.com',
+              getSubject: () => 'Your login code is 123456',
+              getPlainBody: () => 'Enter this code to complete sign in.',
+              getAttachments: () => [],
+            },
+          ],
+          getLabels: () => [{ getName: () => 'Processed' }],
+          addLabel: jest.fn(),
+          removeLabel: jest.fn(),
+          moveToArchive: jest.fn(),
+        }
+        const mockGmail = {
+          search: jest.fn(() => [mockThread]),
+        }
+        const mockClassify = jest.fn()
+
+        const report = fn(
+          'in:inbox is:unread',
+          { maxThreads: 1, dryRun: true },
+          { canonicalDomains: ['05_Tech_Infrastructure'] },
+          {
+            GmailApp: mockGmail,
+            classifyFn: mockClassify,
+          }
+        )
+
+        expect(report.scanned).toBe(1)
+        expect(report.items[0].newDomain).toBe('05_Tech_Infrastructure')
+        expect(report.items[0].newSubLabel).toBe('Tech/Security')
+        expect(mockClassify).not.toHaveBeenCalled()
+      })
+
+      test('sweepAllUnreadInboxEmails queries in:inbox is:unread -is:starred -from:me', () => {
         const mockGmail = {
           search: jest.fn(() => []),
         }
@@ -2240,7 +2277,7 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           { GmailApp: mockGmail, classifyFn: jest.fn() }
         )
         expect(mockGmail.search).toHaveBeenCalledWith(
-          'in:inbox is:unread',
+          'in:inbox is:unread -is:starred -from:me',
           0,
           20
         )
@@ -2673,6 +2710,164 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(res.action).toBe('keep')
           expect(res.reasoning).toBe('User-Sent Shield')
         })
+
+        test('classifies authentication 2FA codes and security sign-in alerts into Tech/Security archive', () => {
+          const authRes = fn(
+            'no-reply@auth.example.com',
+            'Your verification code is 492019',
+            'Use this one-time passcode to verify your identity',
+            null,
+            {}
+          )
+          expect(authRes).not.toBeNull()
+          expect(authRes.canonicalDomain).toBe('05_Tech_Infrastructure')
+          expect(authRes.subLabel).toBe('Tech/Security')
+          expect(authRes.category).toBe('Updates')
+          expect(authRes.action).toBe('archive')
+          expect(authRes.reasoning).toBe('Authentication/Sign-in Ping')
+
+          const deviceRes = fn(
+            'security@service.example.com',
+            'Security alert for your account: New sign-in from new device',
+            'We noticed a new device signed in to your account',
+            null,
+            {}
+          )
+          expect(deviceRes).not.toBeNull()
+          expect(deviceRes.canonicalDomain).toBe('05_Tech_Infrastructure')
+          expect(deviceRes.subLabel).toBe('Tech/Security')
+          expect(deviceRes.category).toBe('Updates')
+          expect(deviceRes.action).toBe('archive')
+        })
+
+        test('classifies healthcare appointment reminders and pharmacy alerts into Family/Health-Medical archive', () => {
+          const apptRes = fn(
+            'donotreply@mychart.example.org',
+            'Upcoming Appointment Reminder for Tomorrow',
+            'Your upcoming appointment is confirmed for 2:00 PM',
+            null,
+            {}
+          )
+          expect(apptRes).not.toBeNull()
+          expect(apptRes.canonicalDomain).toBe('04_Family_Health')
+          expect(apptRes.subLabel).toBe('Family/Health-Medical')
+          expect(apptRes.category).toBe('Updates')
+          expect(apptRes.action).toBe('archive')
+          expect(apptRes.reasoning).toBe('Healthcare/Pharmacy Alert')
+
+          const rxRes = fn(
+            'rx@cvs.com',
+            'Your prescription is ready for pickup',
+            'Prescription ready at pharmacy location',
+            null,
+            {}
+          )
+          expect(rxRes).not.toBeNull()
+          expect(rxRes.canonicalDomain).toBe('04_Family_Health')
+          expect(rxRes.subLabel).toBe('Family/Health-Medical')
+          expect(rxRes.category).toBe('Updates')
+          expect(rxRes.action).toBe('archive')
+        })
+
+        test('classifies travel reservations, flight status, and rideshare receipts into Household/Travel archive', () => {
+          const flightRes = fn(
+            'ticket@delta.com',
+            'Flight Confirmation: Check in for your flight',
+            'Flight status and boarding pass details',
+            null,
+            {}
+          )
+          expect(flightRes).not.toBeNull()
+          expect(flightRes.canonicalDomain).toBe('01_Household')
+          expect(flightRes.subLabel).toBe('Household/Travel')
+          expect(flightRes.category).toBe('Updates')
+          expect(flightRes.action).toBe('archive')
+          expect(flightRes.reasoning).toBe('Travel Confirmation')
+
+          const uberRes = fn(
+            'receipts@uber.com',
+            'Your trip with Uber receipt',
+            'Thanks for riding with Uber',
+            null,
+            {}
+          )
+          expect(uberRes).not.toBeNull()
+          expect(uberRes.canonicalDomain).toBe('01_Household')
+          expect(uberRes.subLabel).toBe('Household/Travel')
+          expect(uberRes.category).toBe('Updates')
+          expect(uberRes.action).toBe('archive')
+        })
+
+        test('classifies customer feedback surveys into Promotions archive', () => {
+          const surveyRes = fn(
+            'feedback@service.example.com',
+            'How was your experience? Take our quick survey',
+            'Tell us what you think. Your opinion matters to us.',
+            null,
+            {}
+          )
+          expect(surveyRes).not.toBeNull()
+          expect(surveyRes.canonicalDomain).toBeNull()
+          expect(surveyRes.category).toBe('Promotions')
+          expect(surveyRes.action).toBe('archive')
+          expect(surveyRes.reasoning).toBe('Customer Survey')
+        })
+
+        test('classifies retail store receipts into Finance/Purchases and retail promos into Promotions', () => {
+          const targetReceipt = fn(
+            'orders@target.com',
+            'Your Target order #987654 is ready for pickup',
+            'Your items are ready at customer service',
+            null,
+            {}
+          )
+          expect(targetReceipt).not.toBeNull()
+          expect(targetReceipt.canonicalDomain).toBe('02_Finance_Legal')
+          expect(targetReceipt.subLabel).toBe('Finance/Purchases')
+          expect(targetReceipt.category).toBe('Updates')
+          expect(targetReceipt.action).toBe('archive')
+          expect(targetReceipt.reasoning).toBe('Retail Order / Receipt')
+
+          const targetPromo = fn(
+            'promotions@target.com',
+            'Weekly Ad: Save up to 30% on home essentials',
+            'Limited time offer on top brands',
+            null,
+            {}
+          )
+          expect(targetPromo).not.toBeNull()
+          expect(targetPromo.canonicalDomain).toBeNull()
+          expect(targetPromo.category).toBe('Promotions')
+          expect(targetPromo.action).toBe('archive')
+          expect(targetPromo.reasoning).toBe('Retail Promo')
+        })
+
+        test('classifies social media alerts (LinkedIn, Pinterest, YouTube) into Social archive', () => {
+          const linkedinRes = fn(
+            'messages-noreply@linkedin.com',
+            'You have 3 new notifications on LinkedIn',
+            'See what your connections are sharing',
+            null,
+            {}
+          )
+          expect(linkedinRes).not.toBeNull()
+          expect(linkedinRes.canonicalDomain).toBeNull()
+          expect(linkedinRes.category).toBe('Social')
+          expect(linkedinRes.action).toBe('archive')
+          expect(linkedinRes.reasoning).toBe('News/Newsletter/Social')
+
+          const pinterestRes = fn(
+            'updates@pinterest.com',
+            'Trending ideas for your home board',
+            'Discover pins you might like',
+            null,
+            {}
+          )
+          expect(pinterestRes).not.toBeNull()
+          expect(pinterestRes.canonicalDomain).toBeNull()
+          expect(pinterestRes.category).toBe('Social')
+          expect(pinterestRes.action).toBe('archive')
+        })
       })
     })
   })
@@ -2772,7 +2967,7 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(mockLock.releaseLock).toHaveBeenCalled()
         })
 
-        test('secondary sweep query includes -label:Processed to prevent infinite loop', () => {
+        test('secondary sweep query targets unread unstarred inbox threads for realignment', () => {
           expect(typeof fn).toBe('function')
           const mockLock = {
             tryLock: jest.fn(() => true),
@@ -2795,10 +2990,7 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             'in:inbox -label:Processed'
           )
           const sweepQuery = mockGmail.search.mock.calls[1][0]
-          expect(sweepQuery).toContain('-label:Processed')
-          expect(sweepQuery).toBe(
-            'in:inbox is:unread -category:primary -label:Processed'
-          )
+          expect(sweepQuery).toBe('in:inbox is:unread -is:starred -from:me')
         })
 
         test('gracefully skips empty threads without throwing TypeError', () => {
