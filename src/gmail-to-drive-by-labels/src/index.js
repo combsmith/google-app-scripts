@@ -73,7 +73,7 @@ function removeExistingThread(body, threadId) {
 
 /**
  * Determine whether an attachment already exists in the folder by comparing
- * file size (fast fail) then MD5 hash against every existing file of the same name.
+ * file size (fast fail) then SHA-256 hash against every existing file of the same name.
  *
  * @param {Object} existingFiles - Drive file iterator (from getFilesByName)
  * @param {Object} newFileBlob - Blob of the incoming attachment
@@ -593,7 +593,7 @@ function processLabelGroup(config, services, helperFns) {
             if (existingFile.getSize() === newFileBlob.getBytes().length) {
               console.log('[processLabelGroup] Size match, checking hash')
 
-              // 3. Deep Check: Compare MD5 Hashes (The "Fingerprint")
+              // 3. Deep Check: Compare SHA-256 Hashes (The "Fingerprint")
               const existingHash = getFileHash(existingFile.getBlob())
               const newHash = getFileHash(newFileBlob)
 
