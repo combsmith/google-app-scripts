@@ -315,8 +315,10 @@ function buildDeployErrorHtml(err) {
     `<details style="margin-top:6px;font-size:12px;">` +
     `<summary style="cursor:pointer;color:#888;">Error detail</summary>` +
     `<div class="error-detail">${safeErrorDetail}</div>` +
+    // The browser decodes the escaped attribute, so dataset.copy is already the
+    // original text. Never re-parse it as HTML (#595).
     `<button class="copy-btn" data-copy="${safeErrorDetail}"` +
-    ` onclick="var d=document.createElement('div');d.innerHTML=this.dataset.copy;navigator.clipboard.writeText(d.textContent).catch(()=>{})">` +
+    ` onclick="navigator.clipboard.writeText(this.dataset.copy).catch(()=>{})">` +
     `📋 Copy error</button>` +
     `</details>`
 

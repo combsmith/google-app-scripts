@@ -1,5 +1,7 @@
 'use strict'
 
+const fs = require('fs')
+const path = require('path')
 const {
   APPS_SCRIPT_API_BASE,
   getScriptCatalog,
@@ -714,16 +716,30 @@ describe('buildDeployErrorHtml', () => {
     expect(html).toContain('copy-btn')
   })
 
-  test('copy button decodes HTML entities via innerHTML before writing to clipboard', () => {
+  test('copy button writes data-copy verbatim and never re-parses it as HTML', () => {
     const err = new Error('<script>alert("xss")</script>')
     const html = buildDeployErrorHtml(err)
 
-    // data-copy must hold the HTML-escaped value so quotes in the attribute are safe
+    // data-copy holds the HTML-escaped value so the attribute is safe to insert
     expect(html).toContain('data-copy="')
     expect(html).toContain('&lt;script&gt;')
-    // onclick must use div.innerHTML decode trick so the clipboard receives unescaped text
-    expect(html).toContain('d.innerHTML=this.dataset.copy')
-    expect(html).toContain('d.textContent')
+    expect(html).not.toContain('<script>')
+    // The parser already decodes the attribute, so the handler copies it as-is (#595)
+    expect(html).toContain(
+      'onclick="navigator.clipboard.writeText(this.dataset.copy).catch(()=>{})"'
+    )
+    expect(html).not.toContain('innerHTML')
+    expect(html).not.toContain('textContent')
+  })
+
+  test('deploy/index.html inlined copy handler never re-parses error text (#595)', () => {
+    const page = fs.readFileSync(
+      path.join(__dirname, '..', '..', '..', 'deploy', 'index.html'),
+      'utf8'
+    )
+
+    expect(page).toContain('navigator.clipboard.writeText(this.dataset.copy)')
+    expect(page).not.toMatch(/innerHTML\s*=\s*this\.dataset\.copy/)
   })
 
   test('handles errors with string representation', () => {
