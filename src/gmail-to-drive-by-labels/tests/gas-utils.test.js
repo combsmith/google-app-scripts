@@ -122,19 +122,25 @@ describe('getCleanBody', () => {
 })
 
 describe('getFileHash', () => {
-  test('computes md5 for a Buffer', () => {
+  test('computes sha256 for a Buffer', () => {
     const buf = Buffer.from('hello world')
-    expect(getFileHash(buf)).toBe('5eb63bbbe01eeed093cb22bb8f5acdc3')
+    expect(getFileHash(buf)).toBe(
+      'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9'
+    )
   })
 
-  test('computes md5 for an object with getBytes()', () => {
+  test('computes sha256 for an object with getBytes()', () => {
     const blob = { getBytes: () => Buffer.from('abc') }
-    expect(getFileHash(blob)).toBe('900150983cd24fb0d6963f7d28e17f72')
+    expect(getFileHash(blob)).toBe(
+      'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+    )
   })
 
-  test('computes md5 for an object with bytes property', () => {
+  test('computes sha256 for an object with bytes property', () => {
     const blob = { bytes: Buffer.from('test') }
-    expect(getFileHash(blob)).toBe('098f6bcd4621d373cade4e832627b4f6')
+    expect(getFileHash(blob)).toBe(
+      '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08'
+    )
   })
 
   test('throws error for unsupported blob type', () => {
