@@ -514,7 +514,7 @@ function processLabelGroup(config) {
             if (existingFile.getSize() === newFileBlob.getBytes().length) {
               console.log('[processLabelGroup] Size match, checking hash')
 
-              // 3. Deep Check: Compare MD5 Hashes (The "Fingerprint")
+              // 3. Deep Check: Compare SHA-256 Hashes (The "Fingerprint")
               var existingHash = getFileHash(existingFile.getBlob())
               var newHash = getFileHash(newFileBlob)
 
@@ -658,12 +658,12 @@ function getCleanBody(text) {
 }
 
 /**
- * Generates an MD5 hash (fingerprint) for a file blob.
+ * Generates a SHA-256 hash (fingerprint) for a file blob.
  * Returns a string representing the binary content.
  */
 function getFileHash(blob) {
   var digest = Utilities.computeDigest(
-    Utilities.DigestAlgorithm.MD5,
+    Utilities.DigestAlgorithm.SHA_256,
     blob.getBytes()
   )
   return digest

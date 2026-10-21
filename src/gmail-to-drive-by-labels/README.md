@@ -29,7 +29,7 @@ A robust Google Apps Script designed to automate the archiving of Gmail threads.
 
 **Content-Based De-duplication:**
 
-- Uses MD5 hashing (digital fingerprinting) to detect if a file is an exact duplicate of one already in the folder, even if the filename is different.
+- Uses SHA-256 hashing (digital fingerprinting) to detect if a file is an exact duplicate of one already in the folder, even if the filename is different.
 
 **Safe Renaming:**
 
@@ -82,7 +82,7 @@ sequenceDiagram
                     Script->>Drive: Check if file exists (by name)
 
                     alt File exists
-                        Script->>Drive: Compare MD5 hashes
+                        Script->>Drive: Compare SHA-256 hashes
 
                         alt Hashes match (duplicate)
                             Script->>Doc: Insert "[DUPLICATE SKIPPED]"
