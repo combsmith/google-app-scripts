@@ -20,17 +20,17 @@ global.Utilities = {
   },
   // Provide a simple sleep stub used in code
   sleep: (ms) => {},
-  // Mock MD5 hash computation
+  // Mock SHA-256 hash computation
   computeDigest: (algorithm, bytes) => {
     // Simple deterministic hash for testing
     // Convert bytes to a string and create a fake hash
     const crypto = require('node:crypto')
-    const hash = crypto.createHash('md5').update(Buffer.from(bytes)).digest()
+    const hash = crypto.createHash('sha256').update(Buffer.from(bytes)).digest()
     // Return as array of numbers (like GAS does)
     return Array.from(hash)
   },
   DigestAlgorithm: {
-    MD5: 'MD5',
+    SHA_256: 'SHA_256',
   },
   Charset: {
     US_ASCII: 'US-ASCII',
