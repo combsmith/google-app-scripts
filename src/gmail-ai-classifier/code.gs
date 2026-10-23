@@ -658,6 +658,47 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     }
   }
 
+  // Developer, Cloud & SaaS Trial Expirations & Account Plan Notices
+  if (
+    subLower.indexOf('trial is ending') !== -1 ||
+    subLower.indexOf('trial ending') !== -1 ||
+    subLower.indexOf('trial will expire') !== -1 ||
+    subLower.indexOf('trial expired') !== -1 ||
+    subLower.indexOf('trial expiration') !== -1 ||
+    subLower.indexOf('free trial is ending') !== -1 ||
+    subLower.indexOf('free trial ends') !== -1 ||
+    (subLower.indexOf('aws') !== -1 &&
+      (subLower.indexOf('upgraded to a paid plan') !== -1 ||
+        subLower.indexOf('free plan is ready') !== -1)) ||
+    ((sLower.indexOf('aws.com') !== -1 ||
+      sLower.indexOf('amazonaws.com') !== -1 ||
+      sLower.indexOf('digitalocean.com') !== -1 ||
+      sLower.indexOf('cloudflare.com') !== -1 ||
+      sLower.indexOf('azure') !== -1 ||
+      sLower.indexOf('openai.com') !== -1 ||
+      sLower.indexOf('anthropic.com') !== -1 ||
+      sLower.indexOf('supabase.com') !== -1 ||
+      sLower.indexOf('neon.tech') !== -1) &&
+      (subLower.indexOf('upgraded to a paid plan') !== -1 ||
+        subLower.indexOf('free plan is ready') !== -1 ||
+        subLower.indexOf('free tier') !== -1 ||
+        subLower.indexOf('startup credits') !== -1 ||
+        subLower.indexOf('account plan') !== -1))
+  ) {
+    return {
+      canonicalDomain: '05_Tech_Infrastructure',
+      canonical_label: '05_Tech_Infrastructure',
+      subLabel: 'Tech/Alerts',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary:
+        'Cloud provider tier status, SaaS trial expiration, or account plan notification routed to Tech/Alerts.',
+      reasoning: 'SaaS / Cloud Plan Alert',
+    }
+  }
+
   // Authentication, 2FA, OTP & Account Security Alerts
   if (
     subLower.indexOf('verification code') !== -1 ||
@@ -833,6 +874,35 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     }
   }
 
+  // School Travel Solicitations & Educational Tour Invitations (EF Tours, WorldStrides, etc.)
+  if (
+    sLower.indexOf('ef.com') !== -1 ||
+    sLower.indexOf('eftours.com') !== -1 ||
+    sLower.indexOf('worldstrides.com') !== -1 ||
+    sLower.indexOf('explorica.com') !== -1 ||
+    sLower.indexOf('acis.com') !== -1 ||
+    ((subLower.indexOf('trip to ') !== -1 ||
+      subLower.indexOf('school travel') !== -1 ||
+      subLower.indexOf('educational tour') !== -1) &&
+      (subLower.indexOf('interest meeting') !== -1 ||
+        subLower.indexOf('informational meeting') !== -1 ||
+        subLower.indexOf('rsvp') !== -1 ||
+        subLower.indexOf('enrollment discount') !== -1))
+  ) {
+    return {
+      canonicalDomain: '04_Family_Health',
+      canonical_label: '04_Family_Health',
+      subLabel: 'Family/School-Student',
+      category: 'Promotions',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary:
+        'Educational travel program solicitation or informational trip meeting announcement routed to Promotions.',
+      reasoning: 'School Travel Solicitation',
+    }
+  }
+
   // Routine Healthcare / Benefits Wellness Broadcasts
   if (sLower.indexOf('hello.springhealth.com') !== -1) {
     return {
@@ -994,6 +1064,36 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
           'Automated credit score update or credit monitoring notification routed to Updates.',
         reasoning: 'Credit Score Alert',
       }
+    }
+  }
+
+  // Bank APY, Interest Rate Changes & Savings Yield Updates
+  if (
+    subLower.indexOf('higher apy') !== -1 ||
+    subLower.indexOf('apy has increased') !== -1 ||
+    subLower.indexOf('apy increased') !== -1 ||
+    subLower.indexOf('earns a higher apy') !== -1 ||
+    subLower.indexOf('rate increase') !== -1 ||
+    subLower.indexOf('interest rate increase') !== -1 ||
+    subLower.indexOf('savings rate increase') !== -1 ||
+    subLower.indexOf('annual percentage yield') !== -1 ||
+    (subLower.indexOf('rate change') !== -1 &&
+      (subLower.indexOf('apy') !== -1 ||
+        subLower.indexOf('cash') !== -1 ||
+        subLower.indexOf('savings') !== -1 ||
+        subLower.indexOf('interest') !== -1))
+  ) {
+    return {
+      canonicalDomain: '02_Finance_Legal',
+      canonical_label: '02_Finance_Legal',
+      subLabel: 'Finance/Banking',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary:
+        'Automated bank account APY or interest rate change notification routed to Finance/Banking.',
+      reasoning: 'Bank Rate Update',
     }
   }
 

@@ -2693,6 +2693,68 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(myBroodminderAlert.action).toBe('archive')
         })
 
+        test('classifies bank APY and interest rate increase notices into Finance/Banking archive', () => {
+          const apyRes = fn(
+            'EPC@email.empower.com',
+            'Your Cash account now earns a higher APY',
+            'Your account rate has increased to 3.70% APY automatically.',
+            null,
+            {}
+          )
+          expect(apyRes).not.toBeNull()
+          expect(apyRes.canonicalDomain).toBe('02_Finance_Legal')
+          expect(apyRes.subLabel).toBe('Finance/Banking')
+          expect(apyRes.category).toBe('Updates')
+          expect(apyRes.action).toBe('archive')
+          expect(apyRes.reasoning).toBe('Bank Rate Update')
+        })
+
+        test('classifies school travel solicitations (EF Tours) into Family/School-Student Promotions archive', () => {
+          const efRes = fn(
+            'consultant@ef.com',
+            '2028 Trip to South Korea',
+            'Informational interest meeting announced for educational tour with early enrollment discount.',
+            null,
+            {}
+          )
+          expect(efRes).not.toBeNull()
+          expect(efRes.canonicalDomain).toBe('04_Family_Health')
+          expect(efRes.subLabel).toBe('Family/School-Student')
+          expect(efRes.category).toBe('Promotions')
+          expect(efRes.action).toBe('archive')
+          expect(efRes.reasoning).toBe('School Travel Solicitation')
+        })
+
+        test('classifies SaaS trial expirations and cloud account plan notices into Tech/Alerts archive', () => {
+          const awsPlanRes = fn(
+            'billing-subscriptions@aws.com',
+            'Your AWS account was upgraded to a paid plan',
+            'AWS account has been upgraded from the Free Tier to a paid subscription.',
+            null,
+            {}
+          )
+          expect(awsPlanRes).not.toBeNull()
+          expect(awsPlanRes.canonicalDomain).toBe('05_Tech_Infrastructure')
+          expect(awsPlanRes.subLabel).toBe('Tech/Alerts')
+          expect(awsPlanRes.category).toBe('Updates')
+          expect(awsPlanRes.action).toBe('archive')
+          expect(awsPlanRes.reasoning).toBe('SaaS / Cloud Plan Alert')
+
+          const trialEndingRes = fn(
+            'notifications@example-saas.com',
+            'Your free trial is ending in 3 days',
+            'Your 14-day trial will expire soon. Upgrade your plan to keep access.',
+            null,
+            {}
+          )
+          expect(trialEndingRes).not.toBeNull()
+          expect(trialEndingRes.canonicalDomain).toBe('05_Tech_Infrastructure')
+          expect(trialEndingRes.subLabel).toBe('Tech/Alerts')
+          expect(trialEndingRes.category).toBe('Updates')
+          expect(trialEndingRes.action).toBe('archive')
+          expect(trialEndingRes.reasoning).toBe('SaaS / Cloud Plan Alert')
+        })
+
         test('shields thread containing user-sent message with plain object fallback', () => {
           const mockThread = {
             getMessages: () => [{ from: 'testuser@example.com' }],
