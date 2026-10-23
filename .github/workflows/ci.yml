@@ -144,11 +144,20 @@ jobs:
             echo "::error::GH_PAT_DON_PETRY (or legacy GH_PAT_WORKFLOWS) is required for autofix pushes."
             exit 1
           fi
-          if git apply --numstat "${RUNNER_TEMP}/autofix-patch/autofix.patch" | awk '{print $3}' | grep -q '^\.github/workflows/'; then
+          numstat_file="${RUNNER_TEMP}/autofix-numstat.bin"
+          if ! git apply --numstat -z "${RUNNER_TEMP}/autofix-patch/autofix.patch" > "${numstat_file}"; then
+            echo "::error::unable to inspect autofix patch; refusing to push."
+            exit 1
+          fi
+          if tr '\0' '\n' < "${numstat_file}" | grep -Eq '^(([0-9]+|-)[[:space:]]+([0-9]+|-)[[:space:]]+)?\.github/workflows/'; then
             echo "::error::autofix patch touches workflow files; refusing to push."
             exit 1
           fi
           git apply --index "${RUNNER_TEMP}/autofix-patch/autofix.patch"
+          if git diff --cached --name-only -z | tr '\0' '\n' | grep -Eq '^\.github/workflows/'; then
+            echo "::error::autofix patch touches workflow files; refusing to push."
+            exit 1
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -m "chore(ci): apply prettier/eslint auto-fixes"
