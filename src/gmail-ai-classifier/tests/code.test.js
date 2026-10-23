@@ -2803,6 +2803,54 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(charityRes.reasoning).toBe('NonProfit Impact Newsletter')
         })
 
+        test('classifies school-wide sports tryouts (tennis tryouts) as school broadcast into Family/School-Student archive', () => {
+          const tryoutRes = fn(
+            'staff@bcsk12.org',
+            'Junior High Tennis Tryouts Next Week!',
+            'Tennis tryouts will be held next week for all interested students.',
+            null,
+            {}
+          )
+          expect(tryoutRes).not.toBeNull()
+          expect(tryoutRes.canonicalDomain).toBe('04_Family_Health')
+          expect(tryoutRes.subLabel).toBe('Family/School-Student')
+          expect(tryoutRes.category).toBe('Updates')
+          expect(tryoutRes.action).toBe('archive')
+          expect(tryoutRes.reasoning).toBe('School Broadcast')
+        })
+
+        test('classifies Ironmen weekly Bible study broadcast and notes into Community_NonProfit Updates archive', () => {
+          const bibleStudyRes = fn(
+            'ministry@example.com',
+            'IRONMEN 6:30am THURSDAY Acts 24 Study Notes',
+            'Weekly meeting details and study guide covering Acts 24 with schedule notes.',
+            null,
+            {}
+          )
+          expect(bibleStudyRes).not.toBeNull()
+          expect(bibleStudyRes.canonicalDomain).toBe('07_Community_NonProfit')
+          expect(bibleStudyRes.subLabel).toBe('NonProfit/General')
+          expect(bibleStudyRes.category).toBe('Updates')
+          expect(bibleStudyRes.action).toBe('archive')
+          expect(bibleStudyRes.reasoning).toBe('NonProfit Impact Newsletter')
+        })
+
+        test('classifies healthcare insurance payments (BCBSAL) into Finance/Bills Updates archive', () => {
+          const bcbsRes = fn(
+            'bluecrosspayments@bcbsal.org',
+            'Blue Cross and Blue Shield of Alabama Payments',
+            'Your monthly insurance payment has been successfully processed.',
+            null,
+            {}
+          )
+          expect(bcbsRes).not.toBeNull()
+          expect(bcbsRes.canonicalDomain).toBe('02_Finance_Legal')
+          expect(bcbsRes.subLabel).toBe('Finance/Bills')
+          expect(bcbsRes.category).toBe('Updates')
+          expect(bcbsRes.action).toBe('archive')
+          expect(bcbsRes.reasoning).toBe('Insurance Payment Receipt')
+        })
+
         test('shields thread containing user-sent message with plain object fallback', () => {
           const mockThread = {
             getMessages: () => [{ from: 'testuser@example.com' }],

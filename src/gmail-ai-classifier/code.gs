@@ -477,6 +477,13 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     'fall festival',
     'spring festival',
     'school announcement',
+    'tryouts',
+    'tryout',
+    'try-outs',
+    'try-out',
+    'auditions',
+    'audition',
+    'team tryouts',
     'absent',
     'attendance',
     'tardy',
@@ -597,6 +604,8 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     sLower.indexOf('charitywater.org') !== -1 ||
     sLower.indexOf('compassion.com') !== -1 ||
     sLower.indexOf('worldvision.org') !== -1 ||
+    subLower.indexOf('ironmen') !== -1 ||
+    subLower.indexOf('iron men') !== -1 ||
     ((sLower.indexOf('newsletter') !== -1 ||
       sLower.indexOf('update') !== -1 ||
       sLower.indexOf('impact') !== -1) &&
@@ -613,7 +622,7 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       confidence: 0.98,
       title: subject,
       summary:
-        'Community non-profit organization newsletter or project impact update routed to Updates.',
+        'Community non-profit organization newsletter, Bible study digest, or project impact update routed to Updates.',
       reasoning: 'NonProfit Impact Newsletter',
     }
   }
@@ -1097,6 +1106,41 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
         title: subject,
         summary: 'Routine billing statement, receipt, or AutoPay confirmation.',
         reasoning: 'Routine Billing',
+      }
+    }
+  }
+
+  // Healthcare & Insurance Premium Billing & Payment Processing Confirmations
+  if (
+    sLower.indexOf('bcbsal.org') !== -1 ||
+    sLower.indexOf('bcbs.com') !== -1 ||
+    sLower.indexOf('bluecrosspayments') !== -1 ||
+    sLower.indexOf('uhc.com') !== -1 ||
+    sLower.indexOf('unitedhealthcare') !== -1 ||
+    sLower.indexOf('aetna.com') !== -1 ||
+    sLower.indexOf('cigna.com') !== -1 ||
+    sLower.indexOf('humana.com') !== -1
+  ) {
+    if (
+      subLower.indexOf('payment') !== -1 ||
+      subLower.indexOf('payments') !== -1 ||
+      subLower.indexOf('premium') !== -1 ||
+      subLower.indexOf('statement') !== -1 ||
+      subLower.indexOf('bill') !== -1 ||
+      subLower.indexOf('processed') !== -1 ||
+      subLower.indexOf('receipt') !== -1
+    ) {
+      return {
+        canonicalDomain: '02_Finance_Legal',
+        canonical_label: '02_Finance_Legal',
+        subLabel: 'Finance/Bills',
+        category: 'Updates',
+        action: 'archive',
+        confidence: 0.99,
+        title: subject,
+        summary:
+          'Health insurance premium payment or processing notification routed to Finance/Bills.',
+        reasoning: 'Insurance Payment Receipt',
       }
     }
   }
