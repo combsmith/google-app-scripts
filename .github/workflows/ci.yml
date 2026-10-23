@@ -95,7 +95,7 @@ jobs:
       - name: Export auto-fixes as patch
         id: patch
         run: |
-          git add -A
+          git add -u -- . ':(exclude).github/workflows'
           git diff --cached --binary > "${RUNNER_TEMP}/autofix.patch"
           if [ -s "${RUNNER_TEMP}/autofix.patch" ]; then
             echo "has_patch=true" >> "$GITHUB_OUTPUT"
@@ -137,11 +137,15 @@ jobs:
 
       - name: Commit and push auto-fixes
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT_WORKFLOWS }}
+          GH_TOKEN: ${{ secrets.GH_PAT_DON_PETRY || secrets.GH_PAT_WORKFLOWS }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           if [ -z "${GH_TOKEN}" ]; then
-            echo "::error::GH_PAT_WORKFLOWS is required for autofix pushes."
+            echo "::error::GH_PAT_DON_PETRY (or legacy GH_PAT_WORKFLOWS) is required for autofix pushes."
+            exit 1
+          fi
+          if git apply --numstat "${RUNNER_TEMP}/autofix-patch/autofix.patch" | awk '{print $3}' | grep -q '^\.github/workflows/'; then
+            echo "::error::autofix patch touches workflow files; refusing to push."
             exit 1
           fi
           git apply --index "${RUNNER_TEMP}/autofix-patch/autofix.patch"
