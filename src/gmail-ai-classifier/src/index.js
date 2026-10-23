@@ -1124,6 +1124,34 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     }
   }
 
+  // Non-Profit & Charity Community Newsletters & Impact Updates
+  if (
+    sLower.indexOf('ignite-hope.org') !== -1 ||
+    sLower.indexOf('helpingoneguy.com') !== -1 ||
+    sLower.indexOf('charitywater.org') !== -1 ||
+    sLower.indexOf('compassion.com') !== -1 ||
+    sLower.indexOf('worldvision.org') !== -1 ||
+    ((sLower.indexOf('newsletter') !== -1 ||
+      sLower.indexOf('update') !== -1 ||
+      sLower.indexOf('impact') !== -1) &&
+      (subLower.indexOf('impact update') !== -1 ||
+        subLower.indexOf('ministry update') !== -1 ||
+        subLower.indexOf('community update') !== -1))
+  ) {
+    return {
+      canonicalDomain: '07_Community_NonProfit',
+      canonical_label: '07_Community_NonProfit',
+      subLabel: 'NonProfit/General',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.98,
+      title: subject,
+      summary:
+        'Community non-profit organization newsletter or project impact update routed to Updates.',
+      reasoning: 'NonProfit Impact Newsletter',
+    }
+  }
+
   // Developer & Infrastructure Monitoring Alerts
   if (
     sLower.indexOf('notifications@linear.app') !== -1 ||
@@ -1230,6 +1258,51 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       summary:
         'Cloud provider tier status, SaaS trial expiration, or account plan notification routed to Tech/Alerts.',
       reasoning: 'SaaS / Cloud Plan Alert',
+    }
+  }
+
+  // Package Registry & Repository Publishing Notifications (PyPI, npm, Docker Hub, crates.io)
+  if (
+    sLower.indexOf('pypi.org') !== -1 ||
+    sLower.indexOf('npmjs.com') !== -1 ||
+    sLower.indexOf('docker.com') !== -1 ||
+    sLower.indexOf('crates.io') !== -1 ||
+    subLower.indexOf('[pypi]') !== -1 ||
+    subLower.indexOf('trusted publisher') !== -1
+  ) {
+    return {
+      canonicalDomain: '05_Tech_Infrastructure',
+      canonical_label: '05_Tech_Infrastructure',
+      subLabel: 'Tech/Alerts',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary:
+        'Package repository publishing, release, or trusted publisher notification routed to Tech/Alerts.',
+      reasoning: 'Package Registry Alert',
+    }
+  }
+
+  // Third-Party App Authorization & Account Data Sharing Security Alerts (Keep in Primary)
+  if (
+    subLower.indexOf('you shared some google account data with') !== -1 ||
+    subLower.indexOf('google account data with') !== -1 ||
+    subLower.indexOf('granted access to your google account') !== -1 ||
+    subLower.indexOf('third-party access') !== -1 ||
+    subLower.indexOf('app access granted') !== -1
+  ) {
+    return {
+      canonicalDomain: '05_Tech_Infrastructure',
+      canonical_label: '05_Tech_Infrastructure',
+      subLabel: 'Tech/Security',
+      category: 'Primary',
+      action: 'keep',
+      confidence: 1.0,
+      title: subject,
+      summary:
+        'Third-party application account data sharing or authorization notice preserved in Primary Inbox as security warning.',
+      reasoning: 'Third-Party Authorization Shield',
     }
   }
 

@@ -2755,6 +2755,54 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(trialEndingRes.reasoning).toBe('SaaS / Cloud Plan Alert')
         })
 
+        test('shields third-party app authorization and Google account data sharing notices into Primary keep', () => {
+          const authNotice = fn(
+            'noreply-accounts@google.com',
+            'You shared some Google Account data with example-app.com',
+            'Google confirmed an authorization event where Sign in with Google was used to log into example-app.',
+            null,
+            {}
+          )
+          expect(authNotice).not.toBeNull()
+          expect(authNotice.canonicalDomain).toBe('05_Tech_Infrastructure')
+          expect(authNotice.subLabel).toBe('Tech/Security')
+          expect(authNotice.category).toBe('Primary')
+          expect(authNotice.action).toBe('keep')
+          expect(authNotice.reasoning).toBe('Third-Party Authorization Shield')
+        })
+
+        test('classifies package registry and PyPI trusted publisher alerts into Tech/Alerts archive', () => {
+          const pypiRes = fn(
+            'noreply@pypi.org',
+            '[PyPI] Trusted publisher removed from example-package',
+            'PyPI reported that user example removed a GitHub Actions trusted publisher from the project.',
+            null,
+            {}
+          )
+          expect(pypiRes).not.toBeNull()
+          expect(pypiRes.canonicalDomain).toBe('05_Tech_Infrastructure')
+          expect(pypiRes.subLabel).toBe('Tech/Alerts')
+          expect(pypiRes.category).toBe('Updates')
+          expect(pypiRes.action).toBe('archive')
+          expect(pypiRes.reasoning).toBe('Package Registry Alert')
+        })
+
+        test('classifies non-profit charity impact newsletters (Ignite Hope) into Community_NonProfit Updates archive', () => {
+          const charityRes = fn(
+            'info@ignite-hope.org',
+            '632 hours later, the doors opened!',
+            'Ignite Hope shared a project milestone and renovation update sent via their mass mailer.',
+            null,
+            {}
+          )
+          expect(charityRes).not.toBeNull()
+          expect(charityRes.canonicalDomain).toBe('07_Community_NonProfit')
+          expect(charityRes.subLabel).toBe('NonProfit/General')
+          expect(charityRes.category).toBe('Updates')
+          expect(charityRes.action).toBe('archive')
+          expect(charityRes.reasoning).toBe('NonProfit Impact Newsletter')
+        })
+
         test('shields thread containing user-sent message with plain object fallback', () => {
           const mockThread = {
             getMessages: () => [{ from: 'testuser@example.com' }],
