@@ -110,12 +110,13 @@ describe('Performance and Scalability Benchmarks', () => {
 
     // 1,000 cached retrieval iterations benchmark
     const startTime = Date.now()
+    let lastRes = null
     for (let i = 0; i < 1000; i++) {
-      const res = JSON.parse(mockCache.get(key))
-      expect(res.canonicalDomain).toBe('02_Finance_Legal')
+      lastRes = JSON.parse(mockCache.get(key))
     }
     const elapsed = Date.now() - startTime
 
+    expect(lastRes.canonicalDomain).toBe('02_Finance_Legal')
     // 1,000 cache hits should process in under 50ms total (< 0.05ms per hit)
     expect(elapsed).toBeLessThan(50)
   })
