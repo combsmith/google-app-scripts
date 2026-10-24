@@ -123,7 +123,7 @@ jobs:
     if: needs.autofix.outputs.has_patch == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout code (clean, no PR-installed tooling)
