@@ -34,9 +34,8 @@
 # reflow comments, re-introducing drift, so it must not reformat this file.
 .github/workflows/persona-mention.yml
 # pr-review is a standards-owned caller stub copied VERBATIM from
-# combsmith/.github/standards/workflows/pr-review.yml. The canonical uses
-# double-quoted YAML scalars and a two-space gap before the `# NOSONAR` markers;
-# Prettier would rewrite both, re-introducing drift, and the CI autofix job
-# cannot push workflow-file changes (no `workflows` permission), so it must not
-# reformat this file.
+# combsmith/.github/standards/workflows/pr-review.yml. Its exact bytes
+# (including the two-space gap before the `# NOSONAR` marker) are enforced by the
+# central byte-identity stub-drift guard. Prettier would collapse that gap and
+# reflow comments, re-introducing drift, so it must not reformat this file.
 .github/workflows/pr-review.yml
