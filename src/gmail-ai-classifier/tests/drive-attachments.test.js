@@ -7,6 +7,8 @@ const {
   ensureDriveTaxonomyFolder,
   isDuplicateAttachment,
   resolveAttachmentName,
+  extractZipArchiveToSubfolder,
+  unzipExistingDriveArchive,
   persistCanonicalAttachmentsToDrive,
   formatProgressiveDisclosureEntry,
   auditClassifications,
@@ -915,6 +917,348 @@ describe('Drive Attachment Persistence along Taxonomy Path', () => {
       expect(desc).toContain('Domain: 04_Family_Health')
       expect(desc).toContain('Sub-label: Family/School-Student')
       expect(desc).toContain('Thread-ID: th-tuition-101')
+    })
+
+    test('preserves .zip archive AND auto-unzips contents into dedicated subfolder', () => {
+      const mockDriveApp = createMockDriveApp()
+      const zipBlob = createMockAttachment({
+        name: 'Onboarding_Docs.zip',
+        contentType: 'application/zip',
+        content: 'zip-binary-data',
+        size: 50000,
+      })
+      const thread = {
+        getId: () => 'th-zip-101',
+        getFirstMessageSubject: () => 'Employment Onboarding Packet',
+        getMessages: () => [{ getAttachments: () => [zipBlob] }],
+      }
+      const classification = {
+        canonicalDomain: '06_Work_Career',
+        subLabel: 'Work/Career-Jobs',
+      }
+      const mockUnzippedEntries = [
+        createMockAttachment({
+          name: 'Offer_Letter.pdf',
+          contentType: 'application/pdf',
+          content: 'Offer details',
+          size: 20000,
+        }),
+        createMockAttachment({
+          name: 'Benefits_Summary.docx',
+          contentType:
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          content: 'Benefits details',
+          size: 15000,
+        }),
+        createMockAttachment({
+          name: '__MACOSX/._Offer_Letter.pdf',
+          contentType: 'application/octet-stream',
+          content: 'junk',
+          size: 500,
+        }),
+        createMockAttachment({
+          name: '.DS_Store',
+          contentType: 'application/octet-stream',
+          content: 'junk',
+          size: 1000,
+        }),
+      ]
+      const services = {
+        DriveApp: mockDriveApp,
+        Utilities: {
+          formatDate: () => '2026-10-25T12:00:00Z',
+          unzip: jest.fn(() => mockUnzippedEntries),
+        },
+      }
+
+      const saved = persistCanonicalAttachmentsToDrive(
+        thread,
+        classification,
+        {},
+        services
+      )
+
+      // 1 zip archive saved + 2 eligible unzipped files (junk ignored) = 3 total
+      expect(saved).toHaveLength(3)
+      expect(saved[0].name).toBe('Onboarding_Docs.zip')
+      expect(saved[1].name).toBe('Onboarding_Docs/Offer_Letter.pdf')
+      expect(saved[2].name).toBe('Onboarding_Docs/Benefits_Summary.docx')
+
+      const careerFolder = mockDriveApp
+        .getRootFolder()
+        .getFoldersByName('06_Work_Career')
+        .next()
+        .getFoldersByName('Career_Jobs')
+        .next()
+
+      // The original zip file is preserved in the parent folder
+      const zipFile = careerFolder.getFilesByName('Onboarding_Docs.zip').next()
+      expect(zipFile).toBeDefined()
+      expect(zipFile.getDescription()).toContain('[AI_INDEXED]')
+
+      // The subfolder contains the extracted files
+      const zipSubfolder = careerFolder
+        .getFoldersByName('Onboarding_Docs')
+        .next()
+      expect(zipSubfolder).toBeDefined()
+
+      const extractedPdf = zipSubfolder
+        .getFilesByName('Offer_Letter.pdf')
+        .next()
+      expect(extractedPdf).toBeDefined()
+      expect(extractedPdf.getDescription()).toContain(
+        'Extracted-From: Onboarding_Docs.zip'
+      )
+      expect(extractedPdf.getDescription()).toContain('Domain: 06_Work_Career')
+
+      const extractedDoc = zipSubfolder
+        .getFilesByName('Benefits_Summary.docx')
+        .next()
+      expect(extractedDoc).toBeDefined()
+
+      // Junk files were not created
+      expect(zipSubfolder.getFilesByName('.DS_Store').hasNext()).toBe(false)
+    })
+  })
+
+  describe('extractZipArchiveToSubfolder', () => {
+    test('returns empty array if targetFolder is null or Utilities.unzip is missing', () => {
+      expect(extractZipArchiveToSubfolder(null, {})).toEqual([])
+      const mockFolder = createMockFolder('target')
+      expect(extractZipArchiveToSubfolder(mockFolder, {}, {})).toEqual([])
+    })
+
+    test('extracts eligible files into subfolder and skips OS artifacts', () => {
+      const parentFolder = createMockFolder('parent')
+      const mockZipBlob = createMockAttachment({
+        name: 'archive_bundle.zip',
+        content: 'dummy-zip',
+      })
+      const entries = [
+        createMockAttachment({
+          name: 'doc1.pdf',
+          content: 'pdf content',
+          size: 10000,
+        }),
+        createMockAttachment({
+          name: '__MACOSX/._doc1.pdf',
+          content: 'junk',
+          size: 200,
+        }),
+        createMockAttachment({
+          name: '.DS_Store',
+          content: 'junk',
+          size: 500,
+        }),
+        createMockAttachment({
+          name: 'Thumbs.db',
+          content: 'junk',
+          size: 500,
+        }),
+        createMockAttachment({
+          name: 'notes.txt',
+          content: 'text content',
+          size: 2000,
+        }),
+      ]
+      const services = {
+        Utilities: {
+          unzip: jest.fn(() => entries),
+        },
+      }
+      const metadata = {
+        canonicalDomain: '01_Household',
+        subfolderName: 'Home_Inventory',
+        tagBlock: '[AI_INDEXED] 2026-10-25T12:00:00Z',
+        sourceFileName: 'archive_bundle.zip',
+      }
+
+      const results = extractZipArchiveToSubfolder(
+        parentFolder,
+        mockZipBlob,
+        services,
+        metadata
+      )
+
+      expect(results).toHaveLength(2)
+      expect(results[0].name).toBe('archive_bundle/doc1.pdf')
+      expect(results[1].name).toBe('archive_bundle/notes.txt')
+
+      const subfolder = parentFolder.getFoldersByName('archive_bundle').next()
+      expect(subfolder).toBeDefined()
+      const savedDoc = subfolder.getFilesByName('doc1.pdf').next()
+      expect(savedDoc.getDescription()).toContain(
+        'Extracted-From: archive_bundle.zip'
+      )
+      expect(savedDoc.getDescription()).toContain('[AI_INDEXED]')
+    })
+
+    test('skips duplicates if file already exists in extracted folder with same hash', () => {
+      const parentFolder = createMockFolder('parent')
+      const subfolder = parentFolder.createFolder('my_archive')
+      // Pre-populate with identical file
+      const existingAtt = createMockAttachment({
+        name: 'already_there.pdf',
+        content: 'exact same content',
+        size: 5000,
+      })
+      subfolder.createFile(existingAtt)
+
+      const mockZipBlob = createMockAttachment({
+        name: 'my_archive.zip',
+        content: 'dummy-zip',
+      })
+      const entries = [
+        createMockAttachment({
+          name: 'already_there.pdf',
+          content: 'exact same content',
+          size: 5000,
+        }),
+        createMockAttachment({
+          name: 'new_file.pdf',
+          content: 'different content',
+          size: 6000,
+        }),
+      ]
+      const services = {
+        Utilities: {
+          unzip: jest.fn(() => entries),
+        },
+      }
+
+      const results = extractZipArchiveToSubfolder(
+        parentFolder,
+        mockZipBlob,
+        services,
+        { sourceFileName: 'my_archive.zip' }
+      )
+
+      expect(results).toHaveLength(1)
+      expect(results[0].name).toBe('my_archive/new_file.pdf')
+    })
+
+    test('handles Drive File object with getBlob() and getName()', () => {
+      const parentFolder = createMockFolder('parent')
+      const mockBlob = createMockAttachment({
+        name: 'drive_file.zip',
+        content: 'raw-zip',
+      })
+      const mockDriveFile = {
+        getName: () => 'drive_file.zip',
+        getBlob: () => mockBlob,
+      }
+      const entries = [
+        createMockAttachment({
+          name: 'statement.pdf',
+          content: 'statement content',
+          size: 10000,
+        }),
+      ]
+      const services = {
+        Utilities: {
+          unzip: jest.fn(() => entries),
+        },
+      }
+
+      const results = extractZipArchiveToSubfolder(
+        parentFolder,
+        mockDriveFile,
+        services
+      )
+
+      expect(results).toHaveLength(1)
+      expect(results[0].name).toBe('drive_file/statement.pdf')
+    })
+  })
+
+  describe('unzipExistingDriveArchive', () => {
+    test('extracts existing archive by filename in targetFolder', () => {
+      const parentFolder = createMockFolder('parent')
+      const mockZipBlob = createMockAttachment({
+        name: 'existing_packet.zip',
+        content: 'zip-data',
+      })
+      parentFolder.createFile(mockZipBlob)
+
+      const entries = [
+        createMockAttachment({
+          name: 'tax_return.pdf',
+          content: 'tax data',
+          size: 12000,
+        }),
+      ]
+      const services = {
+        Utilities: {
+          unzip: jest.fn(() => entries),
+        },
+      }
+
+      const results = unzipExistingDriveArchive(
+        'existing_packet.zip',
+        parentFolder,
+        services
+      )
+
+      expect(results).toHaveLength(1)
+      expect(results[0].name).toBe('existing_packet/tax_return.pdf')
+      const sub = parentFolder.getFoldersByName('existing_packet').next()
+      expect(sub.getFilesByName('tax_return.pdf').hasNext()).toBe(true)
+    })
+
+    test('extracts archive by fileId using DriveApp.getFileById', () => {
+      const parentFolder = createMockFolder('parent')
+      const mockZipBlob = createMockAttachment({
+        name: 'remote_packet.zip',
+        content: 'zip-data',
+      })
+      const zipFile = parentFolder.createFile(mockZipBlob)
+      const fileId = zipFile.getId()
+
+      const mockDriveApp = {
+        getFileById: jest.fn((id) => {
+          if (id === fileId) {
+            return {
+              getName: () => 'remote_packet.zip',
+              getBlob: () => mockZipBlob,
+              getParents: () => ({
+                hasNext: () => true,
+                next: () => parentFolder,
+              }),
+            }
+          }
+          return null
+        }),
+      }
+
+      const entries = [
+        createMockAttachment({
+          name: 'closing_statement.pdf',
+          content: 'closing data',
+          size: 25000,
+        }),
+      ]
+      const services = {
+        DriveApp: mockDriveApp,
+        Utilities: {
+          unzip: jest.fn(() => entries),
+        },
+      }
+
+      const results = unzipExistingDriveArchive(fileId, null, services)
+
+      expect(results).toHaveLength(1)
+      expect(results[0].name).toBe('remote_packet/closing_statement.pdf')
+    })
+
+    test('returns empty array if file cannot be found', () => {
+      const parentFolder = createMockFolder('parent')
+      const mockDriveApp = {
+        getFileById: jest.fn(() => null),
+      }
+      const results = unzipExistingDriveArchive('missing.zip', parentFolder, {
+        DriveApp: mockDriveApp,
+      })
+      expect(results).toEqual([])
     })
   })
 

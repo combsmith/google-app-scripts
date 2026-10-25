@@ -4253,6 +4253,220 @@ function resolveAttachmentName(folder, fileName, newFileBlob, options) {
 }
 
 /**
+ * Unzips a canonical .zip archive into a dedicated subfolder within targetFolder.
+ * Filters out OS artifacts, checks document eligibility, skips duplicates, and tags files.
+ *
+ * @param {Folder} targetFolder - Parent Google Drive folder
+ * @param {Blob|File} zipBlobOrFile - The zip file or blob to extract
+ * @param {Object} [services] - Utilities, DriveApp, getFileHash
+ * @param {Object} [metadata] - { canonicalDomain, subfolderName, tagBlock, sourceFileName }
+ * @returns {Array} Array of saved file summary objects
+ */
+function extractZipArchiveToSubfolder(
+  targetFolder,
+  zipBlobOrFile,
+  services,
+  metadata
+) {
+  if (!targetFolder) return []
+  var utils =
+    services && services.Utilities
+      ? services.Utilities
+      : typeof Utilities !== 'undefined'
+        ? Utilities
+        : null
+  if (!utils || typeof utils.unzip !== 'function') return []
+
+  var zipBlob = zipBlobOrFile
+  var fileName = ''
+  if (zipBlobOrFile && typeof zipBlobOrFile.getBlob === 'function') {
+    zipBlob = zipBlobOrFile.getBlob()
+    fileName =
+      typeof zipBlobOrFile.getName === 'function' ? zipBlobOrFile.getName() : ''
+  } else if (zipBlobOrFile && typeof zipBlobOrFile.getName === 'function') {
+    fileName = zipBlobOrFile.getName()
+  }
+  if (!fileName && metadata && metadata.sourceFileName) {
+    fileName = metadata.sourceFileName
+  }
+  if (!fileName) fileName = 'archive.zip'
+
+  var zipStem = fileName.replace(/\.zip$/i, '')
+  if (!zipStem) return []
+
+  var extractedSummaries = []
+  try {
+    var unzippedBlobs = utils.unzip(zipBlob)
+    if (!unzippedBlobs || unzippedBlobs.length === 0) return []
+
+    var archiveFolder = getOrCreateChildFolder_(targetFolder, zipStem)
+    var extractLimit = Math.min(unzippedBlobs.length, 25)
+    var helperFns = {
+      getFileHash: (services && services.getFileHash) || getFileHash,
+    }
+
+    for (var z = 0; z < extractLimit; z++) {
+      var entryBlob = unzippedBlobs[z]
+      if (!entryBlob) continue
+      var entryName =
+        typeof entryBlob.getName === 'function'
+          ? entryBlob.getName()
+          : 'unnamed'
+
+      var slashIdx = Math.max(
+        entryName.lastIndexOf('/'),
+        entryName.lastIndexOf('\\')
+      )
+      var baseEntryName =
+        slashIdx !== -1 ? entryName.substring(slashIdx + 1) : entryName
+
+      if (
+        !baseEntryName ||
+        baseEntryName.charAt(0) === '.' ||
+        entryName.indexOf('__MACOSX') !== -1 ||
+        baseEntryName.toLowerCase() === 'thumbs.db'
+      ) {
+        continue
+      }
+
+      if (
+        typeof isEligibleAttachment === 'function' &&
+        !isEligibleAttachment(entryBlob)
+      ) {
+        console.log(
+          '[extractZipArchiveToSubfolder] Skipped ineligible file inside zip: ' +
+            baseEntryName
+        )
+        continue
+      }
+
+      var existingExtracted =
+        typeof archiveFolder.getFilesByName === 'function'
+          ? archiveFolder.getFilesByName(baseEntryName)
+          : null
+
+      if (
+        typeof isDuplicateAttachment === 'function' &&
+        isDuplicateAttachment(existingExtracted, entryBlob, helperFns)
+      ) {
+        console.log(
+          '[extractZipArchiveToSubfolder] Skipped exact duplicate inside zip: ' +
+            baseEntryName
+        )
+        continue
+      }
+
+      var extractedFile = archiveFolder.createFile(entryBlob)
+      var extractedId =
+        typeof extractedFile.getId === 'function' ? extractedFile.getId() : ''
+      var extractedUrl =
+        typeof extractedFile.getUrl === 'function'
+          ? extractedFile.getUrl()
+          : 'https://drive.google.com/file/d/' + extractedId
+
+      if (typeof extractedFile.setDescription === 'function') {
+        try {
+          var desc =
+            (metadata && metadata.tagBlock ? metadata.tagBlock + '\n' : '') +
+            'Extracted-From: ' +
+            fileName
+          extractedFile.setDescription(desc)
+        } catch (eDesc) {}
+      }
+
+      var cDomain =
+        metadata && metadata.canonicalDomain ? metadata.canonicalDomain : ''
+      var sFolder =
+        metadata && metadata.subfolderName ? metadata.subfolderName : ''
+
+      extractedSummaries.push({
+        name:
+          zipStem +
+          '/' +
+          (typeof extractedFile.getName === 'function'
+            ? extractedFile.getName()
+            : baseEntryName),
+        url: extractedUrl,
+        id: extractedId,
+        domain: cDomain,
+        subfolder: sFolder ? sFolder + '/' + zipStem : zipStem,
+      })
+
+      console.log(
+        '[extractZipArchiveToSubfolder] Auto-unzipped: ' +
+          (cDomain ? cDomain + '/' : '') +
+          (sFolder ? sFolder + '/' : '') +
+          zipStem +
+          '/' +
+          baseEntryName
+      )
+    }
+  } catch (unzipErr) {
+    console.warn(
+      '[extractZipArchiveToSubfolder] Auto-unzip warning for ' +
+        fileName +
+        ': ' +
+        unzipErr.message
+    )
+  }
+
+  return extractedSummaries
+}
+
+/**
+ * Unzips an existing .zip file in Google Drive into a subfolder named after the zip stem.
+ *
+ * @param {string} fileIdOrName - File ID or file name in targetFolder
+ * @param {Folder} targetFolder - Drive folder containing the zip file
+ * @param {Object} [services] - { DriveApp, Utilities }
+ * @returns {Array} Array of extracted file summaries
+ */
+function unzipExistingDriveArchive(fileIdOrName, targetFolder, services) {
+  var drive =
+    (services && services.DriveApp) ||
+    (typeof DriveApp !== 'undefined' ? DriveApp : null)
+  if (!drive && !targetFolder) {
+    console.error(
+      '[unzipExistingDriveArchive] DriveApp or targetFolder required.'
+    )
+    return []
+  }
+
+  var zipFile = null
+  var parentFolder = targetFolder
+
+  if (targetFolder && typeof targetFolder.getFilesByName === 'function') {
+    var files = targetFolder.getFilesByName(fileIdOrName)
+    if (files && files.hasNext && files.hasNext()) {
+      zipFile = files.next()
+    }
+  }
+
+  if (!zipFile && drive && typeof drive.getFileById === 'function') {
+    try {
+      zipFile = drive.getFileById(fileIdOrName)
+      if (!parentFolder && typeof zipFile.getParents === 'function') {
+        var parents = zipFile.getParents()
+        if (parents && parents.hasNext && parents.hasNext()) {
+          parentFolder = parents.next()
+        }
+      }
+    } catch (e) {}
+  }
+
+  if (!zipFile || !parentFolder) {
+    console.error(
+      '[unzipExistingDriveArchive] Could not locate zip file: ' + fileIdOrName
+    )
+    return []
+  }
+
+  return extractZipArchiveToSubfolder(parentFolder, zipFile, services, {
+    sourceFileName: zipFile.getName(),
+  })
+}
+
+/**
  * Persists attached documents from a canonical email thread to Google Drive along
  * the label's taxonomy path, skipping duplicates and strictly ignoring non-canonical emails.
  */
@@ -4408,6 +4622,50 @@ function persistCanonicalAttachmentsToDrive(
           domain: canonicalDomain,
           subfolder: subfolderName,
         })
+
+        // Auto-Unzip Enhancement for .zip archives
+        if (fileName.toLowerCase().endsWith('.zip')) {
+          var tagDateMeta =
+            services &&
+            services.Utilities &&
+            typeof services.Utilities.formatDate === 'function'
+              ? services.Utilities.formatDate(
+                  new Date(),
+                  'GMT',
+                  "yyyy-MM-dd'T'HH:mm:ss'Z'"
+                )
+              : new Date().toISOString()
+          var metaTag =
+            '[AI_INDEXED] ' +
+            tagDateMeta +
+            '\nDomain: ' +
+            canonicalDomain +
+            '\nSub-label: ' +
+            (classification.subLabel || '') +
+            '\nSource: Gmail Attachment' +
+            '\nThread-ID: ' +
+            (typeof thread.getId === 'function'
+              ? thread.getId()
+              : thread.id || '') +
+            (subject ? '\nEmail-Subject: ' + subject : '')
+
+          var extractedFiles = extractZipArchiveToSubfolder(
+            targetFolder,
+            newFileBlob,
+            services,
+            {
+              canonicalDomain: canonicalDomain,
+              subfolderName: subfolderName,
+              tagBlock: metaTag,
+              sourceFileName: fileName,
+            }
+          )
+          if (extractedFiles && extractedFiles.length > 0) {
+            for (var ef = 0; ef < extractedFiles.length; ef++) {
+              savedFiles.push(extractedFiles[ef])
+            }
+          }
+        }
       } catch (saveErr) {
         console.error(
           '[persistCanonicalAttachmentsToDrive] Error saving file ' +
@@ -5453,6 +5711,8 @@ if (typeof module !== 'undefined' && module.exports) {
     ensureDriveTaxonomyFolder: ensureDriveTaxonomyFolder,
     isDuplicateAttachment: isDuplicateAttachment,
     resolveAttachmentName: resolveAttachmentName,
+    extractZipArchiveToSubfolder: extractZipArchiveToSubfolder,
+    unzipExistingDriveArchive: unzipExistingDriveArchive,
     persistCanonicalAttachmentsToDrive: persistCanonicalAttachmentsToDrive,
     auditAndBackfillCanonicalAttachments: auditAndBackfillCanonicalAttachments,
     runDryRunAttachmentAudit: runDryRunAttachmentAudit,
