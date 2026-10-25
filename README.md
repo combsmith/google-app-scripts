@@ -94,7 +94,7 @@ For commercial inquiries, email [support@combsmith.com](mailto:support@combsmith
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please review the org-wide [Contributing Guide](https://github.com/combsmith/.github/blob/main/CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
+Contributions are welcome! Please review the org-wide [Contributing Guide](https://github.com/combsmith/.github/blob/main/CONTRIBUTING.md) and [Security Policy](https://github.com/combsmith/.github/blob/main/SECURITY.md).
 
 1.  Fork the repository.
 2.  Create a feature branch (`git checkout -b feature/AmazingScript`).
