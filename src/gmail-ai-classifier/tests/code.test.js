@@ -4251,13 +4251,51 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
                 capturedQuery = q
                 return []
               }),
+              getUserLabelByName: jest.fn((name) => ({ getName: () => name })),
             }
             const res = mod.runMissedEmailsSweep({}, { GmailApp: mockGmail })
             expect(mockGmail.search).toHaveBeenCalled()
             expect(capturedQuery).toBe(
-              'label:AI/Needs-Retry OR (newer_than:14d -label:Processed)'
+              'label:AI/Needs-Retry OR (newer_than:14d -label:Processed -label:AI/Manual-Review)'
             )
             expect(res.scanned).toBe(0)
+          })
+
+          test('revertAndQueueMissedCareerEmails reverts Processed and queues AI/Needs-Retry on unclassified career threads', () => {
+            const added = []
+            const removed = []
+            const processedLbl = { getName: () => 'Processed' }
+            const unclassifiedCareerThread = {
+              getId: () => 'th-career-unclass',
+              getLabels: () => [processedLbl],
+              removeLabel: jest.fn((l) => removed.push(l.getName())),
+              addLabel: jest.fn((l) => added.push(l.getName())),
+            }
+            const alreadyClassifiedThread = {
+              getId: () => 'th-career-done',
+              getLabels: () => [processedLbl, { getName: () => 'Work/Career' }],
+              removeLabel: jest.fn(),
+              addLabel: jest.fn(),
+            }
+
+            const mockGmail = {
+              search: jest.fn(() => [
+                unclassifiedCareerThread,
+                alreadyClassifiedThread,
+              ]),
+              getUserLabelByName: jest.fn((name) => ({ getName: () => name })),
+            }
+
+            const modified = mod.revertAndQueueMissedCareerEmails(mockGmail, {
+              processedLabel: 'Processed',
+              retryLabel: 'AI/Needs-Retry',
+            })
+
+            expect(modified).toEqual(['th-career-unclass'])
+            expect(removed).toContain('Processed')
+            expect(added).toContain('AI/Needs-Retry')
+            expect(alreadyClassifiedThread.removeLabel).not.toHaveBeenCalled()
+            expect(alreadyClassifiedThread.addLabel).not.toHaveBeenCalled()
           })
         })
       })

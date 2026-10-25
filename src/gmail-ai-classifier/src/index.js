@@ -707,6 +707,13 @@ function listAvailableGeminiModels(config, services) {
  * @returns {Object|null} GmailLabel or null on failure
  */
 function ensureGmailLabel(labelName, gmailApp, gmailAdvanced) {
+  if (
+    !gmailApp ||
+    !labelName ||
+    typeof gmailApp.getUserLabelByName !== 'function'
+  ) {
+    return null
+  }
   const existing = gmailApp.getUserLabelByName(labelName)
   if (existing) return existing
   try {
@@ -4916,11 +4923,92 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
 }
 
 /**
+ * Automatically identifies career/employment emails from the past 14 days that were
+ * missed or prematurely labeled 'Processed' without receiving a canonical career tag.
+ * Reverts 'Processed' and applies 'AI/Needs-Retry' to durably queue them for classification.
+ */
+function revertAndQueueMissedCareerEmails(gmailApp, config) {
+  var gmail = gmailApp || (typeof GmailApp !== 'undefined' ? GmailApp : null)
+  if (!gmail || typeof gmail.search !== 'function') return []
+
+  var cfg =
+    config ||
+    (typeof getAiClassifierConfig === 'function' ? getAiClassifierConfig() : {})
+  var retryLabelName = cfg.retryLabel || 'AI/Needs-Retry'
+  var processedLabelName = cfg.processedLabel || 'Processed'
+
+  var retryLabel = ensureGmailLabel(retryLabelName, gmail)
+  var processedLabel = ensureGmailLabel(processedLabelName, gmail)
+
+  var recoverySearch =
+    'newer_than:14d (subject:"Employment Agreement" OR subject:"Employment Contract" OR subject:"Offer Letter" OR subject:"PwC" OR subject:"KPMG")'
+
+  var modifiedThreadIds = []
+  try {
+    var threads = gmail.search(recoverySearch, 0, 20)
+    for (var i = 0; i < threads.length; i++) {
+      var thread = threads[i]
+      var labels = []
+      if (typeof thread.getLabels === 'function') {
+        var lObjs = thread.getLabels() || []
+        labels = lObjs.map(function (l) {
+          return typeof l.getName === 'function' ? l.getName() : String(l)
+        })
+      }
+      var hasCareerTag =
+        labels.indexOf('06_Work_Career') !== -1 ||
+        labels.indexOf('Work/Career') !== -1 ||
+        labels.indexOf('Career/DJ') !== -1 ||
+        labels.indexOf('Career/Rachel') !== -1 ||
+        labels.indexOf('Career_Interviews') !== -1
+
+      if (!hasCareerTag) {
+        var changed = false
+        if (processedLabel && labels.indexOf(processedLabelName) !== -1) {
+          try {
+            thread.removeLabel(processedLabel)
+            changed = true
+          } catch (e) {}
+        }
+        if (retryLabel && labels.indexOf(retryLabelName) === -1) {
+          try {
+            thread.addLabel(retryLabel)
+            changed = true
+          } catch (e) {}
+        }
+        if (changed) {
+          var tId =
+            typeof thread.getId === 'function' ? thread.getId() : String(i)
+          modifiedThreadIds.push(tId)
+          console.log(
+            '[revertAndQueueMissedCareerEmails] Reverted Processed and queued thread: ' +
+              tId
+          )
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(
+      '[revertAndQueueMissedCareerEmails] Search or labeling error:',
+      err.message
+    )
+  }
+  return modifiedThreadIds
+}
+
+/**
  * Convenience runner for re-evaluating recent emails from the past 14 days
  * or emails tagged with AI/Needs-Retry that may have been missed.
  */
 function runMissedEmailsSweep(config, services) {
-  var query = 'label:AI/Needs-Retry OR (newer_than:14d -label:Processed)'
+  var gmail =
+    (services && services.GmailApp) ||
+    (typeof GmailApp !== 'undefined' ? GmailApp : null)
+  if (typeof revertAndQueueMissedCareerEmails === 'function') {
+    revertAndQueueMissedCareerEmails(gmail, config)
+  }
+  var query =
+    'label:AI/Needs-Retry OR (newer_than:14d -label:Processed -label:AI/Manual-Review)'
   console.log('[runMissedEmailsSweep] Sweeping query: ' + query)
   return reclassifyThreadsByQuery(
     query,
@@ -5228,6 +5316,13 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
         '[processEmailsWithAiClassifier] GmailApp service is missing.'
       )
       return
+    }
+
+    if (
+      !customConfig &&
+      typeof revertAndQueueMissedCareerEmails === 'function'
+    ) {
+      revertAndQueueMissedCareerEmails(gmail, config)
     }
 
     var threads = gmail.search(config.unprocessedQuery, 0, 10)
@@ -5661,6 +5756,7 @@ module.exports = {
   reclassifyThreadsByQuery,
   runRealignmentAudit,
   runMissedEmailsSweep,
+  revertAndQueueMissedCareerEmails,
   sweepAllUnreadInboxEmails,
   CANONICAL_TAXONOMY_SUBFOLDERS,
   SUBLABEL_TO_FOLDER_MAP,

@@ -88,7 +88,7 @@ function getAiClassifierConfig() {
       (props && typeof props.getProperty === 'function'
         ? props.getProperty('UNPROCESSED_QUERY')
         : null) ||
-      'label:AI/Needs-Retry OR (in:inbox -label:Processed -label:AI/Manual-Review)',
+      'label:AI/Needs-Retry OR (in:inbox -label:Processed -label:AI/Manual-Review) OR (newer_than:14d -label:Processed -label:AI/Manual-Review -from:me)',
     autoFilterConfidenceThreshold: parseFloat(
       (props && typeof props.getProperty === 'function'
         ? props.getProperty('AUTO_FILTER_THRESHOLD')
