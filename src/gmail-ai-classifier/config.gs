@@ -76,7 +76,19 @@ function getAiClassifierConfig() {
       (props && typeof props.getProperty === 'function'
         ? props.getProperty('PROCESSED_LABEL')
         : '') || 'Processed',
-    unprocessedQuery: 'in:inbox -label:Processed',
+    retryLabel:
+      (props && typeof props.getProperty === 'function'
+        ? props.getProperty('RETRY_LABEL')
+        : '') || 'AI/Needs-Retry',
+    manualReviewLabel:
+      (props && typeof props.getProperty === 'function'
+        ? props.getProperty('MANUAL_REVIEW_LABEL')
+        : '') || 'AI/Manual-Review',
+    unprocessedQuery:
+      (props && typeof props.getProperty === 'function'
+        ? props.getProperty('UNPROCESSED_QUERY')
+        : null) ||
+      'label:AI/Needs-Retry OR (in:inbox -label:Processed -label:AI/Manual-Review)',
     autoFilterConfidenceThreshold: parseFloat(
       (props && typeof props.getProperty === 'function'
         ? props.getProperty('AUTO_FILTER_THRESHOLD')

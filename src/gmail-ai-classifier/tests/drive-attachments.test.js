@@ -222,6 +222,18 @@ describe('Drive Attachment Persistence along Taxonomy Path', () => {
         resolveTaxonomySubfolderName('06_Work_Career', 'Work/Employer')
       ).toBe('Career_Interviews')
       expect(
+        resolveTaxonomySubfolderName('06_Work_Career', 'Work/Career')
+      ).toBe('Career_Interviews')
+      expect(resolveTaxonomySubfolderName('06_Work_Career', 'Career/DJ')).toBe(
+        'Career_DJ'
+      )
+      expect(
+        resolveTaxonomySubfolderName('06_Work_Career', 'Career/Rachel')
+      ).toBe('Career_Rachel')
+      expect(
+        resolveTaxonomySubfolderName('06_Work_Career', 'Career/Employer')
+      ).toBe('Employer')
+      expect(
         resolveTaxonomySubfolderName('02_Finance_Legal', 'Finance/Donations')
       ).toBe('Taxes')
     })

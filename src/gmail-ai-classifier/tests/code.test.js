@@ -3813,4 +3813,438 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
       })
     })
   })
+
+  describe('Durable Queuing & Cross-Execution Recovery Architecture', () => {
+    const implementations = [
+      {
+        name: 'src/index.js',
+        mod: require('../src/index.js'),
+      },
+      {
+        name: 'code.gs',
+        mod: require('../code.gs'),
+      },
+    ]
+
+    describe('deterministicRuleClassify_ for 06_Work_Career', () => {
+      implementations.forEach(({ name, mod }) => {
+        describe(name, () => {
+          test('classifies employment agreement into 06_Work_Career Primary keep', () => {
+            const res = mod.deterministicRuleClassify_(
+              'hr@company.com',
+              'Employment Agreement - Jane Doe',
+              'Please find attached the signed employment agreement and restrictive covenants.'
+            )
+            expect(res).not.toBeNull()
+            expect(res.canonicalDomain).toBe('06_Work_Career')
+            expect(res.subLabel).toBe('Work/Career')
+            expect(res.category).toBe('Primary')
+            expect(res.action).toBe('keep')
+            expect(res.confidence).toBe(0.99)
+          })
+
+          test('classifies offer letter from snippet into 06_Work_Career Primary keep', () => {
+            const res = mod.deterministicRuleClassify_(
+              'recruiter@techcorp.com',
+              'Next Steps in Process',
+              'We are pleased to offer you the position of Principal Architect. Terms of employment are enclosed.'
+            )
+            expect(res).not.toBeNull()
+            expect(res.canonicalDomain).toBe('06_Work_Career')
+            expect(res.subLabel).toBe('Work/Career')
+            expect(res.category).toBe('Primary')
+            expect(res.action).toBe('keep')
+          })
+
+          test('classifies interview confirmation or screen into 06_Work_Career', () => {
+            const res = mod.deterministicRuleClassify_(
+              'talent@startup.io',
+              'Interview Confirmation: Technical Phone Screen',
+              'Here is the link for your upcoming interview with the engineering team.'
+            )
+            expect(res).not.toBeNull()
+            expect(res.canonicalDomain).toBe('06_Work_Career')
+            expect(res.category).toBe('Primary')
+          })
+        })
+      })
+    })
+
+    describe('Circuit Breaker Helpers', () => {
+      implementations.forEach(({ name, mod }) => {
+        describe(name, () => {
+          let mockStore
+          let mockProps
+
+          beforeEach(() => {
+            mockStore = {}
+            mockProps = {
+              getProperty: jest.fn((k) => mockStore[k] || null),
+              setProperty: jest.fn((k, v) => {
+                mockStore[k] = String(v)
+              }),
+              deleteProperty: jest.fn((k) => {
+                delete mockStore[k]
+              }),
+            }
+          })
+
+          test('isCircuitBreakerOpen returns false when no property is set', () => {
+            expect(mod.isCircuitBreakerOpen(mockProps, 1000000)).toBe(false)
+          })
+
+          test('isCircuitBreakerOpen returns false when backoff time has passed', () => {
+            mockStore['GEMINI_BACKOFF_UNTIL'] = '1000500'
+            expect(mod.isCircuitBreakerOpen(mockProps, 1001000)).toBe(false)
+          })
+
+          test('isCircuitBreakerOpen returns true when backoff time is in the future', () => {
+            mockStore['GEMINI_BACKOFF_UNTIL'] = '2000000'
+            expect(mod.isCircuitBreakerOpen(mockProps, 1000000)).toBe(true)
+          })
+
+          test('recordCircuitBreakerFailure computes exponential backoff and sets properties', () => {
+            const now = 1000000
+            const delay1 = mod.recordCircuitBreakerFailure(mockProps, null, now)
+            expect(delay1).toBe(60000)
+            expect(mockStore['GEMINI_BACKOFF_FAILURES']).toBe('1')
+            expect(mockStore['GEMINI_BACKOFF_UNTIL']).toBe(String(now + 60000))
+
+            const delay2 = mod.recordCircuitBreakerFailure(mockProps, null, now)
+            expect(delay2).toBe(120000)
+            expect(mockStore['GEMINI_BACKOFF_FAILURES']).toBe('2')
+            expect(mockStore['GEMINI_BACKOFF_UNTIL']).toBe(String(now + 120000))
+          })
+
+          test('recordCircuitBreakerFailure honors retryDelayMs if greater than exponential backoff', () => {
+            const now = 1000000
+            const delay = mod.recordCircuitBreakerFailure(
+              mockProps,
+              180000,
+              now
+            )
+            expect(delay).toBe(180000)
+            expect(mockStore['GEMINI_BACKOFF_UNTIL']).toBe(String(now + 180000))
+          })
+
+          test('recordCircuitBreakerFailure caps backoff at 1 hour (3600000ms)', () => {
+            const now = 1000000
+            mockStore['GEMINI_BACKOFF_FAILURES'] = '10'
+            const delay = mod.recordCircuitBreakerFailure(
+              mockProps,
+              99999999,
+              now
+            )
+            expect(delay).toBe(3600000)
+          })
+
+          test('recordCircuitBreakerSuccess clears backoff properties', () => {
+            mockStore['GEMINI_BACKOFF_UNTIL'] = '2000000'
+            mockStore['GEMINI_BACKOFF_FAILURES'] = '3'
+            mod.recordCircuitBreakerSuccess(mockProps)
+            expect(mockStore['GEMINI_BACKOFF_UNTIL']).toBeUndefined()
+            expect(mockStore['GEMINI_BACKOFF_FAILURES']).toBeUndefined()
+          })
+        })
+      })
+    })
+
+    describe('Thread Retry Helpers', () => {
+      implementations.forEach(({ name, mod }) => {
+        describe(name, () => {
+          let cacheStore
+          let mockCache
+          const thread = { getId: () => 'th-retry-123' }
+
+          beforeEach(() => {
+            cacheStore = {}
+            mockCache = {
+              get: jest.fn((k) => cacheStore[k] || null),
+              put: jest.fn((k, v) => {
+                cacheStore[k] = String(v)
+              }),
+              remove: jest.fn((k) => {
+                delete cacheStore[k]
+              }),
+            }
+          })
+
+          test('getThreadRetryCount_ returns 0 initially and increments correctly', () => {
+            expect(mod.getThreadRetryCount_(thread, mockCache)).toBe(0)
+            const c1 = mod.incrementThreadRetryCount_(thread, mockCache)
+            expect(c1).toBe(1)
+            expect(mod.getThreadRetryCount_(thread, mockCache)).toBe(1)
+            const c2 = mod.incrementThreadRetryCount_(thread, mockCache)
+            expect(c2).toBe(2)
+          })
+
+          test('clearThreadRetryCount_ removes thread retry key from cache', () => {
+            mod.incrementThreadRetryCount_(thread, mockCache)
+            expect(mod.getThreadRetryCount_(thread, mockCache)).toBe(1)
+            mod.clearThreadRetryCount_(thread, mockCache)
+            expect(mod.getThreadRetryCount_(thread, mockCache)).toBe(0)
+          })
+        })
+      })
+    })
+
+    describe('processEmailsWithAiClassifier Durable Queue & Escalation', () => {
+      implementations.forEach(({ name, mod }) => {
+        describe(name, () => {
+          let mockLockService
+          let mockLock
+          let mockPropsStore
+          let mockProps
+          let mockCacheStore
+          let mockCache
+
+          beforeEach(() => {
+            mockLock = {
+              tryLock: jest.fn(() => true),
+              releaseLock: jest.fn(),
+            }
+            mockLockService = {
+              getScriptLock: jest.fn(() => mockLock),
+            }
+            mockPropsStore = {}
+            mockProps = {
+              getProperty: jest.fn((k) => mockPropsStore[k] || null),
+              setProperty: jest.fn((k, v) => {
+                mockPropsStore[k] = String(v)
+              }),
+              deleteProperty: jest.fn((k) => {
+                delete mockPropsStore[k]
+              }),
+            }
+            mockCacheStore = {}
+            mockCache = {
+              get: jest.fn((k) => mockCacheStore[k] || null),
+              put: jest.fn((k, v) => {
+                mockCacheStore[k] = String(v)
+              }),
+              remove: jest.fn((k) => {
+                delete mockCacheStore[k]
+              }),
+            }
+          })
+
+          test('applies retryLabel (AI/Needs-Retry) when remote classification fails', () => {
+            const addedLabels = []
+            const thread = {
+              getId: () => 'th-fail-1',
+              getMessages: () => [
+                {
+                  getFrom: () => 'obscure@sender.com',
+                  getSubject: () => 'Obscure Subject Without Rule',
+                  getPlainBody: () => 'Random content',
+                  getDate: () => new Date(),
+                },
+              ],
+              getLabels: () => [],
+              addLabel: jest.fn((lbl) => {
+                addedLabels.push(lbl.getName())
+              }),
+              removeLabel: jest.fn(),
+            }
+
+            const mockGmail = {
+              search: jest.fn(() => [thread]),
+              getUserLabelByName: jest.fn((name) => ({ getName: () => name })),
+            }
+            const mockClassifyFn = jest.fn(() => null)
+
+            mod.processEmailsWithAiClassifier(
+              {
+                geminiApiKey: 'test-key',
+                processedLabel: 'Processed',
+                retryLabel: 'AI/Needs-Retry',
+                manualReviewLabel: 'AI/Manual-Review',
+                unprocessedQuery: 'in:inbox',
+              },
+              {
+                LockService: mockLockService,
+                GmailApp: mockGmail,
+                classifyFn: mockClassifyFn,
+                PropertiesService: { getScriptProperties: () => mockProps },
+                CacheService: { getScriptCache: () => mockCache },
+              }
+            )
+
+            expect(mockClassifyFn).toHaveBeenCalledTimes(1)
+            expect(addedLabels).toContain('AI/Needs-Retry')
+            expect(addedLabels).not.toContain('Processed')
+            expect(mockPropsStore['GEMINI_BACKOFF_FAILURES']).toBe('1')
+          })
+
+          test('escalates to manualReviewLabel (AI/Manual-Review) and removes retryLabel after 5 failures', () => {
+            const addedLabels = []
+            const removedLabels = []
+            mockCacheStore['retry_count_th-poison-5'] = '4'
+
+            const retryLabelObj = { getName: () => 'AI/Needs-Retry' }
+            const thread = {
+              getId: () => 'th-poison-5',
+              getMessages: () => [
+                {
+                  getFrom: () => 'poison@sender.com',
+                  getSubject: () => 'Poison Pill Email',
+                  getPlainBody: () => 'Malformatted garbage',
+                  getDate: () => new Date(),
+                },
+              ],
+              getLabels: () => [retryLabelObj],
+              addLabel: jest.fn((lbl) => {
+                addedLabels.push(lbl.getName())
+              }),
+              removeLabel: jest.fn((lbl) => {
+                removedLabels.push(lbl.getName())
+              }),
+            }
+
+            const mockGmail = {
+              search: jest.fn(() => [thread]),
+              getUserLabelByName: jest.fn((name) => ({ getName: () => name })),
+            }
+            const mockClassifyFn = jest.fn(() => null)
+
+            mod.processEmailsWithAiClassifier(
+              {
+                geminiApiKey: 'test-key',
+                processedLabel: 'Processed',
+                retryLabel: 'AI/Needs-Retry',
+                manualReviewLabel: 'AI/Manual-Review',
+                unprocessedQuery: 'label:AI/Needs-Retry',
+              },
+              {
+                LockService: mockLockService,
+                GmailApp: mockGmail,
+                classifyFn: mockClassifyFn,
+                PropertiesService: { getScriptProperties: () => mockProps },
+                CacheService: { getScriptCache: () => mockCache },
+              }
+            )
+
+            expect(addedLabels).toContain('AI/Manual-Review')
+            expect(removedLabels).toContain('AI/Needs-Retry')
+            expect(addedLabels).not.toContain('Processed')
+          })
+
+          test('removes retryLabel and adds processedLabel when thread succeeds on subsequent run', () => {
+            const addedLabels = []
+            const removedLabels = []
+            const retryLabelObj = { getName: () => 'AI/Needs-Retry' }
+            mockCacheStore['retry_count_th-success-later'] = '2'
+
+            const thread = {
+              getId: () => 'th-success-later',
+              getMessages: () => [
+                {
+                  getFrom: () => 'billing@powercompany.com',
+                  getSubject: () => 'Electric Utility Bill Statement',
+                  getPlainBody: () => 'Your bill is $145.00',
+                  getDate: () => new Date(),
+                },
+              ],
+              getLabels: () => [retryLabelObj],
+              addLabel: jest.fn((lbl) => {
+                addedLabels.push(lbl.getName())
+              }),
+              removeLabel: jest.fn((lbl) => {
+                removedLabels.push(lbl.getName())
+              }),
+              moveToArchive: jest.fn(),
+            }
+
+            const mockGmail = {
+              search: jest.fn(() => [thread]),
+              getUserLabelByName: jest.fn((name) => ({ getName: () => name })),
+            }
+            const mockClassifyFn = jest.fn(() => ({
+              canonicalDomain: '01_Household',
+              canonical_label: '01_Household',
+              subLabel: 'Household/Bills',
+              category: 'Updates',
+              action: 'archive',
+              confidence: 0.99,
+              title: 'Electric Bill',
+              summary: 'Monthly power statement',
+            }))
+
+            mod.processEmailsWithAiClassifier(
+              {
+                geminiApiKey: 'test-key',
+                processedLabel: 'Processed',
+                retryLabel: 'AI/Needs-Retry',
+                manualReviewLabel: 'AI/Manual-Review',
+                unprocessedQuery: 'label:AI/Needs-Retry',
+              },
+              {
+                LockService: mockLockService,
+                GmailApp: mockGmail,
+                classifyFn: mockClassifyFn,
+                PropertiesService: { getScriptProperties: () => mockProps },
+                CacheService: { getScriptCache: () => mockCache },
+              }
+            )
+
+            expect(removedLabels).toContain('AI/Needs-Retry')
+            expect(addedLabels).toContain('Processed')
+            expect(
+              mockCacheStore['retry_count_th-success-later']
+            ).toBeUndefined()
+          })
+
+          test('skips remote API when circuit breaker is active but deterministic employment rules still succeed in 0ms', () => {
+            mockPropsStore['GEMINI_BACKOFF_UNTIL'] = String(Date.now() + 600000)
+
+            const addedLabels = []
+            const threadDet = {
+              getId: () => 'th-employment-det',
+              getMessages: () => [
+                {
+                  getFrom: () => 'hr@employer.com',
+                  getSubject: () => 'Employment Agreement',
+                  getPlainBody: () =>
+                    'Here is your official employment agreement.',
+                  getDate: () => new Date(),
+                },
+              ],
+              getLabels: () => [],
+              addLabel: jest.fn((lbl) => {
+                addedLabels.push(lbl.getName())
+              }),
+              removeLabel: jest.fn(),
+            }
+
+            const mockGmail = {
+              search: jest.fn(() => [threadDet]),
+              getUserLabelByName: jest.fn((name) => ({ getName: () => name })),
+            }
+            const mockClassifyFn = jest.fn()
+
+            mod.processEmailsWithAiClassifier(
+              {
+                geminiApiKey: 'test-key',
+                processedLabel: 'Processed',
+                retryLabel: 'AI/Needs-Retry',
+                manualReviewLabel: 'AI/Manual-Review',
+                unprocessedQuery: 'in:inbox',
+              },
+              {
+                LockService: mockLockService,
+                GmailApp: mockGmail,
+                classifyFn: mockClassifyFn,
+                PropertiesService: { getScriptProperties: () => mockProps },
+                CacheService: { getScriptCache: () => mockCache },
+              }
+            )
+
+            expect(mockClassifyFn).not.toHaveBeenCalled()
+            expect(addedLabels).toContain('Work/Career')
+            expect(addedLabels).toContain('Processed')
+          })
+        })
+      })
+    })
+  })
 })

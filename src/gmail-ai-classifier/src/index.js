@@ -327,6 +327,17 @@ function classifyWithGemini(sender, subject, snippet, config, services) {
     CacheService.getScriptCache
       ? CacheService.getScriptCache()
       : null)
+  var props =
+    (services &&
+    services.PropertiesService &&
+    typeof services.PropertiesService.getScriptProperties === 'function'
+      ? services.PropertiesService.getScriptProperties()
+      : null) ||
+    (services && services.properties) ||
+    (typeof PropertiesService !== 'undefined' &&
+    typeof PropertiesService.getScriptProperties === 'function'
+      ? PropertiesService.getScriptProperties()
+      : null)
 
   // 1. Check classification cache
   var cacheKey = null
@@ -346,6 +357,14 @@ function classifyWithGemini(sender, subject, snippet, config, services) {
         // Cache read is non-blocking
       }
     }
+  }
+
+  // 2. Check circuit breaker before hitting remote endpoints
+  if (isCircuitBreakerOpen(props)) {
+    console.warn(
+      '[classifyWithGemini] Circuit breaker is open. Skipping remote API call.'
+    )
+    return null
   }
 
   var prompt = buildOntologicalPrompt(config, sender, subject, snippet)
@@ -411,6 +430,9 @@ function classifyWithGemini(sender, subject, snippet, config, services) {
             console.log(
               '[classifyWithGemini] Success using endpoint: ' + endpoints[e]
             )
+            if (props) {
+              recordCircuitBreakerSuccess(props)
+            }
             if (cache && cacheKey) {
               try {
                 cache.put(cacheKey, JSON.stringify(parsedObj), 21600)
@@ -430,6 +452,9 @@ function classifyWithGemini(sender, subject, snippet, config, services) {
             delayMs / 1000 +
             's before fallback...'
         )
+        if (props) {
+          recordCircuitBreakerFailure(props, delayMs)
+        }
         sleepFn(delayMs)
       } else {
         console.warn(
@@ -463,6 +488,9 @@ function classifyWithGemini(sender, subject, snippet, config, services) {
   console.error(
     '[classifyWithGemini] All model endpoints failed or rate-limited.'
   )
+  if (props) {
+    recordCircuitBreakerFailure(props)
+  }
   return null
 }
 
@@ -531,6 +559,103 @@ function parseRetryDelayMs(response) {
     console.warn('[parseRetryDelayMs] Failed to parse retry delay:', e.message)
   }
   return 5000
+}
+
+/**
+ * Cross-execution circuit breaker state check.
+ * Checks whether remote AI calls should be skipped due to active backoff.
+ */
+function isCircuitBreakerOpen(props, nowMs) {
+  if (!props || typeof props.getProperty !== 'function') return false
+  var untilStr = props.getProperty('GEMINI_BACKOFF_UNTIL')
+  if (!untilStr) return false
+  var until = parseInt(untilStr, 10)
+  if (isNaN(until)) return false
+  var now = typeof nowMs === 'number' ? nowMs : Date.now()
+  return now < until
+}
+
+/**
+ * Records a remote API failure in PropertiesService, applying exponential backoff.
+ */
+function recordCircuitBreakerFailure(props, retryDelayMs, nowMs) {
+  if (!props || typeof props.setProperty !== 'function') return 0
+  var now = typeof nowMs === 'number' ? nowMs : Date.now()
+  var currentFailures = 0
+  if (typeof props.getProperty === 'function') {
+    var fStr = props.getProperty('GEMINI_BACKOFF_FAILURES')
+    currentFailures = parseInt(fStr || '0', 10)
+    if (isNaN(currentFailures)) currentFailures = 0
+  }
+  var failures = currentFailures + 1
+  props.setProperty('GEMINI_BACKOFF_FAILURES', String(failures))
+
+  var backoffMs = 60000 * Math.pow(2, failures - 1)
+  if (typeof retryDelayMs === 'number' && retryDelayMs > backoffMs) {
+    backoffMs = retryDelayMs
+  }
+  if (backoffMs > 3600000) {
+    backoffMs = 3600000
+  }
+  var backoffUntil = now + backoffMs
+  props.setProperty('GEMINI_BACKOFF_UNTIL', String(backoffUntil))
+  return backoffMs
+}
+
+/**
+ * Resets the cross-execution circuit breaker upon a successful remote API call.
+ */
+function recordCircuitBreakerSuccess(props) {
+  if (!props) return
+  if (typeof props.deleteProperty === 'function') {
+    props.deleteProperty('GEMINI_BACKOFF_UNTIL')
+    props.deleteProperty('GEMINI_BACKOFF_FAILURES')
+  } else if (typeof props.setProperty === 'function') {
+    props.setProperty('GEMINI_BACKOFF_UNTIL', '')
+    props.setProperty('GEMINI_BACKOFF_FAILURES', '0')
+  }
+}
+
+/**
+ * Retrieves the retry failure count for a thread from cache.
+ */
+function getThreadRetryCount_(thread, cache) {
+  if (!thread || !cache || typeof cache.get !== 'function') return 0
+  var threadId = typeof thread.getId === 'function' ? thread.getId() : ''
+  if (!threadId) return 0
+  var val = cache.get('retry_count_' + threadId)
+  var count = parseInt(val || '0', 10)
+  return isNaN(count) ? 0 : count
+}
+
+/**
+ * Increments the retry failure count for a thread in cache (6h TTL).
+ */
+function incrementThreadRetryCount_(thread, cache) {
+  if (!thread || !cache || typeof cache.put !== 'function') return 1
+  var threadId = typeof thread.getId === 'function' ? thread.getId() : ''
+  if (!threadId) return 1
+  var count = getThreadRetryCount_(thread, cache) + 1
+  try {
+    cache.put('retry_count_' + threadId, String(count), 21600)
+  } catch (e) {
+    // Cache write is non-blocking
+  }
+  return count
+}
+
+/**
+ * Clears the retry failure count for a thread from cache.
+ */
+function clearThreadRetryCount_(thread, cache) {
+  if (!thread || !cache || typeof cache.remove !== 'function') return
+  var threadId = typeof thread.getId === 'function' ? thread.getId() : ''
+  if (!threadId) return
+  try {
+    cache.remove('retry_count_' + threadId)
+  } catch (e) {
+    // Non-blocking
+  }
 }
 
 function listAvailableGeminiModels(config, services) {
@@ -1045,6 +1170,58 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       summary:
         'Direct 1:1 teacher or school counselor correspondence preserved in Primary Inbox.',
       reasoning: 'Teacher 1:1 Shield',
+    }
+  }
+
+  // 06_Work_Career: Employment Agreements, Offer Letters, Employment Contracts, Recruiter Screens & Interviews
+  var isCareerSubject = [
+    'employment agreement',
+    'employment contract',
+    'offer letter',
+    'job offer',
+    'employment offer',
+    'terms of employment',
+    'independent contractor agreement',
+    'restrictive covenant',
+    'confidentiality agreement',
+    'interview confirmation',
+    'interview invitation',
+    'invitation to interview',
+    'interview with ',
+    'schedule an interview',
+    'recruiter screen',
+    'phone screen',
+  ].some(function (w) {
+    return subLower.indexOf(w) !== -1
+  })
+
+  var snipLower = (snippet || '').toLowerCase()
+  var isCareerSnippet = [
+    'employment agreement',
+    'offer of employment',
+    'terms of employment',
+    'pleased to offer you the position',
+    'pleased to offer you',
+    'pleased to confirm our offer',
+    'congratulations on your offer',
+    'employment document',
+    'restrictive covenants agreement',
+  ].some(function (w) {
+    return snipLower.indexOf(w) !== -1
+  })
+
+  if (isCareerSubject || isCareerSnippet) {
+    return {
+      canonicalDomain: '06_Work_Career',
+      canonical_label: '06_Work_Career',
+      subLabel: 'Work/Career',
+      category: 'Primary',
+      action: 'keep',
+      confidence: 0.99,
+      title: subject,
+      summary:
+        'Employment agreement, offer letter, or career interview communication preserved in Primary Inbox.',
+      reasoning: 'Career / Employment Contract Rule',
     }
   }
 
@@ -3049,7 +3226,13 @@ const CANONICAL_TAXONOMY_SUBFOLDERS = {
     'Activities_Camps',
   ],
   '05_Tech_Infrastructure': ['NAS_Backups', 'Tasker', 'Hardware_Licenses'],
-  '06_Work_Career': ['Career_Interviews', 'Expenses_Admin'],
+  '06_Work_Career': [
+    'Career_Interviews',
+    'Career_DJ',
+    'Career_Rachel',
+    'Employer',
+    'Expenses_Admin',
+  ],
   '07_Community_NonProfit': ['Community_BOD', 'Projects_Telemetry'],
 }
 
@@ -3156,6 +3339,9 @@ const SUBLABEL_TO_FOLDER_MAP = {
   'work/general': 'Career_Interviews',
   'work/career': 'Career_Interviews',
   'work/employer': 'Career_Interviews',
+  'career/dj': 'Career_DJ',
+  'career/rachel': 'Career_Rachel',
+  'career/employer': 'Employer',
   'work/notes': 'Career_Interviews',
   'work/expenses': 'Expenses_Admin',
   'work/expenses-admin': 'Expenses_Admin',
@@ -5057,10 +5243,50 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
       gmail,
       services.Gmail
     )
+    var retryLabelName = config.retryLabel || 'AI/Needs-Retry'
+    var manualReviewLabelName = config.manualReviewLabel || 'AI/Manual-Review'
+    var retryLabel = ensureGmailLabel(retryLabelName, gmail, services.Gmail)
+    var manualReviewLabel = ensureGmailLabel(
+      manualReviewLabelName,
+      gmail,
+      services.Gmail
+    )
+
+    var props =
+      (services.PropertiesService &&
+      typeof services.PropertiesService.getScriptProperties === 'function'
+        ? services.PropertiesService.getScriptProperties()
+        : null) ||
+      services.properties ||
+      (typeof PropertiesService !== 'undefined' &&
+      typeof PropertiesService.getScriptProperties === 'function'
+        ? PropertiesService.getScriptProperties()
+        : null)
+
+    var cache =
+      (services.CacheService &&
+      typeof services.CacheService.getScriptCache === 'function'
+        ? services.CacheService.getScriptCache()
+        : null) ||
+      services.cache ||
+      (typeof CacheService !== 'undefined' &&
+      typeof CacheService.getScriptCache === 'function'
+        ? CacheService.getScriptCache()
+        : null)
 
     const startTime = Date.now()
     var consecutiveRemoteFailures = 0
     var remoteQuotaExhausted = false
+
+    if (isCircuitBreakerOpen(props)) {
+      var untilMs = parseInt(props.getProperty('GEMINI_BACKOFF_UNTIL'), 10)
+      console.warn(
+        '[processEmailsWithAiClassifier] Circuit breaker is OPEN until ' +
+          (isNaN(untilMs) ? 'unknown' : new Date(untilMs).toISOString()) +
+          '; skipping remote AI calls for this execution.'
+      )
+      remoteQuotaExhausted = true
+    }
 
     for (var i = 0; i < threads.length; i++) {
       if (Date.now() - startTime > 270000) {
@@ -5147,6 +5373,7 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
           usedRemoteApi = true
           if (!classification) {
             consecutiveRemoteFailures++
+            recordCircuitBreakerFailure(props)
             if (consecutiveRemoteFailures >= 2) {
               console.warn(
                 '[processEmailsWithAiClassifier] Multiple consecutive remote API failures detected; disabling remote API for remainder of batch to preserve execution budget.'
@@ -5155,6 +5382,7 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
             }
           } else {
             consecutiveRemoteFailures = 0
+            recordCircuitBreakerSuccess(props)
           }
         }
       }
@@ -5296,13 +5524,61 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
           setGmailCategoryTab(thread, classification.category, services.Gmail)
         }
 
+        // Remove retryLabel if present
+        if (retryLabel && threadLabels.indexOf(retryLabelName) !== -1) {
+          try {
+            thread.removeLabel(retryLabel)
+            console.log(
+              '[processEmailsWithAiClassifier] Removed retry label from successfully classified thread.'
+            )
+          } catch (rErr) {
+            console.warn(
+              '[processEmailsWithAiClassifier] Failed to remove retry label:',
+              rErr.message
+            )
+          }
+        }
+        clearThreadRetryCount_(thread, cache)
+
         if (processedLabel) {
           thread.addLabel(processedLabel)
         }
       } else {
-        console.warn(
-          '[processEmailsWithAiClassifier] Classification failed or returned null; preserving thread unprocessed for retry.'
-        )
+        if (usedRemoteApi) {
+          var retryCount = incrementThreadRetryCount_(thread, cache)
+          if (retryCount >= 5) {
+            if (retryLabel && threadLabels.indexOf(retryLabelName) !== -1) {
+              try {
+                thread.removeLabel(retryLabel)
+              } catch (rErr) {}
+            }
+            if (manualReviewLabel) {
+              thread.addLabel(manualReviewLabel)
+            }
+            console.warn(
+              '[processEmailsWithAiClassifier] Classification failed after ' +
+                retryCount +
+                ' attempts; escalated to ' +
+                manualReviewLabelName +
+                ' for manual review.'
+            )
+          } else {
+            if (retryLabel) {
+              thread.addLabel(retryLabel)
+            }
+            console.warn(
+              '[processEmailsWithAiClassifier] Classification failed or returned null; tagged with ' +
+                retryLabelName +
+                ' (attempt ' +
+                retryCount +
+                '/5) to ensure durable retry.'
+            )
+          }
+        } else {
+          console.warn(
+            '[processEmailsWithAiClassifier] Remote classification skipped for thread; preserving untouched for next execution.'
+          )
+        }
       }
 
       if (usedRemoteApi) {
@@ -5383,4 +5659,10 @@ module.exports = {
   parseRetryDelayMs,
   computeStringHash,
   listAvailableGeminiModels,
+  isCircuitBreakerOpen,
+  recordCircuitBreakerFailure,
+  recordCircuitBreakerSuccess,
+  getThreadRetryCount_,
+  incrementThreadRetryCount_,
+  clearThreadRetryCount_,
 }
