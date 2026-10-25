@@ -5197,6 +5197,21 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
 }
 
 /**
+ * Convenience runner for re-evaluating recent emails from the past 14 days
+ * or emails tagged with AI/Needs-Retry that may have been missed.
+ */
+function runMissedEmailsSweep(config, services) {
+  var query = 'label:AI/Needs-Retry OR (newer_than:14d -label:Processed)'
+  console.log('[runMissedEmailsSweep] Sweeping query: ' + query)
+  return reclassifyThreadsByQuery(
+    query,
+    { maxThreads: 30, dryRun: false },
+    config,
+    services
+  )
+}
+
+/**
  * Convenience runner to audit historical threads matching a query in dry-run mode.
  */
 function runRealignmentAudit(query, options, config, services) {
@@ -5297,6 +5312,7 @@ if (typeof module !== 'undefined' && module.exports) {
     runLiveAttachmentBackfill: runLiveAttachmentBackfill,
     reclassifyThreadsByQuery: reclassifyThreadsByQuery,
     runRealignmentAudit: runRealignmentAudit,
+    runMissedEmailsSweep: runMissedEmailsSweep,
     getFileHash: getFileHash,
     CANONICAL_TAXONOMY_SUBFOLDERS: CANONICAL_TAXONOMY_SUBFOLDERS,
     SUBLABEL_TO_FOLDER_MAP: SUBLABEL_TO_FOLDER_MAP,

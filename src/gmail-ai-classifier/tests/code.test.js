@@ -4243,6 +4243,22 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             expect(addedLabels).toContain('Work/Career')
             expect(addedLabels).toContain('Processed')
           })
+
+          test('runMissedEmailsSweep searches for recent unprocessed and retry-labeled threads', () => {
+            let capturedQuery = null
+            const mockGmail = {
+              search: jest.fn((q) => {
+                capturedQuery = q
+                return []
+              }),
+            }
+            const res = mod.runMissedEmailsSweep({}, { GmailApp: mockGmail })
+            expect(mockGmail.search).toHaveBeenCalled()
+            expect(capturedQuery).toBe(
+              'label:AI/Needs-Retry OR (newer_than:14d -label:Processed)'
+            )
+            expect(res.scanned).toBe(0)
+          })
         })
       })
     })
