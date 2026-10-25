@@ -13,7 +13,7 @@ function getAiClassifierConfig() {
   var modelName =
     (props && typeof props.getProperty === 'function'
       ? props.getProperty('GEMINI_MODEL')
-      : null) || 'gemini-2.0-flash'
+      : null) || 'gemini-2.5-flash'
 
   var userEmail = null
   try {

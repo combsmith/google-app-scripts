@@ -2688,9 +2688,12 @@ function classifyWithGemini(sender, subject, snippet, config, services) {
     endpoints.push(config.modelEndpoint)
   }
   var fallbackModels = [
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent',
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent',
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent',
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent',
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-latest:generateContent',
   ]
   for (var f = 0; f < fallbackModels.length; f++) {
     if (endpoints.indexOf(fallbackModels[f]) === -1) {
@@ -2966,8 +2969,33 @@ function ensureUserLabel(labelName, gmailApp, gmailAdvanced) {
   var app = gmailApp || (typeof GmailApp !== 'undefined' ? GmailApp : null)
   if (!app || !labelName) return null
   try {
-    var label = app.getUserLabelByName(labelName)
+    var label =
+      typeof app.getUserLabelByName === 'function'
+        ? app.getUserLabelByName(labelName)
+        : null
     if (label) return label
+
+    if (typeof app.getUserLabels === 'function') {
+      var allLabels = app.getUserLabels() || []
+      for (var i = 0; i < allLabels.length; i++) {
+        if (
+          allLabels[i] &&
+          typeof allLabels[i].getName === 'function' &&
+          allLabels[i].getName().toLowerCase() === labelName.toLowerCase()
+        ) {
+          return allLabels[i]
+        }
+      }
+    }
+
+    if (labelName.indexOf('/') !== -1) {
+      var parts = labelName.split('/')
+      var currentPath = ''
+      for (var p = 0; p < parts.length - 1; p++) {
+        currentPath = currentPath ? currentPath + '/' + parts[p] : parts[p]
+        ensureUserLabel(currentPath, app, gmailAdvanced)
+      }
+    }
 
     var adv =
       gmailAdvanced || (typeof Gmail !== 'undefined' && Gmail ? Gmail : null)
@@ -2996,6 +3024,21 @@ function ensureUserLabel(labelName, gmailApp, gmailAdvanced) {
     console.log('[ensureUserLabel] Created new label: ' + labelName)
     return label
   } catch (e) {
+    try {
+      if (typeof app.getUserLabels === 'function') {
+        var existingLabels = app.getUserLabels() || []
+        for (var j = 0; j < existingLabels.length; j++) {
+          if (
+            existingLabels[j] &&
+            typeof existingLabels[j].getName === 'function' &&
+            existingLabels[j].getName().toLowerCase() ===
+              labelName.toLowerCase()
+          ) {
+            return existingLabels[j]
+          }
+        }
+      }
+    } catch (e2) {}
     console.error(
       '[ensureUserLabel] Error creating label: ' + labelName + ' ' + e.message
     )
@@ -5285,16 +5328,32 @@ function runMissedEmailsSweep(config, services) {
   var gmail =
     (services && services.GmailApp) ||
     (typeof GmailApp !== 'undefined' ? GmailApp : null)
+  var cfg =
+    config ||
+    (typeof getAiClassifierConfig === 'function' ? getAiClassifierConfig() : {})
   if (typeof revertAndQueueMissedCareerEmails === 'function') {
-    revertAndQueueMissedCareerEmails(gmail, config)
+    revertAndQueueMissedCareerEmails(gmail, cfg)
   }
+
+  // 1. Direct Priority Recovery: First sweep and reclassify career & employment contract emails
+  var careerQuery =
+    'newer_than:14d (subject:"Employment Agreement" OR subject:"Employment Contract" OR subject:"Offer Letter" OR subject:"PwC" OR subject:"KPMG")'
+  console.log('[runMissedEmailsSweep] Priority career sweep: ' + careerQuery)
+  var careerResults = reclassifyThreadsByQuery(
+    careerQuery,
+    { maxThreads: 20, dryRun: false },
+    cfg,
+    services
+  )
+
+  // 2. Secondary General Recovery: Sweep other unclassified threads
   var query =
     'label:AI/Needs-Retry OR (newer_than:14d -label:Processed -label:AI/Manual-Review)'
   console.log('[runMissedEmailsSweep] Sweeping query: ' + query)
   return reclassifyThreadsByQuery(
     query,
     { maxThreads: 30, dryRun: false },
-    config,
+    cfg,
     services
   )
 }
