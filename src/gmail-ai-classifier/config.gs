@@ -15,6 +15,28 @@ function getAiClassifierConfig() {
       ? props.getProperty('GEMINI_MODEL')
       : null) || 'gemini-2.5-flash'
 
+  // Automatically upgrade deprecated models (gemini-1.5, gemini-2.0) to gemini-2.5-flash
+  if (
+    !modelName ||
+    modelName === 'gemini-2.0-flash' ||
+    modelName.indexOf('gemini-1.5') !== -1 ||
+    modelName.indexOf('gemini-2.0') !== -1
+  ) {
+    modelName = 'gemini-2.5-flash'
+  }
+
+  var customEndpoint =
+    props && typeof props.getProperty === 'function'
+      ? props.getProperty('GEMINI_ENDPOINT')
+      : ''
+  if (
+    customEndpoint &&
+    (customEndpoint.indexOf('gemini-1.5') !== -1 ||
+      customEndpoint.indexOf('gemini-2.0') !== -1)
+  ) {
+    customEndpoint = ''
+  }
+
   var userEmail = null
   try {
     if (
@@ -95,9 +117,7 @@ function getAiClassifierConfig() {
         : null) || '0.95'
     ),
     modelEndpoint:
-      (props && typeof props.getProperty === 'function'
-        ? props.getProperty('GEMINI_ENDPOINT')
-        : '') ||
+      customEndpoint ||
       'https://generativelanguage.googleapis.com/v1beta/models/' +
         modelName +
         ':generateContent',
