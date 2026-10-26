@@ -1340,7 +1340,7 @@ const DETERMINISTIC_RULE_SPECS_ = [
   'any::pypi.org|npmjs.com|docker.com|crates.io::::::[pypi]|trusted publisher::::05_Tech_Infrastructure::Tech/Alerts::Updates::archive::0.99::Package Registry Alert::Package repository publishing, release, or trusted publisher notification routed to Tech/Alerts.',
   'any::::::::you shared some google account data with|google account data with|granted access to your google account|third-party access|app access granted::::05_Tech_Infrastructure::Tech/Security::Primary::keep::1::Third-Party Authorization Shield::Third-party application account data sharing or authorization notice preserved in Primary Inbox as security warning.',
   'any::::::::verification code|security code|one-time passcode|one-time password|your login code|new sign-in|signed in from a new|new device signed in|sign-in from new device|security alert for your|password changed|password reset confirmation::::05_Tech_Infrastructure::Tech/Security::Updates::archive::0.99::Authentication/Sign-in Ping::Automated authentication verification code or device sign-in alert routed to Tech/Security.',
-  'any::cvs.com|walgreens.com|questdiagnostics.com|labcorp.com|zocdoc.com|athenahealth.com::::mychart|cvshealth::appointment reminder|upcoming appointment|appointment confirmation|appointment is confirmed|prescription is ready|prescription ready|refill reminder|refill confirmation::::04_Family_Health::Family/Health-Medical::Updates::archive::0.99::Healthcare/Pharmacy Alert::Automated patient portal appointment reminder or pharmacy prescription status notice.',
+  'sender+sub::cvs.com|walgreens.com|questdiagnostics.com|labcorp.com|zocdoc.com|athenahealth.com::::mychart|cvshealth::appointment reminder|upcoming appointment|appointment confirmation|appointment is confirmed|prescription is ready|prescription ready|refill reminder|refill confirmation::action required|abnormal|urgent|past due|overdue::04_Family_Health::Family/Health-Medical::Updates::archive::0.99::Healthcare/Pharmacy Alert::Automated patient portal appointment reminder or pharmacy prescription status notice.',
   'sender+sub::delta.com|southwest.com|aa.com|united.com|airbnb.com|vrbo.com|marriott.com|hilton.com|uber.com|lyft.com|waymo.com::::waymo::flight confirmation|flight status|boarding pass|check in for your flight|reservation confirmed|reservation confirmation|upcoming stay|trip with uber|ride with lyft|waymo ride|riding with waymo|receipt::::01_Household::Household/Travel::Updates::archive::0.99::Travel Confirmation::Travel itinerary reservation, flight check-in, or rideshare receipt.',
   'any::::::::how was your experience|how did we do|rate your recent|rate your experience|rate your stay|tell us what you think|take our survey|take our quick survey|quick survey|feedback requested|review your purchase|leave a review|your opinion matters::::::::Promotions::archive::0.99::Customer Survey::Automated post-transaction customer satisfaction feedback or survey request.',
   'any::ifttt.com|notify.mios.com::::::::::01_Household::Household/Property::Updates::archive::0.98::IFTTT / Weather Alert::Automated weather or IoT trigger notification routed to Household/Property.',
@@ -2472,7 +2472,16 @@ function auditClassifications(threads, config, services) {
       const domain = assignedCanonical[0]
       const subLabel =
         rawLabels.find((l) => {
-          if (!l || typeof l !== 'string' || !l.includes('/')) return false
+          if (
+            !l ||
+            typeof l !== 'string' ||
+            !l.includes('/') ||
+            l.toLowerCase().startsWith('ai/') ||
+            l.startsWith('Retention/') ||
+            l.includes('Archives')
+          ) {
+            return false
+          }
           if (/^0[1-7]_/.test(l)) {
             return l.startsWith(domain + '/')
           }
@@ -3237,7 +3246,7 @@ function evaluateAttachmentEligibility(att) {
     // 7b. Tracking, logo, signature stem blacklist
     const SIGNATURE_STEM_PATTERNS = [
       /logo/i,
-      /sig(nature)?/i,
+      /(^|[-_.\s])(sig|signature)($|[-_.\s\d])/i,
       /banner/i,
       /header/i,
       /footer/i,
@@ -4297,9 +4306,19 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
     )
     if (!canonicalDomain) continue
 
+    const isTaxonomySubLabel = (l) =>
+      Boolean(
+        l &&
+        l.includes('/') &&
+        !l.toLowerCase().startsWith('ai/') &&
+        !l.startsWith('Retention/') &&
+        !l.includes('Archives')
+      )
     const subLabel =
-      rawLabels.find((l) => l.includes('/') && !l.includes(canonicalDomain)) ||
-      rawLabels.find((l) => l.includes('/')) ||
+      rawLabels.find(
+        (l) => isTaxonomySubLabel(l) && !l.includes(canonicalDomain)
+      ) ||
+      rawLabels.find((l) => isTaxonomySubLabel(l)) ||
       ''
     const subfolderName = resolveTaxonomySubfolderName(
       canonicalDomain,
@@ -4861,6 +4880,7 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
         return (
           l.indexOf('/') !== -1 &&
           l !== oldDomain &&
+          l.toLowerCase().indexOf('ai/') !== 0 &&
           l.indexOf('Archives') === -1 &&
           l.indexOf('Retention/') === -1
         )
@@ -5377,9 +5397,9 @@ function purgeExpiredEmailsByRetentionPolicy(customConfig, customServices) {
   let trashedCount = 0
   let exemptedCount = 0
   let totalFound = 0
+  let offset = 0
 
   for (let page = 0; page < maxPages; page++) {
-    const offset = page * pageSize
     const rawPage = gmail.search(retentionQuery, offset, pageSize) || []
     const threads = sortThreadsByLastMessageDate_(rawPage)
     if (page === 0) {
@@ -5396,6 +5416,7 @@ function purgeExpiredEmailsByRetentionPolicy(customConfig, customServices) {
     }
 
     totalFound += threads.length
+    let pageRemainingCount = 0
 
     for (let i = 0; i < threads.length; i++) {
       try {
@@ -5442,6 +5463,7 @@ function purgeExpiredEmailsByRetentionPolicy(customConfig, customServices) {
           trashedCount++
         } else {
           exemptedCount++
+          pageRemainingCount++
           const subj =
             typeof thread.getFirstMessageSubject === 'function'
               ? thread.getFirstMessageSubject()
@@ -5452,6 +5474,7 @@ function purgeExpiredEmailsByRetentionPolicy(customConfig, customServices) {
           )
         }
       } catch (err) {
+        pageRemainingCount++
         console.warn(
           '[purgeExpiredEmailsByRetentionPolicy] Error processing thread: ' +
             err.message
@@ -5459,6 +5482,7 @@ function purgeExpiredEmailsByRetentionPolicy(customConfig, customServices) {
       }
     }
 
+    offset += pageRemainingCount
     if (rawPage.length < pageSize) {
       break
     }

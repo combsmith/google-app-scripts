@@ -5698,6 +5698,20 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
                 reasoning: 'Retail Promo',
               })
             )
+            expect(
+              mod.deterministicRuleClassify_(
+                'results@questdiagnostics.com',
+                'Action required: schedule follow-up for abnormal results',
+                'Please contact your physician.'
+              )
+            ).toBeNull()
+            expect(
+              mod.evaluateAttachmentEligibility({
+                getName: () => 'signed-employment-agreement.jpg',
+                getContentType: () => 'image/jpeg',
+                getSize: () => 50 * 1024,
+              }).eligible
+            ).toBe(true)
           })
         })
       })
