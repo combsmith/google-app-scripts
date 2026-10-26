@@ -20,7 +20,6 @@ const path = require('path')
 const { execFileSync } = require('child_process')
 
 const REPO_ROOT = path.resolve(__dirname, '..')
-const SCANNER_MARKER = 'pii-scanner-definition'
 
 // Base PII patterns with human-readable descriptions
 const BASE_PROHIBITED_RULES = [
@@ -147,14 +146,14 @@ function getStagedFiles() {
   try {
     const output = execFileSync(
       'git',
-      ['diff', '--cached', '--name-only', '--diff-filter=ACMR'],
+      ['diff', '--cached', '-z', '--name-only', '--diff-filter=ACMR'],
       {
         cwd: REPO_ROOT,
         encoding: 'utf8',
       }
     )
     return output
-      .split('\n')
+      .split('\0')
       .map((f) => f.trim())
       .filter(Boolean)
   } catch (err) {
@@ -225,8 +224,9 @@ function readTargetFileContent(relPath, isStagedOnly) {
 }
 
 function scanFile(relPath, { isStagedOnly = false } = {}) {
+  if (isIgnoredPath(relPath)) return []
   const content = readTargetFileContent(relPath, isStagedOnly)
-  if (!content || content.includes(SCANNER_MARKER)) return []
+  if (!content) return []
 
   const lines = content.split('\n')
   const violations = []

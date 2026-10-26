@@ -9,7 +9,7 @@
  * - Idempotency Guard (skips duplicate entries)
  */
 
-var RULE6_PATTERNS = [
+var GITHUB_SYNC_RULE6_PATTERNS_ = [
   [/\S \? \S/, "' ? ' between words (was an em dash or a · separator)"],
   [/\?\?/, "'??' (was a multi-codepoint emoji)"],
   [/[A-Za-z]\?[A-Za-z]/, "'?' inside a word (was a curly apostrophe)"],
@@ -20,10 +20,13 @@ var RULE6_PATTERNS = [
 function assertClean_(text, what) {
   if (!text) return
   var stripped = String(text).replace(/https?:\/\/\S+/g, '')
-  for (var i = 0; i < RULE6_PATTERNS.length; i++) {
-    if (RULE6_PATTERNS[i][0].test(stripped)) {
+  for (var i = 0; i < GITHUB_SYNC_RULE6_PATTERNS_.length; i++) {
+    if (GITHUB_SYNC_RULE6_PATTERNS_[i][0].test(stripped)) {
       throw new Error(
-        'Rule 6: refusing to write ' + what + ' — ' + RULE6_PATTERNS[i][1]
+        'Rule 6: refusing to write ' +
+          what +
+          ' — ' +
+          GITHUB_SYNC_RULE6_PATTERNS_[i][1]
       )
     }
   }
@@ -428,6 +431,6 @@ if (typeof module !== 'undefined' && module.exports) {
     resolveGitHubRepoTarget_: resolveGitHubRepoTarget_,
     assertClean_: assertClean_,
     assertNoAsciiReplacement_: assertNoAsciiReplacement_,
-    RULE6_PATTERNS: RULE6_PATTERNS,
+    RULE6_PATTERNS: GITHUB_SYNC_RULE6_PATTERNS_,
   }
 }

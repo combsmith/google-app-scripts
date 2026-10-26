@@ -5670,6 +5670,14 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             expect(attFailLabels1).not.toContain('Processed')
             expect(attFailLabels2).toContain('AI/Manual-Review')
             expect(attFailLabels2).not.toContain('Processed')
+
+            expect(
+              mod.deterministicRuleClassify_(
+                'alerts@chase.com',
+                'AutoPay failed — action required',
+                'Please submit manual payment.'
+              )
+            ).toBeNull()
           })
         })
       })

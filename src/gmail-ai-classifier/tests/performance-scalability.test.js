@@ -159,6 +159,8 @@ describe('Performance and Scalability Benchmarks', () => {
     const duration = Date.now() - startTime
 
     expect(processed.length).toBe(100)
+    expect(processed.every((r) => r.status === 'classified')).toBe(true)
+    expect(processed.every((r) => r.label === '04_Family_Health')).toBe(true)
     expect(duration).toBeLessThan(500)
   })
 
