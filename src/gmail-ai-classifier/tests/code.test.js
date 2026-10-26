@@ -931,345 +931,459 @@ describe('processThreadBatch', () => {
 
 describe('Ontological Knowledge Graph and Triage Matrix Prompt Architecture', () => {
   const codeGs = require('../code.gs')
-  const { buildOntologicalPrompt } = require('../src/index')
+  const indexJs = require('../src/index')
+  const { buildOntologicalPrompt } = indexJs
 
-  test('buildOntologicalPrompt builds 3-Tier positive invariant prompt without negative exclusions', () => {
-    const config = {
-      canonicalDomains: [
-        '01_Household',
-        '02_Finance_Legal',
-        '03_Vehicles',
-        '04_Family_Health',
-        '05_Tech_Infrastructure',
-        '06_Work_Career',
-        '07_Community_NonProfit',
-      ],
-      customPromptRules:
-        'entities:\n  - name: "Entity Alpha"\n    domain: "04_Family_Health"\n    sublabel: "Family/Legal"',
-    }
-
-    const prompt = buildOntologicalPrompt(
-      config,
-      'alerts@example.com',
-      'Alert - Entity Alpha',
-      'Summary of news mention for Entity Alpha'
-    )
-
-    // Tier 1: Positive Domain Taxonomy Ontology
-    expect(prompt).toContain(
-      '=== TIER 1: DOMAIN TAXONOMY ONTOLOGY (POSITIVE INVARIANTS) ==='
-    )
-    expect(prompt).toContain('01_Household')
-    expect(prompt).toContain('02_Finance_Legal')
-    expect(prompt).toContain('03_Vehicles')
-    expect(prompt).toContain('04_Family_Health')
-    expect(prompt).toContain('05_Tech_Infrastructure')
-    expect(prompt).toContain('06_Work_Career')
-    expect(prompt).toContain('07_Community_NonProfit')
-    expect(prompt).toContain('NON-CANONICAL EMAILS (canonicalDomain: null)')
-    expect(prompt).toContain('Customer satisfaction surveys')
-    expect(prompt).toContain('Political campaign communications')
-    expect(prompt).toContain('equipment supply store sales')
-    expect(prompt).toContain(
-      'enterprise daily/weekly activity digests and newsletters'
-    )
-
-    // Positive Search & Monitoring Alerts routing
-    expect(prompt).toContain('AUTOMATED SEARCH & MONITORING ALERTS')
-    expect(prompt).toContain('Google Alerts')
-    expect(prompt).toContain(
-      'Student or school sub-labels apply only when the monitored alert query specifically targets an academic program or school'
-    )
-
-    // Tier 2: Orthogonal Triage Matrix
-    expect(prompt).toContain(
-      '=== TIER 2: ORTHOGONAL TRIAGE MATRIX (LIFECYCLE STATE) ==='
-    )
-    expect(prompt).toContain('Action_Required')
-    expect(prompt).toContain('Informational_Feed')
-    expect(prompt).toContain('Completed_Transaction')
-    expect(prompt).toContain('Broadcast_Marketing')
-    expect(prompt).toContain('Spam_Solicitation')
-    expect(prompt).toContain('CATEGORY-DRIVEN INBOX RETENTION INVARIANT')
-    expect(prompt).toContain(
-      'Primary Inbox is an Action Queue: Only emails categorized as "Primary" belong in the Primary Inbox'
-    )
-    expect(prompt).toContain(
-      'All non-Primary streams ("Updates", "Promotions", "Social", "Forums") are Informational Feeds that must be archived out of the Inbox'
-    )
-
-    // Tier 3: Injected Entity Knowledge Graph
-    expect(prompt).toContain(
-      '=== TIER 3: USER ENTITY KNOWLEDGE GRAPH & CUSTOM RULES ==='
-    )
-    expect(prompt).toContain('Entity Alpha')
-
-    // Constraints & Contract
-    expect(prompt).toContain('Single Sub-Label Invariant')
-    expect(prompt).toContain('Return JSON ONLY')
-
-    // Zero negative exclusions invariant verification
-    expect(prompt).not.toContain('Under NO circumstances')
-    expect(prompt).not.toContain('Do NOT classify')
-    expect(prompt).not.toContain('Reserve strictly for')
+  test('src/index.js and code.gs export identical function and constant keys', () => {
+    expect(Object.keys(indexJs).sort()).toEqual(Object.keys(codeGs).sort())
   })
+  ;[
+    { name: 'src/index.js', mod: indexJs },
+    { name: 'code.gs', mod: codeGs },
+  ].forEach(({ name, mod }) => {
+    describe(name, () => {
+      test('buildOntologicalPrompt builds 3-Tier positive invariant prompt without negative exclusions', () => {
+        const config = {
+          canonicalDomains: [
+            '01_Household',
+            '02_Finance_Legal',
+            '03_Vehicles',
+            '04_Family_Health',
+            '05_Tech_Infrastructure',
+            '06_Work_Career',
+            '07_Community_NonProfit',
+          ],
+          customPromptRules:
+            'entities:\n  - name: "Entity Alpha"\n    domain: "04_Family_Health"\n    sublabel: "Family/Legal"',
+        }
 
-  test('classifyWithGemini in code.gs constructs and sends ontological prompt', () => {
-    let capturedPrompt = ''
-    global.UrlFetchApp = {
-      fetch: jest.fn((url, opts) => {
-        const payload = JSON.parse(opts.payload)
-        capturedPrompt = payload.contents[0].parts[0].text
-        return {
+        const prompt = mod.buildOntologicalPrompt(
+          config,
+          'alerts@example.com',
+          'Alert - Entity Alpha',
+          'Summary of news mention for Entity Alpha'
+        )
+
+        // Tier 1: Positive Domain Taxonomy Ontology
+        expect(prompt).toContain(
+          '=== TIER 1: DOMAIN TAXONOMY ONTOLOGY (POSITIVE INVARIANTS) ==='
+        )
+        expect(prompt).toContain('01_Household')
+        expect(prompt).toContain('02_Finance_Legal')
+        expect(prompt).toContain('03_Vehicles')
+        expect(prompt).toContain('04_Family_Health')
+        expect(prompt).toContain('05_Tech_Infrastructure')
+        expect(prompt).toContain('06_Work_Career')
+        expect(prompt).toContain('07_Community_NonProfit')
+        expect(prompt).toContain('NON-CANONICAL EMAILS (canonicalDomain: null)')
+        expect(prompt).toContain('Customer satisfaction surveys')
+        expect(prompt).toContain('Political campaign communications')
+        expect(prompt).toContain('equipment supply store sales')
+        expect(prompt).toContain(
+          'enterprise daily/weekly activity digests and newsletters'
+        )
+
+        // Positive Search & Monitoring Alerts routing
+        expect(prompt).toContain('AUTOMATED SEARCH & MONITORING ALERTS')
+        expect(prompt).toContain('Google Alerts')
+        expect(prompt).toContain(
+          'Student or school sub-labels apply only when the monitored alert query specifically targets an academic program or school'
+        )
+
+        // Tier 2: Orthogonal Triage Matrix
+        expect(prompt).toContain(
+          '=== TIER 2: ORTHOGONAL TRIAGE MATRIX (LIFECYCLE STATE) ==='
+        )
+        expect(prompt).toContain('Action_Required')
+        expect(prompt).toContain('Informational_Feed')
+        expect(prompt).toContain('Completed_Transaction')
+        expect(prompt).toContain('Broadcast_Marketing')
+        expect(prompt).toContain('Spam_Solicitation')
+        expect(prompt).toContain('CATEGORY-DRIVEN INBOX RETENTION INVARIANT')
+        expect(prompt).toContain(
+          'Primary Inbox is an Action Queue: Only emails categorized as "Primary" belong in the Primary Inbox'
+        )
+        expect(prompt).toContain(
+          'All non-Primary streams ("Updates", "Promotions", "Social", "Forums") are Informational Feeds that must be archived out of the Inbox'
+        )
+
+        // Tier 3: Injected Entity Knowledge Graph
+        expect(prompt).toContain(
+          '=== TIER 3: USER ENTITY KNOWLEDGE GRAPH & CUSTOM RULES ==='
+        )
+        expect(prompt).toContain('Entity Alpha')
+
+        // Constraints & Contract
+        expect(prompt).toContain('Single Sub-Label Invariant')
+        expect(prompt).toContain('Return JSON ONLY')
+
+        // Zero negative exclusions invariant verification
+        expect(prompt).not.toContain('Under NO circumstances')
+        expect(prompt).not.toContain('Do NOT classify')
+        expect(prompt).not.toContain('Reserve strictly for')
+      })
+
+      test('classifyWithGemini constructs ontological prompt and sends x-goog-api-key header', () => {
+        let capturedPrompt = ''
+        let capturedUrl = ''
+        let capturedHeaders = null
+        global.UrlFetchApp = {
+          fetch: jest.fn((url, opts) => {
+            capturedUrl = url
+            capturedHeaders = opts.headers
+            const payload = JSON.parse(opts.payload)
+            capturedPrompt = payload.contents[0].parts[0].text
+            return {
+              getResponseCode: () => 200,
+              getContentText: () =>
+                JSON.stringify({
+                  candidates: [
+                    {
+                      content: {
+                        parts: [
+                          {
+                            text: JSON.stringify({
+                              canonicalDomain: '04_Family_Health',
+                              subLabel: 'Family/Legal',
+                              category: 'Updates',
+                              action: 'keep',
+                              confidence: 0.98,
+                              title: 'Alert Title',
+                              summary: 'Executive summary',
+                            }),
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                }),
+            }
+          }),
+        }
+
+        const testConfig = {
+          canonicalDomains: ['01_Household', '04_Family_Health'],
+          geminiApiKey: 'test-key',
+        }
+
+        const result = mod.classifyWithGemini(
+          'googlealerts-noreply@google.com',
+          'Google Alert - Elder Relative',
+          'news summary snippet',
+          testConfig
+        )
+
+        expect(capturedUrl).not.toContain('key=')
+        expect(capturedHeaders).toEqual({ 'x-goog-api-key': 'test-key' })
+        expect(capturedPrompt).toContain(
+          '=== TIER 1: DOMAIN TAXONOMY ONTOLOGY (POSITIVE INVARIANTS) ==='
+        )
+        expect(capturedPrompt).toContain(
+          '=== TIER 2: ORTHOGONAL TRIAGE MATRIX (LIFECYCLE STATE) ==='
+        )
+        expect(capturedPrompt).toContain('Google Alerts')
+        expect(capturedPrompt).not.toContain('Under NO circumstances')
+        expect(result).toEqual({
+          canonicalDomain: '04_Family_Health',
+          subLabel: 'Family/Legal',
+          category: 'Updates',
+          action: 'keep',
+          confidence: 0.98,
+          title: 'Alert Title',
+          summary: 'Executive summary',
+        })
+      })
+
+      test('classifyWithGemini returns cached classification immediately on cache hit', () => {
+        const cachedObj = {
+          canonicalDomain: '01_Household',
+          subLabel: 'Household/Property',
+          category: 'Updates',
+          action: 'archive',
+          confidence: 0.99,
+          title: 'Plumbing Receipt',
+          summary: 'Water heater repair receipt.',
+        }
+        const mockCache = {
+          get: jest.fn(() => JSON.stringify(cachedObj)),
+          put: jest.fn(),
+        }
+        const mockFetch = jest.fn()
+
+        const result = mod.classifyWithGemini(
+          'contractor@plumbing.com',
+          'Invoice #1042',
+          'Water heater repaired.',
+          { geminiApiKey: 'test-key' },
+          { CacheService: mockCache, UrlFetchApp: { fetch: mockFetch } }
+        )
+
+        expect(result).toEqual(cachedObj)
+        expect(mockCache.get).toHaveBeenCalled()
+        expect(mockFetch).not.toHaveBeenCalled()
+      })
+
+      test('classifyWithGemini rejects malformed or out-of-schema response and cascades to fallback', () => {
+        let callCount = 0
+        const mockCache = {
+          get: jest.fn(() => null),
+          put: jest.fn(),
+        }
+        const validObj = {
+          canonicalDomain: '01_Household',
+          subLabel: 'Household/Property',
+          category: 'Updates',
+          action: 'archive',
+          confidence: 0.96,
+          title: 'Valid',
+          summary: 'Valid summary.',
+        }
+        const mockFetch = jest.fn(() => {
+          callCount++
+          const badOrGood =
+            callCount === 1
+              ? {
+                  canonicalDomain: '99_Hallucinated_Domain',
+                  category: 'Updates',
+                  action: 'archive',
+                  confidence: 0.95,
+                }
+              : validObj
+          return {
+            getResponseCode: () => 200,
+            getContentText: () =>
+              JSON.stringify({
+                candidates: [
+                  {
+                    content: {
+                      parts: [{ text: JSON.stringify(badOrGood) }],
+                    },
+                  },
+                ],
+              }),
+          }
+        })
+
+        const result = mod.classifyWithGemini(
+          'contractor@plumbing.com',
+          'Invoice #1042',
+          'Water heater repaired.',
+          {
+            geminiApiKey: 'test-key',
+            canonicalDomains: ['01_Household', '02_Finance_Legal'],
+          },
+          { CacheService: mockCache, UrlFetchApp: { fetch: mockFetch } }
+        )
+
+        expect(callCount).toBe(2)
+        expect(result).toEqual(validObj)
+      })
+
+      test('classifyWithGemini stores result in CacheService with 21600s TTL on cache miss', () => {
+        const freshObj = {
+          canonicalDomain: '02_Finance_Legal',
+          subLabel: 'Finance/Banking',
+          category: 'Updates',
+          action: 'archive',
+          confidence: 0.95,
+          title: 'Monthly Statement',
+          summary: 'Bank statement available.',
+        }
+        const mockCache = {
+          get: jest.fn(() => null),
+          put: jest.fn(),
+        }
+        const mockFetch = jest.fn(() => ({
           getResponseCode: () => 200,
           getContentText: () =>
             JSON.stringify({
               candidates: [
                 {
                   content: {
-                    parts: [
-                      {
-                        text: JSON.stringify({
-                          canonicalDomain: '04_Family_Health',
-                          subLabel: 'Family/Legal',
-                          category: 'Updates',
-                          action: 'keep',
-                          confidence: 0.98,
-                          title: 'Alert Title',
-                          summary: 'Executive summary',
-                        }),
-                      },
-                    ],
+                    parts: [{ text: JSON.stringify(freshObj) }],
                   },
                 },
               ],
             }),
+        }))
+
+        const result = mod.classifyWithGemini(
+          'alerts@bank.com',
+          'e-Statement Ready',
+          'Your monthly bank statement is now ready.',
+          { geminiApiKey: 'test-key' },
+          { CacheService: mockCache, UrlFetchApp: { fetch: mockFetch } }
+        )
+
+        expect(result).toEqual(freshObj)
+        expect(mockCache.get).toHaveBeenCalled()
+        expect(mockFetch).toHaveBeenCalledTimes(1)
+        expect(mockCache.put).toHaveBeenCalledWith(
+          expect.stringMatching(/^cls_[a-f0-9]+$/),
+          JSON.stringify(freshObj),
+          21600
+        )
+      })
+
+      test('classifyWithGemini cascades through fallback models on HTTP 429 and records circuit breaker failure once if all fail', () => {
+        let callCount = 0
+        const sleepMock = jest.fn()
+        const mockFetch = jest.fn(() => {
+          callCount++
+          if (callCount === 1) {
+            return {
+              getResponseCode: () => 429,
+              getHeaders: () => ({ 'Retry-After': '2' }),
+              getContentText: () =>
+                JSON.stringify({ error: { message: 'Quota exceeded' } }),
+            }
+          }
+          return {
+            getResponseCode: () => 200,
+            getContentText: () =>
+              JSON.stringify({
+                candidates: [
+                  {
+                    content: {
+                      parts: [
+                        {
+                          text: '```json\n{"canonicalDomain": "05_Tech_Infrastructure", "subLabel": "Tech/Alerts", "category": "Updates", "action": "archive", "confidence": 0.92, "title": "Server Alert", "summary": "High CPU alert."}\n```',
+                        },
+                      ],
+                    },
+                  },
+                ],
+              }),
+          }
+        })
+
+        const mockPropsStore = {}
+        const mockProps = {
+          getProperty: jest.fn((k) => mockPropsStore[k] || null),
+          setProperty: jest.fn((k, v) => {
+            mockPropsStore[k] = String(v)
+          }),
+          deleteProperty: jest.fn((k) => {
+            delete mockPropsStore[k]
+          }),
         }
-      }),
-    }
 
-    const testConfig = {
-      canonicalDomains: ['01_Household', '04_Family_Health'],
-      geminiApiKey: 'test-key',
-    }
+        const result = mod.classifyWithGemini(
+          'alerts@cloud.com',
+          'CPU Warning',
+          'Server CPU at 95%',
+          {
+            modelEndpoint:
+              'https://generativelanguage.googleapis.com/v1beta/models/gemini-custom:generateContent',
+            geminiApiKey: 'test-key',
+          },
+          {
+            UrlFetchApp: { fetch: mockFetch },
+            sleepFn: sleepMock,
+            properties: mockProps,
+          }
+        )
 
-    const result = codeGs.classifyWithGemini(
-      'googlealerts-noreply@google.com',
-      'Google Alert - Elder Relative',
-      'news summary snippet',
-      testConfig
-    )
+        expect(callCount).toBe(2)
+        expect(sleepMock).toHaveBeenCalledWith(2000)
+        expect(result.canonicalDomain).toBe('05_Tech_Infrastructure')
+        expect(mockPropsStore['GEMINI_BACKOFF_FAILURES']).toBeUndefined()
 
-    expect(capturedPrompt).toContain(
-      '=== TIER 1: DOMAIN TAXONOMY ONTOLOGY (POSITIVE INVARIANTS) ==='
-    )
-    expect(capturedPrompt).toContain(
-      '=== TIER 2: ORTHOGONAL TRIAGE MATRIX (LIFECYCLE STATE) ==='
-    )
-    expect(capturedPrompt).toContain('Google Alerts')
-    expect(capturedPrompt).not.toContain('Under NO circumstances')
-    expect(result).toEqual({
-      canonicalDomain: '04_Family_Health',
-      subLabel: 'Family/Legal',
-      category: 'Updates',
-      action: 'keep',
-      confidence: 0.98,
-      title: 'Alert Title',
-      summary: 'Executive summary',
-    })
-  })
-
-  test('classifyWithGemini returns cached classification immediately on cache hit', () => {
-    const cachedObj = {
-      canonicalDomain: '01_Household',
-      subLabel: 'Household/Property',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.99,
-      title: 'Plumbing Receipt',
-      summary: 'Water heater repair receipt.',
-    }
-    const mockCache = {
-      get: jest.fn(() => JSON.stringify(cachedObj)),
-      put: jest.fn(),
-    }
-    const mockFetch = jest.fn()
-
-    const result = codeGs.classifyWithGemini(
-      'contractor@plumbing.com',
-      'Invoice #1042',
-      'Water heater repaired.',
-      { geminiApiKey: 'test-key' },
-      { CacheService: mockCache, UrlFetchApp: { fetch: mockFetch } }
-    )
-
-    expect(result).toEqual(cachedObj)
-    expect(mockCache.get).toHaveBeenCalled()
-    expect(mockFetch).not.toHaveBeenCalled()
-  })
-
-  test('classifyWithGemini stores result in CacheService with 21600s TTL on cache miss', () => {
-    const freshObj = {
-      canonicalDomain: '02_Finance_Legal',
-      subLabel: 'Finance/Banking',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.95,
-      title: 'Monthly Statement',
-      summary: 'Bank statement available.',
-    }
-    const mockCache = {
-      get: jest.fn(() => null),
-      put: jest.fn(),
-    }
-    const mockFetch = jest.fn(() => ({
-      getResponseCode: () => 200,
-      getContentText: () =>
-        JSON.stringify({
-          candidates: [
-            {
-              content: {
-                parts: [{ text: JSON.stringify(freshObj) }],
-              },
-            },
-          ],
-        }),
-    }))
-
-    const result = codeGs.classifyWithGemini(
-      'alerts@bank.com',
-      'e-Statement Ready',
-      'Your monthly bank statement is now ready.',
-      { geminiApiKey: 'test-key' },
-      { CacheService: mockCache, UrlFetchApp: { fetch: mockFetch } }
-    )
-
-    expect(result).toEqual(freshObj)
-    expect(mockCache.get).toHaveBeenCalled()
-    expect(mockFetch).toHaveBeenCalledTimes(1)
-    expect(mockCache.put).toHaveBeenCalledWith(
-      expect.stringMatching(/^cls_[a-f0-9]+$/),
-      JSON.stringify(freshObj),
-      21600
-    )
-  })
-
-  test('classifyWithGemini cascades through fallback models on HTTP 429 and parses retry delay', () => {
-    let callCount = 0
-    const sleepMock = jest.fn()
-    const mockFetch = jest.fn(() => {
-      callCount++
-      if (callCount === 1) {
-        return {
+        // Now verify all endpoints returning 429 increments GEMINI_BACKOFF_FAILURES only ONCE
+        const mockAll429Fetch = jest.fn(() => ({
           getResponseCode: () => 429,
-          getHeaders: () => ({ 'Retry-After': '2' }),
+          getHeaders: () => ({ 'Retry-After': '15' }),
           getContentText: () =>
             JSON.stringify({ error: { message: 'Quota exceeded' } }),
-        }
-      }
-      return {
-        getResponseCode: () => 200,
-        getContentText: () =>
-          JSON.stringify({
-            candidates: [
-              {
-                content: {
-                  parts: [
-                    {
-                      text: '```json\n{"canonicalDomain": "05_Tech_Infrastructure", "subLabel": "Tech/Alerts", "category": "Updates", "action": "archive", "confidence": 0.92, "title": "Server Alert", "summary": "High CPU alert."}\n```',
-                    },
-                  ],
-                },
-              },
-            ],
-          }),
-      }
-    })
-
-    const result = codeGs.classifyWithGemini(
-      'alerts@cloud.com',
-      'CPU Warning',
-      'Server CPU at 95%',
-      {
-        modelEndpoint:
-          'https://generativelanguage.googleapis.com/v1beta/models/gemini-custom:generateContent',
-        geminiApiKey: 'test-key',
-      },
-      { UrlFetchApp: { fetch: mockFetch }, sleepFn: sleepMock }
-    )
-
-    expect(callCount).toBe(2)
-    expect(sleepMock).toHaveBeenCalledWith(2000)
-    expect(result.canonicalDomain).toBe('05_Tech_Infrastructure')
-  })
-
-  test('extractJsonSubstring parses JSON and rescues trailing commas before closing braces/brackets', () => {
-    const rawWithTrailingCommas =
-      '```json\n{\n  "canonicalDomain": "01_Household",\n  "subLabel": "Household/Property",\n  "items": [1, 2, ],\n}\n```'
-    const parsed = codeGs.extractJsonSubstring(rawWithTrailingCommas)
-    expect(parsed).toEqual({
-      canonicalDomain: '01_Household',
-      subLabel: 'Household/Property',
-      items: [1, 2],
-    })
-  })
-
-  test('parseRetryDelayMs parses Retry-After header and clamps between 1000ms and 30000ms', () => {
-    const mockResponse1 = {
-      getHeaders: () => ({ 'Retry-After': '12' }),
-      getContentText: () => '',
-    }
-    expect(codeGs.parseRetryDelayMs(mockResponse1)).toBe(12000)
-
-    const mockResponseMax = {
-      getHeaders: () => ({ 'Retry-After': '90' }),
-      getContentText: () => '',
-    }
-    expect(codeGs.parseRetryDelayMs(mockResponseMax)).toBe(30000)
-
-    const mockResponseDetail = {
-      getHeaders: () => ({}),
-      getContentText: () =>
-        JSON.stringify({
-          error: {
-            details: [{ retryDelay: '3.5s' }],
-          },
-        }),
-    }
-    expect(codeGs.parseRetryDelayMs(mockResponseDetail)).toBe(3500)
-  })
-
-  test('computeStringHash generates stable MD5 digest', () => {
-    const hash1 = codeGs.computeStringHash('test string')
-    const hash2 = codeGs.computeStringHash('test string')
-    const hash3 = codeGs.computeStringHash('different string')
-    expect(hash1).toBe(hash2)
-    expect(hash1).not.toBe(hash3)
-    expect(hash1).toMatch(/^[a-f0-9]{32}$/)
-  })
-
-  test('getNotePathForDomain supports CUSTOM_NOTE_PATHS from PropertiesService', () => {
-    expect(codeGs.getNotePathForDomain('04_Family_Health')).toBe(
-      '04_Family_Health/index.md'
-    )
-
-    global.PropertiesService = {
-      getScriptProperties: () => ({
-        getProperty: (key) => {
-          if (key === 'CUSTOM_NOTE_PATHS') {
-            return JSON.stringify({
-              '04_Family_Health': 'custom-domain/kids/index.md',
-            })
+        }))
+        const failRes = mod.classifyWithGemini(
+          'alerts@cloud.com',
+          'CPU Warning',
+          'Server CPU at 95%',
+          { geminiApiKey: 'test-key' },
+          {
+            UrlFetchApp: { fetch: mockAll429Fetch },
+            sleepFn: sleepMock,
+            properties: mockProps,
           }
-          return null
-        },
-      }),
-    }
+        )
+        expect(failRes).toBeNull()
+        expect(mockPropsStore['GEMINI_BACKOFF_FAILURES']).toBe('1')
+      })
 
-    expect(codeGs.getNotePathForDomain('04_Family_Health')).toBe(
-      'custom-domain/kids/index.md'
-    )
-    delete global.PropertiesService
+      test('extractJsonSubstring parses JSON and rescues trailing commas before closing braces/brackets', () => {
+        const rawWithTrailingCommas =
+          '```json\n{\n  "canonicalDomain": "01_Household",\n  "subLabel": "Household/Property",\n  "items": [1, 2, ],\n}\n```'
+        const parsed = mod.extractJsonSubstring(rawWithTrailingCommas)
+        expect(parsed).toEqual({
+          canonicalDomain: '01_Household',
+          subLabel: 'Household/Property',
+          items: [1, 2],
+        })
+      })
+
+      test('parseRetryDelayMs parses Retry-After header and clamps between 1000ms and 30000ms', () => {
+        const mockResponse1 = {
+          getHeaders: () => ({ 'Retry-After': '12' }),
+          getContentText: () => '',
+        }
+        expect(mod.parseRetryDelayMs(mockResponse1)).toBe(12000)
+
+        const mockResponseMax = {
+          getHeaders: () => ({ 'Retry-After': '90' }),
+          getContentText: () => '',
+        }
+        expect(mod.parseRetryDelayMs(mockResponseMax)).toBe(30000)
+
+        const mockResponseDetail = {
+          getHeaders: () => ({}),
+          getContentText: () =>
+            JSON.stringify({
+              error: {
+                details: [{ retryDelay: '3.5s' }],
+              },
+            }),
+        }
+        expect(mod.parseRetryDelayMs(mockResponseDetail)).toBe(3500)
+      })
+
+      test('computeStringHash generates stable hex digest', () => {
+        const hash1 = mod.computeStringHash('test string')
+        const hash2 = mod.computeStringHash('test string')
+        const hash3 = mod.computeStringHash('different string')
+        expect(hash1).toBe(hash2)
+        expect(hash1).not.toBe(hash3)
+        expect(hash1).toMatch(/^[a-f0-9]{32}$/)
+      })
+
+      test('getNotePathForDomain supports CUSTOM_NOTE_PATHS from PropertiesService', () => {
+        const savedProps = global.PropertiesService
+        try {
+          expect(mod.getNotePathForDomain('04_Family_Health')).toBe(
+            '04_Family_Health/index.md'
+          )
+
+          global.PropertiesService = {
+            getScriptProperties: () => ({
+              getProperty: (key) => {
+                if (key === 'CUSTOM_NOTE_PATHS') {
+                  return JSON.stringify({
+                    '04_Family_Health': 'custom-domain/kids/index.md',
+                  })
+                }
+                return null
+              },
+            }),
+          }
+
+          expect(mod.getNotePathForDomain('04_Family_Health')).toBe(
+            'custom-domain/kids/index.md'
+          )
+        } finally {
+          global.PropertiesService = savedProps
+        }
+      })
+    })
   })
 
   test('buildOntologicalPrompt includes telemetry and school/student positive invariants', () => {
@@ -2077,6 +2191,7 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           subLabel: 'Family/School-Student',
           action: 'keep',
           category: 'Updates',
+          confidence: 0.95,
         }))
 
         const report = fn(
@@ -2095,6 +2210,87 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
         expect(report.scanned).toBe(1)
         expect(report.items[0].action).toBe('archive')
         expect(mockMoveToArchive).toHaveBeenCalledTimes(1)
+      })
+
+      test('reclassifyThreadsByQuery shields user-sent/replied threads and low-confidence destructive actions', () => {
+        const mockArchiveSent = jest.fn()
+        const mockTrashLowConf = jest.fn()
+        const userSentThread = {
+          getId: () => 'th-user-sent',
+          getMessages: () => [
+            {
+              getFrom: () => 'sender@example.com',
+              getSubject: () => 'Update',
+              getPlainBody: () => 'Body',
+            },
+            {
+              getFrom: () => 'User <owner@example.com>',
+              getSubject: () => 'Re: Update',
+              getPlainBody: () => 'Reply',
+            },
+          ],
+          getLabels: () => [],
+          addLabel: jest.fn(),
+          removeLabel: jest.fn(),
+          moveToArchive: mockArchiveSent,
+        }
+        const lowConfThread = {
+          getId: () => 'th-low-conf',
+          getMessages: () => [
+            {
+              getFrom: () => 'promo@example.com',
+              getSubject: () => 'Promo',
+              getPlainBody: () => 'Body',
+            },
+          ],
+          getLabels: () => [],
+          addLabel: jest.fn(),
+          removeLabel: jest.fn(),
+          moveToTrash: mockTrashLowConf,
+        }
+        const mockGmail = {
+          search: jest.fn(() => [userSentThread, lowConfThread]),
+          getUserLabelByName: jest.fn((name) => ({ getName: () => name })),
+          createLabel: jest.fn((name) => ({ getName: () => name })),
+        }
+        let callIdx = 0
+        const mockClassify = jest.fn(() => {
+          callIdx++
+          if (callIdx === 1) {
+            return {
+              canonicalDomain: '01_Household',
+              subLabel: 'Household/General',
+              action: 'archive',
+              category: 'Updates',
+              confidence: 0.95,
+            }
+          }
+          return {
+            canonicalDomain: null,
+            subLabel: null,
+            action: 'trash',
+            category: 'Promotions',
+            confidence: 0.5,
+          }
+        })
+
+        const report = fn(
+          'test query',
+          { maxThreads: 5, dryRun: false },
+          {
+            canonicalDomains: ['01_Household'],
+            processedLabel: 'Processed',
+            userAccountEmail: 'owner@example.com',
+          },
+          {
+            GmailApp: mockGmail,
+            classifyFn: mockClassify,
+          }
+        )
+
+        expect(report.scanned).toBe(2)
+        expect(mockArchiveSent).not.toHaveBeenCalled()
+        expect(mockTrashLowConf).not.toHaveBeenCalled()
       })
 
       it('dynamically discovers sister labels and includes name change query in runRealignmentAudit', () => {
@@ -3946,8 +4142,11 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
                 )
 
                 expect(mockFetch).toHaveBeenCalledWith(
-                  'https://generativelanguage.googleapis.com/v1beta/models?key=test-api-key',
-                  { muteHttpExceptions: true }
+                  'https://generativelanguage.googleapis.com/v1beta/models',
+                  {
+                    headers: { 'x-goog-api-key': 'test-api-key' },
+                    muteHttpExceptions: true,
+                  }
                 )
                 expect(models).toEqual([
                   'models/gemini-2.0-flash',
@@ -4469,6 +4668,923 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             expect(added).toContain('AI/Needs-Retry')
             expect(alreadyClassifiedThread.removeLabel).not.toHaveBeenCalled()
             expect(alreadyClassifiedThread.addLabel).not.toHaveBeenCalled()
+          })
+        })
+      })
+    })
+
+    describe('Comprehensive Edge Cases, Triggers, and Safety Shields', () => {
+      implementations.forEach(({ name, mod }) => {
+        describe(name, () => {
+          test('validateOntologicalClassification rejects invalid inputs, confidence, category, and action', () => {
+            expect(mod.validateOntologicalClassification(null)).toBe(false)
+            expect(mod.validateOntologicalClassification([])).toBe(false)
+            expect(
+              mod.validateOntologicalClassification({ confidence: 1.5 })
+            ).toBe(false)
+            expect(
+              mod.validateOntologicalClassification({ confidence: -0.1 })
+            ).toBe(false)
+            expect(
+              mod.validateOntologicalClassification({ confidence: 'high' })
+            ).toBe(false)
+            expect(
+              mod.validateOntologicalClassification({ category: 'InvalidTab' })
+            ).toBe(false)
+            expect(
+              mod.validateOntologicalClassification({ action: 'delete_all' })
+            ).toBe(false)
+            expect(
+              mod.validateOntologicalClassification({ canonicalDomain: 123 }, [
+                '01_Household',
+              ])
+            ).toBe(false)
+            expect(
+              mod.validateOntologicalClassification(
+                { canonicalDomain: '99_Unknown' },
+                ['01_Household']
+              )
+            ).toBe(false)
+          })
+
+          test('trigger setup functions manage ScriptApp triggers and handle missing ScriptApp', () => {
+            const origScriptApp = global.ScriptApp
+            try {
+              delete global.ScriptApp
+              expect(() => mod.setupWeeklyRetentionTrigger({})).not.toThrow()
+              expect(() => mod.setupDailyAuditTrigger({})).not.toThrow()
+              expect(() => mod.setupFourHourAuditTrigger({})).not.toThrow()
+              expect(() => mod.stopAllTriggers({})).not.toThrow()
+              expect(() => mod.setupFiveMinuteTrigger({})).not.toThrow()
+            } finally {
+              global.ScriptApp = origScriptApp
+            }
+
+            const deleted = []
+            const created = []
+            const makeMockScriptApp = (withWeekDay = true) => ({
+              WeekDay: withWeekDay ? { SUNDAY: 7 } : undefined,
+              getProjectTriggers: () => [
+                {
+                  getHandlerFunction: () =>
+                    'purgeExpiredEmailsByRetentionPolicy',
+                },
+                { getHandlerFunction: () => 'auditEmailClassifications' },
+                { getHandlerFunction: () => 'otherHandler' },
+              ],
+              deleteTrigger: (t) => deleted.push(t.getHandlerFunction()),
+              newTrigger: (fn) => {
+                const builder = {
+                  timeBased: () => builder,
+                  onWeekDay: () => builder,
+                  atHour: () => builder,
+                  everyDays: () => builder,
+                  everyHours: () => builder,
+                  everyMinutes: () => builder,
+                  create: () => created.push(fn),
+                }
+                return builder
+              },
+            })
+
+            mod.setupWeeklyRetentionTrigger({
+              ScriptApp: makeMockScriptApp(true),
+            })
+            mod.setupWeeklyRetentionTrigger({
+              ScriptApp: makeMockScriptApp(false),
+            })
+            mod.setupDailyAuditTrigger({ ScriptApp: makeMockScriptApp(true) })
+            mod.setupFourHourAuditTrigger({
+              ScriptApp: makeMockScriptApp(true),
+            })
+            mod.stopAllTriggers({ ScriptApp: makeMockScriptApp(true) })
+            mod.setupFiveMinuteTrigger({ ScriptApp: makeMockScriptApp(true) })
+            mod.createGmailFilterRule('a@b.com', '01_Household')
+
+            expect(deleted).toContain('purgeExpiredEmailsByRetentionPolicy')
+            expect(deleted).toContain('auditEmailClassifications')
+            expect(created).toContain('processEmailsWithAiClassifier')
+          })
+
+          test('classifyWithGemini handles open circuit breaker, missing UrlFetchApp, HTTP 500, and quota exception', () => {
+            const openProps = {
+              getProperty: () => String(Date.now() + 60000),
+            }
+            expect(
+              mod.classifyWithGemini(
+                'a@b.com',
+                'Subj',
+                'Snip',
+                {},
+                { properties: openProps }
+              )
+            ).toBeNull()
+
+            const origUrlFetch = global.UrlFetchApp
+            try {
+              delete global.UrlFetchApp
+              expect(
+                mod.classifyWithGemini('a@b.com', 'Subj', 'Snip', {}, {})
+              ).toBeNull()
+            } finally {
+              global.UrlFetchApp = origUrlFetch
+            }
+
+            // HTTP 500 + broken JSON + quota exception
+            let callIdx = 0
+            const mockFetch = {
+              fetch: () => {
+                callIdx++
+                if (callIdx === 1) {
+                  return {
+                    getResponseCode: () => 500,
+                    getContentText: () => 'Internal Server Error',
+                  }
+                }
+                if (callIdx === 2) {
+                  return {
+                    getResponseCode: () => 200,
+                    getContentText: () =>
+                      JSON.stringify({
+                        candidates: [
+                          { content: { parts: [{ text: '{invalid json}' }] } },
+                        ],
+                      }),
+                  }
+                }
+                if (callIdx === 3) {
+                  return {
+                    getResponseCode: () => 429,
+                    getHeaders: () => ({}),
+                    getContentText: () => '{malformed429',
+                  }
+                }
+                throw new Error('Service invoked too many times for one day')
+              },
+            }
+            const origUtils = global.Utilities
+            let res
+            try {
+              delete global.Utilities
+              res = mod.classifyWithGemini(
+                'a@b.com',
+                'Subj',
+                'Snip',
+                { modelEndpoint: 'https://custom.endpoint/v1' },
+                {
+                  UrlFetchApp: mockFetch,
+                  CacheService: {
+                    get: () => null,
+                    put: () => {},
+                  },
+                }
+              )
+            } finally {
+              global.Utilities = origUtils
+            }
+            expect(res).toBeNull()
+
+            // recordCircuitBreakerSuccess fallback when deleteProperty is missing
+            const setCalls = {}
+            mod.recordCircuitBreakerSuccess({
+              setProperty: (k, v) => {
+                setCalls[k] = v
+              },
+            })
+            expect(setCalls.GEMINI_BACKOFF_FAILURES).toBe('0')
+          })
+
+          test('ensureGmailLabel, setGmailCategoryTab, and cleanConflictingLabels handle edge cases', () => {
+            expect(mod.ensureGmailLabel(null, null)).toBeNull()
+
+            const existingLbl = { getName: () => 'Household/Property' }
+            const gmailCaseMatch = {
+              getUserLabelByName: () => null,
+              getUserLabels: () => [existingLbl],
+            }
+            expect(
+              mod.ensureGmailLabel('household/property', gmailCaseMatch)
+            ).toBe(existingLbl)
+
+            const rootLbl = { getName: () => 'Household' }
+            let getLabelsCall = 0
+            const gmailRaceRecover = {
+              getUserLabelByName: () => null,
+              getUserLabels: () => {
+                getLabelsCall++
+                return getLabelsCall > 1 ? [rootLbl] : []
+              },
+              createLabel: () => {
+                throw new Error('Label name exists')
+              },
+            }
+            expect(mod.ensureGmailLabel('household', gmailRaceRecover)).toBe(
+              rootLbl
+            )
+
+            // setGmailCategoryTab catches modify error on Primary
+            expect(() =>
+              mod.setGmailCategoryTab(
+                {
+                  getId: () => 'th-1',
+                  getFirstMessageSubject: () => 'Subj',
+                },
+                'Primary',
+                {
+                  Users: {
+                    Threads: {
+                      modify: () => {
+                        throw new Error('API failure')
+                      },
+                    },
+                  },
+                }
+              )
+            ).not.toThrow()
+
+            // cleanConflictingLabels handles removeLabel throws and domain code labels
+            const badThread = {
+              getLabels: () => [
+                { getName: () => 'Retention/Permanent' },
+                { getName: () => '01_Household' },
+                { getName: () => 'Custom_Domain' },
+                { getName: () => 'Finance' },
+                { getName: () => 'Finance/Taxes' },
+              ],
+              removeLabel: () => {
+                throw new Error('Cannot remove')
+              },
+            }
+            expect(() =>
+              mod.cleanConflictingLabels(
+                badThread,
+                '01_Household',
+                'Household/Property',
+                {
+                  canonicalDomains: [
+                    '01_Household',
+                    '02_Finance_Legal',
+                    'Custom_Domain',
+                  ],
+                }
+              )
+            ).not.toThrow()
+
+            // cleanConflictingLabels outer catch when getLabels throws
+            expect(() =>
+              mod.cleanConflictingLabels(
+                {
+                  getLabels: () => {
+                    throw new Error('getLabels failed')
+                  },
+                },
+                '01_Household',
+                'Household/Property',
+                {}
+              )
+            ).not.toThrow()
+          })
+
+          test('deterministicRuleClassify_ matches familyEmails and processThreadBatch archives', () => {
+            const det = mod.deterministicRuleClassify_(
+              'cousin@family.org',
+              'Weekend plans',
+              'Are you free on Saturday?',
+              null,
+              { familyEmails: 'cousin@family.org' }
+            )
+            expect(det).not.toBeNull()
+            expect(det.canonicalDomain).toBe('04_Family_Health')
+            expect(det.subLabel).toBe('Family/Correspondence')
+
+            const archived = []
+            const batchThread = {
+              getId: () => 'th-batch-arch',
+              getMessages: () => [
+                {
+                  getFrom: () => 'alerts@broodminder.com',
+                  getSubject: () => 'Events in your apiaries',
+                  getPlainBody: () => 'Hive sensor telemetry report',
+                },
+              ],
+              addLabel: jest.fn(),
+              moveToArchive: () => archived.push('th-batch-arch'),
+            }
+            mod.processThreadBatch(
+              [batchThread],
+              {
+                canonicalDomains: ['07_Community_NonProfit'],
+                processedLabel: 'Processed',
+                autoFilterConfidenceThreshold: 0.99,
+              },
+              {
+                GmailApp: {
+                  getUserLabelByName: (n) => ({ getName: () => n }),
+                },
+              }
+            )
+            expect(archived).toEqual(['th-batch-arch'])
+            expect(mod.extractTopicTitleFromPath('///')).toBe(
+              'Ingested Records'
+            )
+            expect(mod.executeGitHubCommit('', '')).toBe(false)
+          })
+
+          test('auditClassifications and auditEmailClassifications handle secondary categories, trash, and sendEmail errors', () => {
+            const trashThread = {
+              id: 'th-trash',
+              isInTrash: true,
+              getCategory: () => 'PROMOTIONS',
+              getMessages: () => [
+                {
+                  getFrom: () => 'promo@shop.com',
+                  getSubject: () => 'Sale',
+                  getPlainBody: () => '50% off',
+                },
+              ],
+              getLabels: () => [{ getName: () => 'Processed' }],
+            }
+            const metaThread = {
+              id: 'th-meta',
+              getMessages: () => [
+                {
+                  getFrom: () => 'promo@shop.com',
+                  getSubject: () => 'Sale 2',
+                  getPlainBody: () => '50% off',
+                },
+              ],
+              getLabels: () => [{ getName: () => 'Processed' }],
+            }
+            const report = mod.auditClassifications(
+              [trashThread, metaThread],
+              { canonicalDomains: ['01_Household'] },
+              {
+                Gmail: {
+                  Users: {
+                    Threads: {
+                      get: () => ({ labelIds: ['CATEGORY_PROMOTIONS'] }),
+                    },
+                  },
+                },
+              }
+            )
+            expect(report.scannedCount).toBe(2)
+
+            // auditEmailClassifications catches sendEmail error
+            const badGmail = {
+              search: () => [
+                {
+                  getId: () => 'th-mismatch',
+                  isInInbox: () => true,
+                  getMessages: () => [
+                    {
+                      getFrom: () => 'alerts@google.com',
+                      getSubject: () => 'Google Alert - News',
+                      getPlainBody: () => 'News digest',
+                    },
+                  ],
+                  getLabels: () => [{ getName: () => 'Family/School-Student' }],
+                },
+              ],
+              sendEmail: () => {
+                throw new Error('Mail quota exceeded')
+              },
+            }
+            expect(() =>
+              mod.auditEmailClassifications(
+                {
+                  auditDigestEmail: 'admin@example.com',
+                  canonicalDomains: ['04_Family_Health'],
+                },
+                { GmailApp: badGmail }
+              )
+            ).not.toThrow()
+          })
+
+          test('attachment eligibility, subfolder resolution, zip extraction, and audit backfill edge cases', () => {
+            expect(
+              mod.resolveTaxonomySubfolderName(
+                '04_Family_Health',
+                'Family/School-Medical'
+              )
+            ).toBe('Medical_Records')
+            expect(
+              mod.resolveTaxonomySubfolderName(
+                '04_Family_Health',
+                'Family/School'
+              )
+            ).toBe('Students')
+
+            expect(
+              mod.evaluateAttachmentEligibility({
+                getName: () => 'disclaimer.txt',
+                getSize: () => 2048,
+              }).reason
+            ).toBe('TEXT_BOILERPLATE_DISCLAIMER')
+            expect(
+              mod.evaluateAttachmentEligibility({
+                getName: () => 'custom.xyz',
+                getSize: () => 5000,
+              }).reason
+            ).toBe('UNKNOWN_OR_UNSUPPORTED_EXTENSION:.xyz')
+
+            // persistCanonicalAttachmentsToDrive with folder.getFiles() returning conflict-renamed candidates
+            const folderWithGetFiles = {
+              getFilesByName: () => ({ hasNext: () => false }),
+              getFiles: () => {
+                const list = [
+                  { getName: () => '' },
+                  {
+                    getName: () => 'invoice.pdf',
+                    getSize: () => 2048,
+                    getBytes: () => [9, 9, 9, 9],
+                  },
+                  {
+                    getName: () => 'invoice_999.pdf',
+                    getSize: () => 2048,
+                    getBytes: () => new Array(2048).fill(7),
+                  },
+                ]
+                let idx = 0
+                return {
+                  hasNext: () => idx < list.length,
+                  next: () => list[idx++],
+                }
+              },
+              createFile: () => ({
+                getId: () => 'id-new',
+                setDescription: () => {},
+              }),
+            }
+            const dupSaved = mod.persistCanonicalAttachmentsToDrive(
+              {
+                getId: () => 'th-dup-getfiles',
+                getMessages: () => [
+                  {
+                    getAttachments: () => [
+                      {
+                        getName: () => 'invoice.pdf',
+                        getSize: () => 2048,
+                        getBytes: () => new Array(2048).fill(7),
+                        getContentType: () => 'application/pdf',
+                      },
+                    ],
+                  },
+                ],
+              },
+              {
+                canonicalDomain: '01_Household',
+                subLabel: 'Household/Property',
+              },
+              { canonicalDomains: ['01_Household'] },
+              {
+                DriveApp: {
+                  getFoldersByName: () => ({
+                    hasNext: () => true,
+                    next: () => ({
+                      getFoldersByName: () => ({
+                        hasNext: () => true,
+                        next: () => folderWithGetFiles,
+                      }),
+                    }),
+                  }),
+                },
+              }
+            )
+            expect(dupSaved).toEqual([])
+
+            // extractZipArchiveToSubfolder with metadata.sourceFileName, ineligible entry, and unzip error
+            const zipSubfolder = {
+              getFilesByName: () => ({ hasNext: () => false }),
+              createFile: () => ({ getId: () => 'id-1', getName: () => 'f' }),
+            }
+            const zipTargetFolder = {
+              getFoldersByName: () => ({ hasNext: () => false }),
+              createFolder: () => zipSubfolder,
+            }
+            mod.extractZipArchiveToSubfolder(
+              zipTargetFolder,
+              {},
+              {
+                Utilities: {
+                  unzip: () => [
+                    {
+                      getName: () => 'logo.png',
+                      getSize: () => 500,
+                      getContentType: () => 'image/png',
+                    },
+                  ],
+                },
+              },
+              { sourceFileName: 'packet.zip' }
+            )
+            mod.extractZipArchiveToSubfolder(
+              zipTargetFolder,
+              { getName: () => 'broken.zip' },
+              {
+                Utilities: {
+                  unzip: () => {
+                    throw new Error('Corrupt zip')
+                  },
+                },
+              },
+              {}
+            )
+
+            const origDrive = global.DriveApp
+            try {
+              delete global.DriveApp
+              expect(mod.unzipExistingDriveArchive('id-1', null, {})).toEqual(
+                []
+              )
+              expect(() =>
+                mod.auditAndBackfillCanonicalAttachments({}, {}, {})
+              ).toThrow(/GmailApp and DriveApp services are required/)
+            } finally {
+              global.DriveApp = origDrive
+            }
+
+            // runDryRunAttachmentAudit with garbage + eligible items + getLabels()
+            const dryRunGmail = {
+              search: () => [
+                {
+                  getId: () => 'th-dry-1',
+                  getFirstMessageSubject: () => 'Tax Packet',
+                  getLabels: () => [
+                    { getName: () => '02_Finance_Legal' },
+                    { getName: () => '02_Finance_Legal/Taxes' },
+                  ],
+                  getMessages: () => [
+                    {
+                      getAttachments: (opts) => {
+                        if (opts) throw new Error('opts not supported')
+                        return [
+                          {
+                            getName: () => 'smime.p7s',
+                            getSize: () => 1024,
+                          },
+                          {
+                            getName: () => 'w2.pdf',
+                            getBytes: () => new Array(1024).fill(1),
+                            getContentType: () => 'application/pdf',
+                          },
+                        ]
+                      },
+                    },
+                  ],
+                },
+                {
+                  getId: () => 'th-dry-only-garbage',
+                  getLabels: () => [{ getName: () => '01_Household' }],
+                  getMessages: () => [
+                    {
+                      getAttachments: () => [
+                        { getName: () => 'smime.p7s', getSize: () => 500 },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            }
+            const dryRunDrive = {
+              getFoldersByName: () => ({ hasNext: () => false }),
+            }
+            const dryReport = mod.runDryRunAttachmentAudit(
+              {},
+              { canonicalDomains: ['01_Household', '02_Finance_Legal'] },
+              { GmailApp: dryRunGmail, DriveApp: dryRunDrive }
+            )
+            expect(dryReport.totalEligibleAttachments).toBe(1)
+            expect(dryReport.filteredGarbageCount).toBe(2)
+
+            // timeBudgetMs expiry in auditAndBackfillCanonicalAttachments
+            const expiredReport = mod.auditAndBackfillCanonicalAttachments(
+              { timeBudgetMs: -1 },
+              { canonicalDomains: ['02_Finance_Legal'] },
+              { GmailApp: dryRunGmail, DriveApp: dryRunDrive }
+            )
+            expect(expiredReport.timeBudgetReached).toBe(true)
+
+            // Live backfill with createFile throwing BACKFILL_ERROR and folder access error
+            let folderThrow = false
+            const errDrive = {
+              getFoldersByName: () => {
+                if (folderThrow) throw new Error('Drive error')
+                return {
+                  hasNext: () => true,
+                  next: () => ({
+                    getFoldersByName: () => ({
+                      hasNext: () => true,
+                      next: () => ({
+                        getFilesByName: () => ({ hasNext: () => false }),
+                        createFile: () => {
+                          throw new Error('Quota exceeded')
+                        },
+                      }),
+                    }),
+                  }),
+                }
+              },
+            }
+            const liveErrReport = mod.auditAndBackfillCanonicalAttachments(
+              { dryRun: false },
+              { canonicalDomains: ['02_Finance_Legal'] },
+              { GmailApp: dryRunGmail, DriveApp: errDrive }
+            )
+            expect(liveErrReport.items[0].status).toBe('BACKFILL_ERROR')
+
+            folderThrow = true
+            const folderErrReport = mod.auditAndBackfillCanonicalAttachments(
+              { dryRun: false },
+              { canonicalDomains: ['02_Finance_Legal'] },
+              { GmailApp: dryRunGmail, DriveApp: errDrive }
+            )
+            expect(folderErrReport.threadsWithEligibleAttachments).toBe(0)
+          })
+
+          test('reclassifyThreadsByQuery and runRealignmentAudit handle attachment verification, trash, and errors', () => {
+            const origGmail = global.GmailApp
+            try {
+              delete global.GmailApp
+              expect(() =>
+                mod.reclassifyThreadsByQuery('in:inbox', {}, {}, {})
+              ).toThrow(/GmailApp service is required/)
+            } finally {
+              global.GmailApp = origGmail
+            }
+
+            // Reclassify with Thread-ID mismatch, size mismatch, hash match, and trash action
+            const movedFiles = []
+            const oldFolder = {
+              getFilesByName: () => {
+                const files = [
+                  {
+                    getName: () => 'doc.pdf',
+                    getDescription: () => 'Thread-ID: other-thread',
+                    moveTo: jest.fn(),
+                  },
+                  {
+                    getName: () => 'doc.pdf',
+                    getDescription: () => '',
+                    getSize: () => 9999,
+                    moveTo: jest.fn(),
+                  },
+                  {
+                    getName: () => 'doc.pdf',
+                    getDescription: () => '',
+                    getSize: () => 2048,
+                    getBytes: () => [1, 2, 3, 4],
+                    moveTo: () => movedFiles.push('doc.pdf'),
+                  },
+                ]
+                let idx = 0
+                return {
+                  hasNext: () => idx < files.length,
+                  next: () => files[idx++],
+                }
+              },
+            }
+            const newFolder = {
+              getFilesByName: () => ({ hasNext: () => false }),
+              createFile: () => ({
+                getId: () => 'saved-1',
+                setDescription: () => {},
+              }),
+            }
+            const rootDrive = {
+              getFoldersByName: (name) => ({
+                hasNext: () => true,
+                next: () => ({
+                  getFoldersByName: () => ({
+                    hasNext: () => true,
+                    next: () =>
+                      name === '01_Household' ? oldFolder : newFolder,
+                  }),
+                }),
+              }),
+            }
+            const trashedThreads = []
+            const reclGmail = {
+              getUserLabels: () => {
+                throw new Error('Label list error')
+              },
+              getUserLabelByName: (n) => ({ getName: () => n }),
+              search: () => [
+                {
+                  getId: () => 'th-recl-1',
+                  getLastMessageDate: () => '2026-03-01T00:00:00Z',
+                  getLabels: () => [{ getName: () => '01_Household' }],
+                  getMessages: () => [
+                    {
+                      getFrom: () => 'hr@corp.com',
+                      getSubject: () => 'Career Opportunity',
+                      getPlainBody: () => 'Details enclosed',
+                      getAttachments: () => [
+                        {
+                          getName: () => 'doc.pdf',
+                          getSize: () => 2048,
+                          getBytes: () => [1, 2, 3, 4],
+                          getContentType: () => 'application/pdf',
+                        },
+                      ],
+                    },
+                  ],
+                  addLabel: jest.fn(),
+                },
+                {
+                  getId: () => 'th-recl-trash',
+                  getLastMessageDate: () => '2026-02-01T00:00:00Z',
+                  getLabels: () => [],
+                  getMessages: () => [
+                    {
+                      getFrom: () => 'spam@scam.com',
+                      getSubject: () => 'Random Message',
+                      getPlainBody: () => 'Click here',
+                    },
+                  ],
+                  addLabel: jest.fn(),
+                  moveToTrash: () => trashedThreads.push('th-recl-trash'),
+                },
+              ],
+            }
+            mod.reclassifyThreadsByQuery(
+              'in:inbox',
+              { dryRun: false },
+              {
+                canonicalDomains: ['01_Household', '06_Work_Career'],
+                processedLabel: 'Processed',
+              },
+              {
+                GmailApp: reclGmail,
+                DriveApp: rootDrive,
+                classifyFn: (_s, subj) =>
+                  subj.startsWith('Career Opportunity')
+                    ? {
+                        canonicalDomain: '06_Work_Career',
+                        subLabel: 'Work/Career',
+                        category: 'Primary',
+                        action: 'keep',
+                        confidence: 0.95,
+                      }
+                    : {
+                        canonicalDomain: null,
+                        category: 'Promotions',
+                        action: 'trash',
+                        confidence: 0.95,
+                      },
+              }
+            )
+            expect(movedFiles).toEqual(['doc.pdf'])
+            expect(trashedThreads).toEqual(['th-recl-trash'])
+
+            // timeBudgetMs expiry in reclassifyThreadsByQuery
+            const timedOutRecl = mod.reclassifyThreadsByQuery(
+              'in:inbox',
+              { timeBudgetMs: -1 },
+              {},
+              { GmailApp: reclGmail }
+            )
+            expect(timedOutRecl.reclassified).toBe(0)
+
+            // runRealignmentAudit with getUserLabels error falls back to default query
+            const auditRes = mod.runRealignmentAudit(
+              '',
+              {},
+              {},
+              {
+                GmailApp: reclGmail,
+                classifyFn: () => {
+                  throw new Error('Classifier failure')
+                },
+              }
+            )
+            expect(auditRes.query).toContain('Family/Sisters')
+          })
+
+          test('purgeExpiredEmailsByRetentionPolicy and processEmailsWithAiClassifier handle shields, pagination, and actions', () => {
+            const origGmail = global.GmailApp
+            try {
+              delete global.GmailApp
+              expect(mod.purgeExpiredEmailsByRetentionPolicy({}, {})).toEqual({
+                trashedCount: 0,
+                exemptedCount: 0,
+              })
+            } finally {
+              global.GmailApp = origGmail
+            }
+
+            // 0 threads on page 0
+            expect(
+              mod.purgeExpiredEmailsByRetentionPolicy(
+                { triggerUid: 'trig-1' },
+                { GmailApp: { search: () => [] } }
+              )
+            ).toEqual({ trashedCount: 0, exemptedCount: 0 })
+
+            // 50 threads on page 0 (1 with core domain label, 49 trashed) + 0 on page 1
+            const page0Threads = Array.from({ length: 50 }, (_, idx) => ({
+              getId: () => `th-p-${idx}`,
+              getLabels: () =>
+                idx === 0 ? [{ getName: () => '01_Household' }] : [],
+              getMessages: () => [],
+              moveToTrash: jest.fn(),
+            }))
+            const pagedRes = mod.purgeExpiredEmailsByRetentionPolicy(
+              {},
+              {
+                GmailApp: {
+                  search: (_q, offset) => (offset === 0 ? page0Threads : []),
+                },
+              }
+            )
+            expect(pagedRes).toEqual({ trashedCount: 49, exemptedCount: 1 })
+
+            expect(mod.isDestructiveActionAllowed_(null)).toBe(false)
+            expect(
+              mod.isDestructiveActionAllowed_({
+                action: 'trash',
+                confidence: NaN,
+              })
+            ).toBe(false)
+
+            // processEmailsWithAiClassifier missing geminiApiKey and missing GmailApp
+            mod.processEmailsWithAiClassifier({ geminiApiKey: '' }, {})
+            const origGmail2 = global.GmailApp
+            try {
+              delete global.GmailApp
+              mod.processEmailsWithAiClassifier({ geminiApiKey: 'key' }, {})
+            } finally {
+              global.GmailApp = origGmail2
+            }
+
+            // processEmailsWithAiClassifier with low-confidence shield, trash, mark_read, and removeLabel error
+            const trashed = []
+            const markedRead = []
+            const threads = [
+              {
+                getId: () => 'th-low-conf',
+                getLabels: () => [],
+                getMessages: () => [
+                  {
+                    getFrom: () => 'sender1@unknown.org',
+                    getSubject: () => 'Unmapped Topic Alpha',
+                    getPlainBody: () => 'Body',
+                  },
+                ],
+                addLabel: jest.fn(),
+                moveToTrash: jest.fn(),
+                moveToArchive: jest.fn(),
+              },
+              {
+                getId: () => 'th-high-trash',
+                getLabels: () => [{ getName: () => 'AI/Needs-Retry' }],
+                getMessages: () => [
+                  {
+                    getFrom: () => 'sender2@unknown.org',
+                    getSubject: () => 'Unmapped Topic Beta',
+                    getPlainBody: () => 'Body',
+                  },
+                ],
+                addLabel: jest.fn(),
+                removeLabel: () => {
+                  throw new Error('Remove label error')
+                },
+                moveToTrash: () => trashed.push('th-high-trash'),
+                markRead: () => markedRead.push('th-high-trash'),
+              },
+            ]
+            mod.processEmailsWithAiClassifier(
+              {
+                geminiApiKey: 'test-key',
+                userAccountEmail: 'me@example.com',
+                processedLabel: 'Processed',
+                retryLabel: 'AI/Needs-Retry',
+              },
+              {
+                GmailApp: {
+                  search: () => threads,
+                  getUserLabelByName: (n) => ({ getName: () => n }),
+                },
+                classifyFn: (_s, subj) =>
+                  subj.startsWith('Unmapped Topic Alpha')
+                    ? {
+                        canonicalDomain: null,
+                        category: 'Promotions',
+                        action: 'trash',
+                        confidence: 0.5,
+                      }
+                    : {
+                        canonicalDomain: null,
+                        category: 'Promotions',
+                        action: 'trash',
+                        markRead: true,
+                        confidence: 0.95,
+                      },
+              }
+            )
+            expect(threads[0].moveToTrash).not.toHaveBeenCalled()
+            expect(trashed).toEqual(['th-high-trash'])
+            expect(markedRead).toEqual(['th-high-trash'])
           })
         })
       })

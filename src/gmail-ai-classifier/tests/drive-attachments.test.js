@@ -1169,6 +1169,59 @@ describe('Drive Attachment Persistence along Taxonomy Path', () => {
       expect(results).toHaveLength(1)
       expect(results[0].name).toBe('drive_file/statement.pdf')
     })
+
+    test('resolves filename collisions for non-duplicate zip entries with identical basenames and logs truncation warning past 25 entries', () => {
+      const parentFolder = createMockFolder('parent')
+      const mockZipBlob = createMockAttachment({
+        name: 'collision_test.zip',
+        content: 'zip',
+      })
+      const entries = [
+        createMockAttachment({
+          name: 'dir1/report.pdf',
+          content: 'report version A',
+          size: 5000,
+        }),
+        createMockAttachment({
+          name: 'dir2/report.pdf',
+          content: 'report version B - different',
+          size: 5500,
+        }),
+      ]
+      for (let i = 0; i < 25; i++) {
+        entries.push(
+          createMockAttachment({
+            name: `extra_${i}.pdf`,
+            content: `extra content ${i}`,
+            size: 4000 + i,
+          })
+        )
+      }
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const results = extractZipArchiveToSubfolder(
+          parentFolder,
+          mockZipBlob,
+          {
+            Utilities: {
+              unzip: jest.fn(() => entries),
+              formatDate: () => '_120000123',
+            },
+            Session: {
+              getScriptTimeZone: () => 'GMT',
+            },
+          }
+        )
+        expect(results).toHaveLength(25)
+        expect(results[0].name).toBe('collision_test/report.pdf')
+        expect(results[1].name).toBe('collision_test/report_120000123.pdf')
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('truncating extraction')
+        )
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
   })
 
   describe('unzipExistingDriveArchive', () => {
@@ -1624,6 +1677,101 @@ describe('Drive Attachment Persistence along Taxonomy Path', () => {
         0,
         50
       )
+    })
+
+    test('dryRun mode does not create missing taxonomy folders in Google Drive', () => {
+      const mockDriveApp = createMockDriveApp()
+      const att = createMockAttachment({
+        name: 'Unbacked_Bill.pdf',
+        content: 'Bill content',
+      })
+      const thread = {
+        getId: () => 'th-dry-nofolder',
+        getFirstMessageSubject: () => 'Water Bill',
+        labels: ['01_Household', 'Household/Property'],
+        getMessages: () => [{ getAttachments: () => [att] }],
+      }
+      const mockGmailApp = {
+        search: jest.fn(() => [thread]),
+      }
+
+      const report = auditAndBackfillCanonicalAttachments(
+        { dryRun: true },
+        {},
+        { GmailApp: mockGmailApp, DriveApp: mockDriveApp }
+      )
+
+      expect(report.missingFromDrive).toBe(1)
+      expect(
+        mockDriveApp.getRootFolder().getFoldersByName('01_Household').hasNext()
+      ).toBe(false)
+    })
+
+    test('supports optional rootFolderName and LockService in ensureDriveTaxonomyFolder and identifies matching duplicate among multiple same-name files', () => {
+      const mockDriveApp = createMockDriveApp()
+      const mockLock = {
+        tryLock: jest.fn(() => true),
+        releaseLock: jest.fn(),
+      }
+      const mockLockService = {
+        getScriptLock: jest.fn(() => mockLock),
+      }
+
+      const folder = ensureDriveTaxonomyFolder(
+        '02_Finance_Legal',
+        'Banking',
+        mockDriveApp,
+        {
+          rootFolderName: 'Self_Vault',
+          lockService: mockLockService,
+        }
+      )
+      expect(mockLockService.getScriptLock).toHaveBeenCalled()
+      expect(mockLock.releaseLock).toHaveBeenCalled()
+      expect(
+        mockDriveApp.getRootFolder().getFoldersByName('Self_Vault').hasNext()
+      ).toBe(true)
+
+      // Create two files with the same name in folder; only the second matches att content
+      const firstFile = folder.createFile({
+        getName: () => 'Duplicate_Name.pdf',
+        getBytes: () => Buffer.from('Other file content', 'utf-8'),
+      })
+      firstFile.setDescription('[AI_INDEXED] Other')
+
+      const secondFile = folder.createFile({
+        getName: () => 'Duplicate_Name.pdf',
+        getBytes: () => Buffer.from('Target file content', 'utf-8'),
+      })
+      // Leave secondFile untagged to verify findMatchingDuplicateFile_ selects secondFile, not firstFile!
+
+      const att = createMockAttachment({
+        name: 'Duplicate_Name.pdf',
+        content: 'Target file content',
+      })
+      const thread = {
+        getId: () => 'th-multi-dup',
+        getFirstMessageSubject: () => 'Statement',
+        labels: ['02_Finance_Legal', 'Finance/Banking'],
+        getMessages: () => [{ getAttachments: () => [att] }],
+      }
+      const mockGmailApp = {
+        search: jest.fn(() => [thread]),
+      }
+
+      const report = auditAndBackfillCanonicalAttachments(
+        { dryRun: false },
+        { driveRootFolderName: 'Self_Vault' },
+        {
+          GmailApp: mockGmailApp,
+          DriveApp: mockDriveApp,
+          LockService: mockLockService,
+        }
+      )
+
+      expect(report.alreadyStoredUntagged).toBe(1)
+      expect(report.taggedCount).toBe(1)
+      expect(secondFile.getDescription()).toContain('[AI_INDEXED]')
     })
   })
 

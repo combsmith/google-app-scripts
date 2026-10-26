@@ -361,7 +361,7 @@ describe('Gmail AI Classifier Audit System', () => {
       )
     })
 
-    test('does not flag archived thread if it already carries a secondary category label', () => {
+    test('does not flag archived thread if it already carries a secondary category label or Advanced Gmail CATEGORY_* label', () => {
       const archivedWithUpdatesLabel = {
         getId: () => 't-archived-updates',
         getFirstMessageSubject: () => 'Empower Cash APY Increase',
@@ -375,8 +375,62 @@ describe('Gmail AI Classifier Audit System', () => {
         ],
       }
 
-      const report = auditClassifications([archivedWithUpdatesLabel], config)
+      const archivedWithAdvancedCategory = {
+        getId: () => 't-archived-adv-cat',
+        getFirstMessageSubject: () => 'Bank Statement Available',
+        isInInbox: () => false,
+        isStarred: () => false,
+        getMessages: () => [{ getFrom: () => 'alerts@bank.example.com' }],
+        getLabels: () => [
+          { getName: () => 'Processed' },
+          { getName: () => 'Finance/Banking' },
+        ],
+      }
+
+      const mockGmailService = {
+        Users: {
+          Threads: {
+            get: jest.fn((_userId, threadId) => {
+              if (threadId === 't-archived-adv-cat') {
+                return {
+                  messages: [{ labelIds: ['CATEGORY_UPDATES'] }],
+                }
+              }
+              return {}
+            }),
+          },
+        },
+      }
+
+      const report = auditClassifications(
+        [archivedWithUpdatesLabel, archivedWithAdvancedCategory],
+        config,
+        { Gmail: mockGmailService }
+      )
       expect(report.flaggedCount).toBe(0)
+    })
+
+    test('matches x.com on exact domain boundary and still flags orphan threads from domains ending in x.com (e.g. fedex.com)', () => {
+      const xComThread = {
+        getId: () => 't-xcom',
+        getFirstMessageSubject: () => 'New post notification',
+        getMessages: () => [{ getFrom: () => 'notify@x.com' }],
+        getLabels: () => [{ getName: () => 'Processed' }],
+      }
+      const fedexOrphanThread = {
+        getId: () => 't-fedex-orphan',
+        getFirstMessageSubject: () => 'Delivery Notice',
+        getMessages: () => [{ getFrom: () => 'tracking@fedex.com' }],
+        getLabels: () => [{ getName: () => 'Processed' }],
+      }
+
+      const report = auditClassifications(
+        [xComThread, fedexOrphanThread],
+        config
+      )
+      expect(report.scannedCount).toBe(2)
+      expect(report.flaggedCount).toBe(1)
+      expect(report.findings[0].threadId).toBe('t-fedex-orphan')
     })
 
     test('does not flag archived thread if user starred or replied to it', () => {

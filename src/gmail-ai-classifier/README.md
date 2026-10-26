@@ -20,6 +20,9 @@ Share the 7 Canonical Domain folders in Google Drive (`01_Household` through `07
 4. Add the following keys:
    - `GEMINI_API_KEY`: Your Google AI Studio API key.
    - `GITHUB_PAT`: Fine-grained GitHub Personal Access Token with write access to your target repository.
+   - `GITHUB_REPO_OWNER`: Target GitHub repository owner / organization name.
+   - `GITHUB_REPO_NAME`: Target GitHub repository name.
+   - `DRIVE_ROOT_FOLDER_NAME`: _(Optional)_ Parent folder name in Google Drive under which the 7 canonical domain folders live (defaults to Drive root when omitted).
    - `USER_ACCOUNT_EMAIL`: `user2@example.com`
    - `CUSTOM_PROMPT_RULES`: _(Optional)_ User-specific domain and student attribution rules appended dynamically to the AI prompt without code modifications.
 
@@ -41,7 +44,7 @@ Run `setupFiveMinuteTrigger()` in Apps Script under Account #2.
   - `05_Tech_Infrastructure`: Google Cloud spend alerts, security warnings, backup status.
   - `06_Work_Career`: Professional notes, work expenses, architecture docs.
   - `07_Community_NonProfit`: Sensor telemetry, non-profit BOD notes, charity updates.
-- **Automated Google Drive Taxonomy Attachment Persistence**: Automatically extracts and persists attached documents (`.pdf`, `.docx`, `.xlsx`, `.csv`, etc.) along the label's 2-level Google Drive taxonomy path (`[Domain]/[Subfolder]`), with MD5 content fingerprint deduplication and automatic signature/tracking pixel filtering (`< 15KB`). Strictly ignores attachments for non-canonical emails (promotions, newsletters, spam) to prevent storage bloat. Formatted Google Drive links are automatically appended to GitHub markdown notes under `- **Attachments**:`.
+- **Automated Google Drive Taxonomy Attachment Persistence**: Automatically extracts and persists attached documents (`.pdf`, `.docx`, `.xlsx`, `.csv`, etc.) along the label's 2-level Google Drive taxonomy path (`[Domain]/[Subfolder]`, or `[DRIVE_ROOT_FOLDER_NAME]/[Domain]/[Subfolder]` when `DRIVE_ROOT_FOLDER_NAME` is configured), with MD5 content fingerprint deduplication and automatic signature/tracking pixel filtering (`< 35KB` for images). Strictly ignores attachments for non-canonical emails (promotions, newsletters, spam) to prevent storage bloat. Formatted Google Drive links are automatically appended to GitHub markdown notes under `- **Attachments**:`.
 - **2-Year Category Retention Engine**: Automatically purges promotional, social, and forum emails older than 2 years every Sunday at 1:00 AM, while keeping core threads **indefinitely**. The retention guard exempts any thread carrying a canonical-domain label **or one of its classifier sub-labels** (e.g. `Finance/Banking`), plus starred and user-sent/replied threads — so a core message tagged only with its sub-label is never trashed.
 
 ---

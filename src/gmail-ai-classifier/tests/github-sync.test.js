@@ -45,13 +45,14 @@ describe('GitHub Sync & Rule 6 Mojibake Guards', () => {
       expect(() => assertClean_('', 'empty input')).not.toThrow()
     })
 
-    test('passes on genuine question marks', () => {
+    test('passes on genuine question marks and URLs with query parameters', () => {
       const genuineQuestions = [
         'Did you sign in from a new device?',
         'Is this payment expected? (Yes/No)',
         'What? Are you sure?',
         'Can we meet today? Thanks!',
         'Questions? Contact support@example.com.',
+        'View invoice at https://example.com/view?token=abc&mode=pdf or [Attachment](https://drive.google.com/file/d/123/view?usp=sharing)',
       ]
       genuineQuestions.forEach((text) => {
         expect(() => assertClean_(text, 'genuine question')).not.toThrow()
@@ -426,6 +427,19 @@ describe('GitHub Sync & Rule 6 Mojibake Guards', () => {
     const originalProperties = global.PropertiesService
     const originalUrlFetchApp = global.UrlFetchApp
 
+    beforeEach(() => {
+      global.PropertiesService = {
+        getScriptProperties: () => ({
+          getProperty: (k) => {
+            if (k === 'GITHUB_REPO_OWNER') return 'test-owner'
+            if (k === 'GITHUB_REPO_NAME') return 'test-repo'
+            if (k === 'GITHUB_PAT') return 'ghp_valid'
+            return ''
+          },
+        }),
+      }
+    })
+
     afterEach(() => {
       global.PropertiesService = originalProperties
       global.UrlFetchApp = originalUrlFetchApp
@@ -434,7 +448,7 @@ describe('GitHub Sync & Rule 6 Mojibake Guards', () => {
     test('returns false and logs when GITHUB_PAT property is not set', () => {
       global.PropertiesService = {
         getScriptProperties: () => ({
-          getProperty: (k) => (k === 'GITHUB_PAT' ? null : ''),
+          getProperty: (k) => (k === 'GITHUB_PAT' ? null : 'test-val'),
         }),
       }
 
@@ -444,6 +458,31 @@ describe('GitHub Sync & Rule 6 Mojibake Guards', () => {
         'feat(ingestion): Test'
       )
       expect(result).toBe(false)
+    })
+
+    test('fails closed and returns false when GITHUB_REPO_OWNER or GITHUB_REPO_NAME is unconfigured', () => {
+      global.PropertiesService = {
+        getScriptProperties: () => ({
+          getProperty: (k) => (k === 'GITHUB_PAT' ? 'ghp_valid' : ''),
+        }),
+      }
+
+      expect(
+        appendMarkdownEntryToGitHubRepo(
+          'household/finances/index.md',
+          '### 2026-09-12 — Test Entry',
+          'feat(ingestion): Test'
+        )
+      ).toBe(false)
+
+      expect(
+        executeGitHubCommit(
+          'household/finances/index.md',
+          '### 2026-09-12 — Test Entry',
+          'feat(ingestion): Test',
+          'ghp_valid'
+        )
+      ).toBe(false)
     })
 
     test('commits successfully (200 GET -> 200 PUT) with UTF-8 content', () => {
@@ -663,7 +702,12 @@ describe('GitHub Sync & Rule 6 Mojibake Guards', () => {
       try {
         global.PropertiesService = {
           getScriptProperties: () => ({
-            getProperty: (k) => (k === 'GITHUB_PAT' ? 'ghp_valid' : ''),
+            getProperty: (k) => {
+              if (k === 'GITHUB_PAT') return 'ghp_valid'
+              if (k === 'GITHUB_REPO_OWNER') return 'test-owner'
+              if (k === 'GITHUB_REPO_NAME') return 'test-repo'
+              return ''
+            },
           }),
         }
 
@@ -749,7 +793,12 @@ describe('GitHub Sync & Rule 6 Mojibake Guards', () => {
       try {
         global.PropertiesService = {
           getScriptProperties: () => ({
-            getProperty: (k) => (k === 'GITHUB_PAT' ? 'ghp_valid' : ''),
+            getProperty: (k) => {
+              if (k === 'GITHUB_PAT') return 'ghp_valid'
+              if (k === 'GITHUB_REPO_OWNER') return 'test-owner'
+              if (k === 'GITHUB_REPO_NAME') return 'test-repo'
+              return ''
+            },
           }),
         }
 
@@ -809,11 +858,68 @@ describe('GitHub Sync & Rule 6 Mojibake Guards', () => {
   // -------------------------------------------------------------------------
   describe('gitHubSync.gs parity with src/index.js', () => {
     const gitHubSyncGs = require('../gitHubSync.gs')
+    const originalProperties = global.PropertiesService
+    const originalUrlFetchApp = global.UrlFetchApp
+
+    beforeEach(() => {
+      global.PropertiesService = {
+        getScriptProperties: () => ({
+          getProperty: (k) => {
+            if (k === 'GITHUB_REPO_OWNER') return 'test-owner'
+            if (k === 'GITHUB_REPO_NAME') return 'test-repo'
+            if (k === 'GITHUB_PAT') return 'token-xyz'
+            return ''
+          },
+        }),
+      }
+    })
+
+    afterEach(() => {
+      global.PropertiesService = originalProperties
+      global.UrlFetchApp = originalUrlFetchApp
+    })
 
     test('extractTopicTitleFromPath handles single segment paths and strips file extension', () => {
       expect(gitHubSyncGs.extractTopicTitleFromPath('digital-backups.md')).toBe(
         'Digital Backups'
       )
+    })
+
+    test('executeGitHubCommit uses Bearer auth header, API version header, and URL-encoded path segments', () => {
+      let capturedUrl = null
+      let capturedHeaders = null
+      global.UrlFetchApp = {
+        fetch: jest.fn((url, options) => {
+          capturedUrl = url
+          capturedHeaders = options.headers
+          if (options.method === 'get') {
+            return {
+              getResponseCode: () => 404,
+              getContentText: () => '{}',
+            }
+          }
+          return {
+            getResponseCode: () => 201,
+            getContentText: () => JSON.stringify({ commit: { sha: 'sha456' } }),
+          }
+        }),
+      }
+
+      const success = gitHubSyncGs.executeGitHubCommit(
+        '01_Household/My Notes & Docs/index.md',
+        '### 2026-10-15 — Test Title',
+        'feat(ingestion): Test',
+        'token-xyz'
+      )
+      expect(success).toBe(true)
+      expect(capturedUrl).toBe(
+        'https://api.github.com/repos/test-owner/test-repo/contents/01_Household/My%20Notes%20%26%20Docs/index.md'
+      )
+      expect(capturedHeaders).toMatchObject({
+        Authorization: 'Bearer token-xyz',
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      })
     })
 
     test('executeGitHubCommit handles wrapped newlines in base64 content from GitHub Contents API', () => {
@@ -861,20 +967,23 @@ describe('GitHub Sync & Rule 6 Mojibake Guards', () => {
     })
 
     test('executeGitHubCommit validates Base64 round trip at the payload boundary', () => {
+      const existingBase64 = Utilities.base64Encode(
+        Utilities.newBlob(
+          '# Doc\n<details open><summary>Logs</summary>\n</details>'
+        ).getBytes()
+      )
+      let getCalled = false
       let putCalled = false
       global.UrlFetchApp = {
         fetch: jest.fn((url, options) => {
           if (options.method === 'get') {
+            getCalled = true
             return {
               getResponseCode: () => 200,
               getContentText: () =>
                 JSON.stringify({
                   sha: 'sha123',
-                  content: Utilities.base64Encode(
-                    Utilities.newBlob(
-                      '# Doc\n<details open><summary>Logs</summary>\n</details>'
-                    ).getBytes()
-                  ),
+                  content: existingBase64,
                 }),
             }
           }
@@ -889,13 +998,17 @@ describe('GitHub Sync & Rule 6 Mojibake Guards', () => {
         }),
       }
 
+      let decodeCalls = 0
       jest.spyOn(Utilities, 'base64Decode').mockImplementation((b64) => {
+        decodeCalls++
         const decoded = Buffer.from(b64, 'base64').toString('utf-8')
-        const flattened = decoded.replace(/—/g, '?')
-        return {
-          getDataAsString: () => flattened,
-          getBytes: () => Buffer.from(flattened, 'utf-8'),
+        if (decodeCalls === 1) {
+          // GET decode succeeds cleanly with valid byte array
+          return Array.from(Buffer.from(decoded, 'utf-8'))
         }
+        // PUT round-trip verification detects ASCII-flattened mojibake
+        const flattened = decoded.replace(/—/g, '?')
+        return Array.from(Buffer.from(flattened, 'utf-8'))
       })
 
       try {
@@ -905,6 +1018,8 @@ describe('GitHub Sync & Rule 6 Mojibake Guards', () => {
           'feat(ingestion): Test',
           'token-xyz'
         )
+        expect(getCalled).toBe(true)
+        expect(decodeCalls).toBe(2)
         expect(result).toBe(false)
         expect(putCalled).toBe(false)
       } finally {

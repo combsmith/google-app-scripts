@@ -1,6 +1,6 @@
 /**
  * Native Google Apps Script GitHub Sync Module (Auto-Create & Long Document Aware)
- * Calls GitHub REST API via UrlFetchApp to commit Markdown entries directly to self-private repo.
+ * Calls GitHub REST API via UrlFetchApp to commit Markdown entries directly to a configured GitHub repository.
  *
  * Features:
  * - Auto-creates missing target markdown files on GitHub (HTTP 404 handling)
@@ -8,15 +8,6 @@
  * - Section-Aware Targeted Insertion (inserts entries into Section 3 log blocks)
  * - Idempotency Guard (skips duplicate entries)
  */
-
-var GITHUB_REPO_OWNER =
-  (typeof getAiClassifierConfig === 'function' &&
-    getAiClassifierConfig().githubRepoOwner) ||
-  'don-petry'
-var GITHUB_REPO_NAME =
-  (typeof getAiClassifierConfig === 'function' &&
-    getAiClassifierConfig().githubRepoName) ||
-  'self-private'
 
 var RULE6_PATTERNS = [
   [/\S \? \S/, "' ? ' between words (was an em dash or a · separator)"],
@@ -28,8 +19,9 @@ var RULE6_PATTERNS = [
 /** Refuse to write an entry that already shows mojibake. */
 function assertClean_(text, what) {
   if (!text) return
+  var stripped = String(text).replace(/https?:\/\/\S+/g, '')
   for (var i = 0; i < RULE6_PATTERNS.length; i++) {
-    if (RULE6_PATTERNS[i][0].test(text)) {
+    if (RULE6_PATTERNS[i][0].test(stripped)) {
       throw new Error(
         'Rule 6: refusing to write ' + what + ' — ' + RULE6_PATTERNS[i][1]
       )
@@ -62,12 +54,86 @@ function assertNoAsciiReplacement_(source, rendered) {
 }
 
 /**
- * Appends a Progressive Disclosure entry to a target markdown file in self-private via GitHub REST API.
+ * Resolves GitHub repository owner and name lazily from services, ScriptProperties, config, or environment.
+ */
+function resolveGitHubRepoTarget_(services) {
+  var propsService =
+    (services && services.PropertiesService) ||
+    (typeof PropertiesService !== 'undefined' ? PropertiesService : null)
+  var scriptProps =
+    propsService && typeof propsService.getScriptProperties === 'function'
+      ? propsService.getScriptProperties()
+      : null
+  var getProp = function (key) {
+    return scriptProps && typeof scriptProps.getProperty === 'function'
+      ? scriptProps.getProperty(key)
+      : null
+  }
+
+  var cfgOwner = ''
+  var cfgName = ''
+  try {
+    if (typeof getAiClassifierConfig === 'function') {
+      var cfg = getAiClassifierConfig()
+      cfgOwner = (cfg && cfg.githubRepoOwner) || ''
+      cfgName = (cfg && cfg.githubRepoName) || ''
+    }
+  } catch (e) {
+    // Ignore config resolution errors in restricted scopes
+  }
+
+  var envOwner =
+    typeof process !== 'undefined' &&
+    process &&
+    process.env &&
+    process.env.GITHUB_REPO_OWNER
+      ? process.env.GITHUB_REPO_OWNER
+      : ''
+  var envName =
+    typeof process !== 'undefined' &&
+    process &&
+    process.env &&
+    process.env.GITHUB_REPO_NAME
+      ? process.env.GITHUB_REPO_NAME
+      : ''
+
+  var repoOwner =
+    (services && services.githubRepoOwner) ||
+    getProp('GITHUB_REPO_OWNER') ||
+    cfgOwner ||
+    envOwner ||
+    ''
+  var repoName =
+    (services && services.githubRepoName) ||
+    getProp('GITHUB_REPO_NAME') ||
+    cfgName ||
+    envName ||
+    ''
+
+  return { repoOwner: repoOwner.trim(), repoName: repoName.trim() }
+}
+
+/**
+ * Appends a Progressive Disclosure entry to a target markdown file via GitHub REST API.
  * Automatically creates the file with valid front-matter if it does not exist yet (HTTP 404).
  */
-function appendMarkdownEntryToGitHubRepo(filePath, entryMd, commitMessage) {
+function appendMarkdownEntryToGitHubRepo(
+  filePath,
+  entryMd,
+  commitMessage,
+  services
+) {
+  var props =
+    (services && services.PropertiesService) ||
+    (typeof PropertiesService !== 'undefined' ? PropertiesService : null)
+  var scriptProps =
+    props && typeof props.getScriptProperties === 'function'
+      ? props.getScriptProperties()
+      : null
   var githubToken =
-    PropertiesService.getScriptProperties().getProperty('GITHUB_PAT')
+    scriptProps && typeof scriptProps.getProperty === 'function'
+      ? scriptProps.getProperty('GITHUB_PAT')
+      : null
   if (!githubToken) {
     console.log(
       '[gitHubSync] GITHUB_PAT ScriptProperty not set. Skipping GitHub commit.'
@@ -75,13 +141,26 @@ function appendMarkdownEntryToGitHubRepo(filePath, entryMd, commitMessage) {
     return false
   }
 
+  var sleepFn =
+    (services && services.sleepFn) ||
+    function (ms) {
+      if (
+        typeof Utilities !== 'undefined' &&
+        Utilities &&
+        typeof Utilities.sleep === 'function'
+      ) {
+        Utilities.sleep(ms)
+      }
+    }
+
   var maxRetries = 3
   for (var attempt = 1; attempt <= maxRetries; attempt++) {
     var result = executeGitHubCommit(
       filePath,
       entryMd,
       commitMessage,
-      githubToken
+      githubToken,
+      services
     )
     if (result === true || result === 'IDEMPOTENT_SKIP') {
       return true
@@ -94,7 +173,7 @@ function appendMarkdownEntryToGitHubRepo(filePath, entryMd, commitMessage) {
       'for',
       filePath
     )
-    Utilities.sleep(1000 * attempt)
+    sleepFn(1000 * attempt)
   }
 
   console.error(
@@ -109,21 +188,49 @@ function appendMarkdownEntryToGitHubRepo(filePath, entryMd, commitMessage) {
 /**
  * Performs a single commit transaction via GitHub REST API with 404 Auto-Create & 409 SHA retry handling.
  */
-function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
+function executeGitHubCommit(
+  filePath,
+  entryMd,
+  commitMessage,
+  githubToken,
+  services
+) {
   if (!filePath || !entryMd) {
     console.warn('[gitHubSync] Missing filePath or entryMd for GitHub commit.')
     return false
   }
+
+  var target = resolveGitHubRepoTarget_(services)
+  if (!target.repoOwner || !target.repoName) {
+    console.warn(
+      '[gitHubSync] GITHUB_REPO_OWNER or GITHUB_REPO_NAME not configured. Skipping GitHub commit.'
+    )
+    return false
+  }
+
+  var urlFetchApp =
+    (services && services.UrlFetchApp) ||
+    (typeof UrlFetchApp !== 'undefined' ? UrlFetchApp : null)
+  var utils =
+    (services && services.Utilities) ||
+    (typeof Utilities !== 'undefined' ? Utilities : null)
+
+  var encodedPath = String(filePath)
+    .split('/')
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join('/')
   var url =
     'https://api.github.com/repos/' +
-    GITHUB_REPO_OWNER +
+    encodeURIComponent(target.repoOwner) +
     '/' +
-    GITHUB_REPO_NAME +
+    encodeURIComponent(target.repoName) +
     '/contents/' +
-    filePath
+    encodedPath
   var headers = {
-    Authorization: 'token ' + githubToken,
-    Accept: 'application/vnd.github.v3+json',
+    Authorization: 'Bearer ' + githubToken,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'Google-Apps-Script',
   }
 
@@ -133,7 +240,7 @@ function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
       headers: headers,
       muteHttpExceptions: true,
     }
-    var res = UrlFetchApp.fetch(url, getOptions)
+    var res = urlFetchApp.fetch(url, getOptions)
     var statusCode = res.getResponseCode()
 
     var sha = null
@@ -146,11 +253,15 @@ function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
         filePath
       )
       var topicTitle = extractTopicTitleFromPath(filePath)
+      var dateStr =
+        utils && typeof utils.formatDate === 'function'
+          ? utils.formatDate(new Date(), 'GMT', 'yyyy-MM-dd')
+          : new Date().toISOString().slice(0, 10)
       rawContent =
         '---\ntitle: ' +
         topicTitle +
         '\ncreated: ' +
-        Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd') +
+        dateStr +
         '\nnotebook: household\nsection: general\n---\n\n' +
         '# ' +
         topicTitle +
@@ -163,9 +274,11 @@ function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
       sha = fileData.sha
       // GitHub Contents API wraps Base64 in newlines every 60 chars; strip them
       // before decoding since some decoders reject embedded whitespace.
-      rawContent = Utilities.newBlob(
-        Utilities.base64Decode((fileData.content || '').replace(/[\r\n]/g, ''))
-      ).getDataAsString()
+      rawContent = utils
+        .newBlob(
+          utils.base64Decode((fileData.content || '').replace(/[\r\n]/g, ''))
+        )
+        .getDataAsString()
 
       // Idempotency Check: Skip if entry already present
       if (
@@ -194,16 +307,16 @@ function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
     // Rule 6 Guards: Refuse to commit if mojibake is detected in new entry or non-ASCII chars were flattened
     assertClean_(entryMd, 'new entry for ' + filePath)
 
-    var base64Updated = Utilities.base64Encode(
-      Utilities.newBlob(updatedContent).getBytes()
+    var base64Updated = utils.base64Encode(
+      utils.newBlob(updatedContent).getBytes()
     )
 
     // Validate the ACTUAL Base64 round trip at the payload boundary: decode what
     // we are about to PUT and confirm no non-ASCII character was flattened to
     // '?'.
-    var renderedContent = Utilities.newBlob(
-      Utilities.base64Decode(base64Updated)
-    ).getDataAsString()
+    var renderedContent = utils
+      .newBlob(utils.base64Decode(base64Updated))
+      .getDataAsString()
     assertNoAsciiReplacement_(updatedContent, renderedContent)
 
     // 3. Commit updated content back to GitHub main branch
@@ -226,7 +339,7 @@ function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
       muteHttpExceptions: true,
     }
 
-    var putRes = UrlFetchApp.fetch(url, putOptions)
+    var putRes = urlFetchApp.fetch(url, putOptions)
     var putStatus = putRes.getResponseCode()
 
     if (putStatus === 200 || putStatus === 201) {
@@ -312,6 +425,7 @@ if (typeof module !== 'undefined' && module.exports) {
     executeGitHubCommit: executeGitHubCommit,
     extractTopicTitleFromPath: extractTopicTitleFromPath,
     insertEntryIntoLogSection: insertEntryIntoLogSection,
+    resolveGitHubRepoTarget_: resolveGitHubRepoTarget_,
     assertClean_: assertClean_,
     assertNoAsciiReplacement_: assertNoAsciiReplacement_,
     RULE6_PATTERNS: RULE6_PATTERNS,

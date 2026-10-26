@@ -10,10 +10,12 @@ function getAiClassifierConfig() {
     typeof PropertiesService.getScriptProperties === 'function'
       ? PropertiesService.getScriptProperties()
       : null
-  var modelName =
-    (props && typeof props.getProperty === 'function'
-      ? props.getProperty('GEMINI_MODEL')
-      : null) || 'gemini-2.5-flash'
+  var getProp = function (key) {
+    return props && typeof props.getProperty === 'function'
+      ? props.getProperty(key)
+      : null
+  }
+  var modelName = getProp('GEMINI_MODEL') || 'gemini-2.5-flash'
 
   // Automatically upgrade deprecated models (gemini-1.5, gemini-2.0) to gemini-2.5-flash
   if (
@@ -25,10 +27,7 @@ function getAiClassifierConfig() {
     modelName = 'gemini-2.5-flash'
   }
 
-  var customEndpoint =
-    props && typeof props.getProperty === 'function'
-      ? props.getProperty('GEMINI_ENDPOINT')
-      : ''
+  var customEndpoint = getProp('GEMINI_ENDPOINT') || ''
   if (
     customEndpoint &&
     (customEndpoint.indexOf('gemini-1.5') !== -1 ||
@@ -52,70 +51,43 @@ function getAiClassifierConfig() {
     // Session access might be restricted in certain scopes
   }
 
+  var rawLookback = getProp('AUDIT_LOOKBACK_DAYS')
+  var parsedLookback = Number.parseInt(rawLookback || '2', 10)
+  var auditLookbackDays =
+    Number.isNaN(parsedLookback) || parsedLookback <= 0 ? 2 : parsedLookback
+
+  var rawThreshold = getProp('AUTO_FILTER_THRESHOLD')
+  var parsedThreshold = Number.parseFloat(
+    rawThreshold !== null && rawThreshold !== undefined && rawThreshold !== ''
+      ? rawThreshold
+      : '0.95'
+  )
+  var autoFilterConfidenceThreshold = Number.isNaN(parsedThreshold)
+    ? 0.95
+    : Math.min(1, Math.max(0, parsedThreshold))
+
   return {
-    geminiApiKey:
-      (props && typeof props.getProperty === 'function'
-        ? props.getProperty('GEMINI_API_KEY')
-        : '') || '',
+    geminiApiKey: getProp('GEMINI_API_KEY') || '',
     geminiModel: modelName,
-    familyEmails:
-      (props && typeof props.getProperty === 'function'
-        ? props.getProperty('FAMILY_EMAILS')
-        : '') || '',
-    githubToken:
-      (props && typeof props.getProperty === 'function'
-        ? props.getProperty('GITHUB_PAT')
-        : '') || '',
-    githubRepoOwner:
-      (props && typeof props.getProperty === 'function'
-        ? props.getProperty('GITHUB_REPO_OWNER')
-        : '') || 'don-petry',
-    githubRepoName:
-      (props && typeof props.getProperty === 'function'
-        ? props.getProperty('GITHUB_REPO_NAME')
-        : '') || 'self-private',
+    familyEmails: getProp('FAMILY_EMAILS') || '',
+    githubToken: getProp('GITHUB_PAT') || '',
+    githubRepoOwner: getProp('GITHUB_REPO_OWNER') || '',
+    githubRepoName: getProp('GITHUB_REPO_NAME') || '',
+    driveRootFolderName: getProp('DRIVE_ROOT_FOLDER_NAME') || '',
     userAccountEmail:
       userEmail ||
-      (props && typeof props.getProperty === 'function'
-        ? props.getProperty('USER_ACCOUNT_EMAIL')
-        : null) ||
+      getProp('USER_ACCOUNT_EMAIL') ||
       'household-member@gmail.com',
-    customPromptRules:
-      (props && typeof props.getProperty === 'function'
-        ? props.getProperty('CUSTOM_PROMPT_RULES')
-        : '') || '',
-    auditDigestEmail:
-      (props && typeof props.getProperty === 'function'
-        ? props.getProperty('AUDIT_DIGEST_EMAIL')
-        : '') || '',
-    auditLookbackDays: parseInt(
-      (props && typeof props.getProperty === 'function'
-        ? props.getProperty('AUDIT_LOOKBACK_DAYS')
-        : null) || '2',
-      10
-    ),
-    processedLabel:
-      (props && typeof props.getProperty === 'function'
-        ? props.getProperty('PROCESSED_LABEL')
-        : '') || 'Processed',
-    retryLabel:
-      (props && typeof props.getProperty === 'function'
-        ? props.getProperty('RETRY_LABEL')
-        : '') || 'AI/Needs-Retry',
-    manualReviewLabel:
-      (props && typeof props.getProperty === 'function'
-        ? props.getProperty('MANUAL_REVIEW_LABEL')
-        : '') || 'AI/Manual-Review',
+    customPromptRules: getProp('CUSTOM_PROMPT_RULES') || '',
+    auditDigestEmail: getProp('AUDIT_DIGEST_EMAIL') || '',
+    auditLookbackDays: auditLookbackDays,
+    processedLabel: getProp('PROCESSED_LABEL') || 'Processed',
+    retryLabel: getProp('RETRY_LABEL') || 'AI/Needs-Retry',
+    manualReviewLabel: getProp('MANUAL_REVIEW_LABEL') || 'AI/Manual-Review',
     unprocessedQuery:
-      (props && typeof props.getProperty === 'function'
-        ? props.getProperty('UNPROCESSED_QUERY')
-        : null) ||
+      getProp('UNPROCESSED_QUERY') ||
       'label:AI/Needs-Retry OR (in:inbox -label:Processed -label:AI/Manual-Review) OR (newer_than:14d -label:Processed -label:AI/Manual-Review -from:me)',
-    autoFilterConfidenceThreshold: parseFloat(
-      (props && typeof props.getProperty === 'function'
-        ? props.getProperty('AUTO_FILTER_THRESHOLD')
-        : null) || '0.95'
-    ),
+    autoFilterConfidenceThreshold: autoFilterConfidenceThreshold,
     modelEndpoint:
       customEndpoint ||
       'https://generativelanguage.googleapis.com/v1beta/models/' +

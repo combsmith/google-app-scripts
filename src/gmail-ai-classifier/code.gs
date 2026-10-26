@@ -1,2707 +1,130 @@
 /**
- * Main entry point for Gemini AI-Powered Semantic Email Classification and Auto-Filter Engine.
- * Runs natively inside Google Apps Script (V8 runtime).
- */
-
-var GMAIL_AI_CLASSIFIER_VERSION = 'v1.8.0-drive-taxonomy-attachments'
-
-function processEmailsWithAiClassifier(customConfig, customServices) {
-  var services = customServices || {}
-  var lockService =
-    services.LockService ||
-    (typeof LockService !== 'undefined' ? LockService : null)
-  var lock = null
-  if (lockService && typeof lockService.getScriptLock === 'function') {
-    lock = lockService.getScriptLock()
-    var hasLock = false
-    try {
-      hasLock = lock.tryLock(10000)
-    } catch (e) {
-      console.warn(
-        '[processEmailsWithAiClassifier] Error attempting script lock:',
-        e.message
-      )
-    }
-    if (!hasLock) {
-      console.warn(
-        '[processEmailsWithAiClassifier] Could not obtain script lock after 10s. Another execution is in progress. Exiting.'
-      )
-      return
-    }
-  }
-
-  try {
-    console.log(
-      '[processEmailsWithAiClassifier] Engine Version: ' +
-        GMAIL_AI_CLASSIFIER_VERSION
-    )
-    console.log(
-      '[processEmailsWithAiClassifier] Starting AI semantic email processing...'
-    )
-    var config =
-      customConfig ||
-      (typeof getAiClassifierConfig === 'function'
-        ? getAiClassifierConfig()
-        : {})
-
-    if (!config.geminiApiKey) {
-      console.error(
-        '[processEmailsWithAiClassifier] GEMINI_API_KEY ScriptProperty is missing.'
-      )
-      return
-    }
-
-    var gmail =
-      services.GmailApp || (typeof GmailApp !== 'undefined' ? GmailApp : null)
-    if (!gmail) {
-      console.error(
-        '[processEmailsWithAiClassifier] GmailApp service is missing.'
-      )
-      return
-    }
-
-    if (
-      !customConfig &&
-      typeof revertAndQueueMissedCareerEmails === 'function'
-    ) {
-      revertAndQueueMissedCareerEmails(gmail, config)
-    }
-
-    var threads = gmail.search(config.unprocessedQuery, 0, 10)
-    console.log(
-      '[processEmailsWithAiClassifier] Found ' +
-        threads.length +
-        ' unprocessed thread(s).'
-    )
-
-    var isSecondarySweep = false
-    if (threads.length === 0) {
-      // Secondary sweep: Look for unread unstarred inbox threads to realign non-Primary items
-      var sweepQuery = 'in:inbox is:unread -is:starred -from:me'
-      threads = gmail.search(sweepQuery, 0, 15)
-      isSecondarySweep = true
-      console.log(
-        '[processEmailsWithAiClassifier] Secondary sweep found ' +
-          threads.length +
-          ' unread inbox thread(s) for realignment.'
-      )
-      if (threads.length === 0) {
-        return
-      }
-    }
-
-    var processedLabel = ensureUserLabel(config.processedLabel, gmail)
-    var retryLabelName = config.retryLabel || 'AI/Needs-Retry'
-    var manualReviewLabelName = config.manualReviewLabel || 'AI/Manual-Review'
-    var retryLabel = ensureUserLabel(retryLabelName, gmail)
-    var manualReviewLabel = ensureUserLabel(manualReviewLabelName, gmail)
-
-    var props =
-      (services.PropertiesService &&
-      typeof services.PropertiesService.getScriptProperties === 'function'
-        ? services.PropertiesService.getScriptProperties()
-        : null) ||
-      services.properties ||
-      (typeof PropertiesService !== 'undefined' &&
-      typeof PropertiesService.getScriptProperties === 'function'
-        ? PropertiesService.getScriptProperties()
-        : null)
-
-    var cache =
-      (services.CacheService &&
-      typeof services.CacheService.getScriptCache === 'function'
-        ? services.CacheService.getScriptCache()
-        : null) ||
-      services.cache ||
-      (typeof CacheService !== 'undefined' &&
-      typeof CacheService.getScriptCache === 'function'
-        ? CacheService.getScriptCache()
-        : null)
-
-    var startTime = Date.now()
-    var consecutiveRemoteFailures = 0
-    var remoteQuotaExhausted = false
-
-    if (isCircuitBreakerOpen(props)) {
-      var untilMs = parseInt(props.getProperty('GEMINI_BACKOFF_UNTIL'), 10)
-      console.warn(
-        '[processEmailsWithAiClassifier] Circuit breaker is OPEN until ' +
-          (isNaN(untilMs) ? 'unknown' : new Date(untilMs).toISOString()) +
-          '; skipping remote AI calls for this execution.'
-      )
-      remoteQuotaExhausted = true
-    }
-
-    for (var i = 0; i < threads.length; i++) {
-      if (Date.now() - startTime > 270000) {
-        console.warn(
-          '[processEmailsWithAiClassifier] Safety time budget reached (270s); stopping batch gracefully.'
-        )
-        break
-      }
-      var thread = threads[i]
-      var messages =
-        typeof thread.getMessages === 'function' ? thread.getMessages() : []
-      if (!messages || messages.length === 0) continue
-      var firstMessage = messages[0]
-      var sender =
-        typeof firstMessage.getFrom === 'function'
-          ? firstMessage.getFrom()
-          : firstMessage.from || ''
-      var subject =
-        typeof firstMessage.getSubject === 'function'
-          ? firstMessage.getSubject()
-          : firstMessage.subject || ''
-      var snippet =
-        typeof firstMessage.getPlainBody === 'function'
-          ? firstMessage.getPlainBody().substring(0, 500)
-          : firstMessage.snippet || ''
-      snippet = enrichSnippetWithAttachments_(snippet, firstMessage)
-
-      console.log(
-        '[processEmailsWithAiClassifier] Processing (' +
-          (i + 1) +
-          '/' +
-          threads.length +
-          '): ' +
-          subject +
-          ' from ' +
-          sender
-      )
-
-      var threadLabels = []
-      if (typeof thread.getLabels === 'function') {
-        try {
-          var lList = thread.getLabels() || []
-          threadLabels = lList.map(function (l) {
-            return typeof l.getName === 'function' ? l.getName() : String(l)
-          })
-        } catch (e) {}
-      }
-      var isAlreadyProcessed =
-        config.processedLabel &&
-        threadLabels.indexOf(config.processedLabel) !== -1
-
-      var classification = deterministicRuleClassify_(
-        sender,
-        subject,
-        snippet,
-        thread,
-        config
-      )
-      var usedRemoteApi = false
-      if (
-        !classification &&
-        !remoteQuotaExhausted &&
-        (!isSecondarySweep || !isAlreadyProcessed)
-      ) {
-        var classifyFn =
-          services.classifyFn ||
-          (typeof classifyWithGemini === 'function'
-            ? function (s, sub, sn, cfg) {
-                return classifyWithGemini(s, sub, sn, cfg, services)
-              }
-            : null)
-        if (classifyFn) {
-          classification = classifyFn(sender, subject, snippet, config)
-          usedRemoteApi = true
-          if (!classification) {
-            consecutiveRemoteFailures++
-            recordCircuitBreakerFailure(props)
-            if (consecutiveRemoteFailures >= 2) {
-              console.warn(
-                '[processEmailsWithAiClassifier] Multiple consecutive remote API failures detected; disabling remote API for remainder of batch to preserve execution budget.'
-              )
-              remoteQuotaExhausted = true
-            }
-          } else {
-            consecutiveRemoteFailures = 0
-            recordCircuitBreakerSuccess(props)
-          }
-        }
-      }
-      if (classification) {
-        // Clean up any pre-existing conflicting core domain labels, sub-labels, flat labels, and Retention/Permanent
-        cleanConflictingLabels(
-          thread,
-          classification.canonicalDomain,
-          classification.subLabel,
-          config
-        )
-
-        // 1. Single Primary Label Tagging (Sub-label preferred; fallback to domain default sub-label)
-        var primaryTag = classification.subLabel
-        if (!primaryTag || isRootDomainLabel(primaryTag)) {
-          var domainKey =
-            classification.canonicalDomain || classification.canonical_label
-          primaryTag =
-            (domainKey && DEFAULT_DOMAIN_SUBLABEL_MAP[domainKey]) ||
-            domainKey ||
-            null
-          if (primaryTag && isRootDomainLabel(primaryTag)) {
-            primaryTag = DEFAULT_DOMAIN_SUBLABEL_MAP[primaryTag] || null
-          }
-        }
-        if (primaryTag) {
-          var targetLabel = ensureUserLabel(primaryTag, gmail)
-          thread.addLabel(targetLabel)
-          console.log(
-            '[processEmailsWithAiClassifier] Tagged thread with single primary label: ' +
-              primaryTag
-          )
-
-          // Persist Canonical Attachments to Google Drive along Taxonomy Path
-          var utils =
-            services.Utilities ||
-            (typeof Utilities !== 'undefined' ? Utilities : null)
-          var sess =
-            services.Session ||
-            (typeof Session !== 'undefined' ? Session : null)
-          var driveApp =
-            services.DriveApp ||
-            (typeof DriveApp !== 'undefined' ? DriveApp : null)
-
-          var savedAttachments = persistCanonicalAttachmentsToDrive(
-            thread,
-            classification,
-            config,
-            {
-              Utilities: utils,
-              Session: sess,
-              DriveApp: driveApp,
-            }
-          )
-
-          // Sync Progressive Disclosure Summary to GitHub
-          if (config.githubToken) {
-            try {
-              var notePath = getNotePathForDomain(
-                classification.canonicalDomain,
-                classification.subLabel
-              )
-              if (notePath && utils) {
-                var msgDate =
-                  typeof firstMessage.getDate === 'function'
-                    ? firstMessage.getDate()
-                    : new Date()
-                var dateStr = utils.formatDate(msgDate, 'GMT', 'yyyy-MM-dd')
-                var entryMd = formatProgressiveDisclosureEntry(
-                  dateStr,
-                  classification.title || subject,
-                  sender,
-                  subject,
-                  classification.summary,
-                  config.userAccountEmail,
-                  savedAttachments
-                )
-                if (typeof assertNoAsciiReplacement_ === 'function') {
-                  assertNoAsciiReplacement_(
-                    (subject || '') + (classification.summary || ''),
-                    entryMd
-                  )
-                }
-                if (typeof assertClean_ === 'function') {
-                  assertClean_(entryMd, 'new entry for ' + notePath)
-                }
-                if (typeof appendMarkdownEntryToGitHubRepo === 'function') {
-                  appendMarkdownEntryToGitHubRepo(
-                    notePath,
-                    entryMd,
-                    'feat(ingestion): ' + subject
-                  )
-                }
-              }
-            } catch (ghErr) {
-              console.warn(
-                '[processEmailsWithAiClassifier] Non-blocking GitHub sync error for ' +
-                  subject +
-                  ': ' +
-                  ghErr.message
-              )
-            }
-          }
-        }
-
-        // 2. Action Handling (Trash, Archive, Mark Read)
-        if (
-          classification.category &&
-          classification.category !== 'Primary' &&
-          classification.action !== 'trash'
-        ) {
-          classification.action = 'archive'
-        }
-
-        var userSent = isThreadSentOrRepliedByUser(
-          thread,
-          config.userAccountEmail
-        )
-        var requestedDestructive =
-          classification.action === 'trash' ||
-          classification.action === 'archive'
-        var destructiveOk = isDestructiveActionAllowed_(classification)
-        if (userSent && requestedDestructive) {
-          console.log(
-            '[processEmailsWithAiClassifier] Shield: Preserved thread in INBOX because user sent/replied to it.'
-          )
-        } else if (requestedDestructive && !destructiveOk) {
-          console.warn(
-            '[processEmailsWithAiClassifier] Shield: Skipped destructive action "' +
-              classification.action +
-              '" (low/invalid confidence ' +
-              classification.confidence +
-              '); preserved thread in INBOX.'
-          )
-        } else if (requestedDestructive) {
-          if (classification.action === 'trash') {
-            thread.moveToTrash()
-            console.log(
-              '[processEmailsWithAiClassifier] Action: Moved spam/unwanted thread to TRASH.'
-            )
-          } else {
-            thread.moveToArchive()
-            console.log(
-              '[processEmailsWithAiClassifier] Action: Archived thread out of INBOX.'
-            )
-          }
-        }
-
-        if (classification.action === 'mark_read' || classification.markRead) {
-          thread.markRead()
-          console.log(
-            '[processEmailsWithAiClassifier] Action: Marked thread as READ.'
-          )
-        }
-
-        // 3. Category Tab Shifting (Push to Updates/Promotions/Social/Primary)
-        if (classification.category && classification.action !== 'trash') {
-          setGmailCategoryTab(thread, classification.category, services.Gmail)
-        }
-
-        // Remove retryLabel if present
-        if (retryLabel && threadLabels.indexOf(retryLabelName) !== -1) {
-          try {
-            thread.removeLabel(retryLabel)
-            console.log(
-              '[processEmailsWithAiClassifier] Removed retry label from successfully classified thread.'
-            )
-          } catch (rErr) {
-            console.warn(
-              '[processEmailsWithAiClassifier] Failed to remove retry label:',
-              rErr.message
-            )
-          }
-        }
-        clearThreadRetryCount_(thread, cache)
-
-        // Apply Single Global Processed Label
-        if (processedLabel) {
-          thread.addLabel(processedLabel)
-        }
-      } else {
-        if (usedRemoteApi) {
-          var retryCount = incrementThreadRetryCount_(thread, cache)
-          if (retryCount >= 5) {
-            if (retryLabel && threadLabels.indexOf(retryLabelName) !== -1) {
-              try {
-                thread.removeLabel(retryLabel)
-              } catch (rErr) {}
-            }
-            if (manualReviewLabel) {
-              thread.addLabel(manualReviewLabel)
-            }
-            console.warn(
-              '[processEmailsWithAiClassifier] Classification failed after ' +
-                retryCount +
-                ' attempts; escalated to ' +
-                manualReviewLabelName +
-                ' for manual review.'
-            )
-          } else {
-            if (retryLabel) {
-              thread.addLabel(retryLabel)
-            }
-            console.warn(
-              '[processEmailsWithAiClassifier] Classification failed or returned null; tagged with ' +
-                retryLabelName +
-                ' (attempt ' +
-                retryCount +
-                '/5) to ensure durable retry.'
-            )
-          }
-        } else {
-          console.warn(
-            '[processEmailsWithAiClassifier] Remote classification skipped for thread; preserving untouched for next execution.'
-          )
-        }
-      }
-
-      if (usedRemoteApi) {
-        var utilsService =
-          services.Utilities ||
-          (typeof Utilities !== 'undefined' ? Utilities : null)
-        if (utilsService && typeof utilsService.sleep === 'function') {
-          utilsService.sleep(2000)
-        }
-      }
-    }
-
-    console.log('[processEmailsWithAiClassifier] Batch processing complete.')
-  } finally {
-    if (lock) {
-      try {
-        lock.releaseLock()
-      } catch (e) {
-        // ignore lock release error
-      }
-    }
-  }
-}
-
-/**
- * Fast-path deterministic rule-based classifier.
- * Categorizes unambiguous broadcast feeds, machine telemetry, routine receipts,
- * and social newsletters in 0ms without consuming Gemini API quota.
- * Strictly respects safety shields (user-sent, family, and 1:1 teacher correspondence).
+ * Gmail AI Classifier & Filing Agent
  *
- * @param {string} sender - Email sender header
- * @param {string} subject - Email subject line
- * @param {string} snippet - Email body snippet
- * @param {Object} [thread] - GmailThread object (for sender/reply safety checks)
- * @param {Object} [config] - Classifier configuration
- * @returns {Object|null} Classification object or null if email requires Gemini LLM reasoning
+ * Uses Gemini API to classify incoming emails into taxonomy labels,
+ * saves canonical attachments to Google Drive, and applies retention policies.
  */
-function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
-  var sLower = (sender || '').toLowerCase()
-  var subLower = (subject || '').toLowerCase()
-  var userEmail = (
-    config && config.userAccountEmail ? config.userAccountEmail : ''
-  ).toLowerCase()
 
-  // 1. Safety Shields
-  if (thread && typeof thread.getMessages === 'function' && userEmail) {
-    try {
-      var msgs = thread.getMessages() || []
-      for (var m = 0; m < msgs.length; m++) {
-        var fromA = (
-          msgs[m] && typeof msgs[m].getFrom === 'function'
-            ? msgs[m].getFrom()
-            : (msgs[m] && msgs[m].from) || ''
-        ).toLowerCase()
-        if (fromA.indexOf(userEmail) !== -1) {
-          return {
-            canonicalDomain: null,
-            canonical_label: null,
-            subLabel: null,
-            category: 'Primary',
-            action: 'keep',
-            confidence: 1.0,
-            title: subject,
-            summary: 'User-sent or replied thread preserved in Primary Inbox.',
-            reasoning: 'User-Sent Shield',
-          }
-        }
-      }
-    } catch (err) {
-      // ignore thread check errors
-    }
-  }
-
-  // Family 1:1 Shield (configurable via config.familyEmails or customPromptRules)
-  var familyList =
-    config && config.familyEmails
-      ? config.familyEmails.toLowerCase().split(',')
-      : []
-  if (
-    familyList.length > 0 &&
-    familyList.some(function (f) {
-      return f.trim() && sLower.indexOf(f.trim()) !== -1
-    })
-  ) {
-    return {
-      canonicalDomain: '04_Family_Health',
-      canonical_label: '04_Family_Health',
-      subLabel: 'Family/Correspondence',
-      category: 'Primary',
-      action: 'keep',
-      confidence: 1.0,
-      title: subject,
-      summary: 'Direct family correspondence preserved in Primary Inbox.',
-      reasoning: 'Family 1:1 Shield',
-    }
-  }
-
-  // Teacher / Academic Counselor 1:1 Shield (exclude mass broadcast subjects)
-  var isSchoolDomain =
-    sLower.indexOf('bcsk12.org') !== -1 ||
-    sLower.indexOf('bcs-lions.org') !== -1 ||
-    sLower.indexOf('briarwoodchristianschool.org') !== -1 ||
-    sLower.indexOf('mcaabhm.org') !== -1 ||
-    sLower.indexOf('jeffersonstate.edu') !== -1
-  var isBrightArrow =
-    sLower.indexOf('brightarrow.com') !== -1 ||
-    sLower.indexOf('brightarrow') !== -1
-  var isBroadcastSubject = [
-    'weekly',
-    'newsletter',
-    'bulletin',
-    'school update',
-    'campus update',
-    'district update',
-    'bcs update',
-    'lions update',
-    'digest',
-    'progress is ready',
-    'lunch',
-    'menu',
-    'portraits',
-    'news',
-    'noteworthy',
-    'announcement',
-    'athletics',
-    'e learning',
-    'e-learning',
-    'report card update',
-    'trunk or treat',
-    'spirit week',
-    'pto',
-    'pta',
-    'open house',
-    'picture day',
-    'fall festival',
-    'spring festival',
-    'school announcement',
-    'tryouts',
-    'tryout',
-    'try-outs',
-    'try-out',
-    'auditions',
-    'audition',
-    'team tryouts',
-    'absent',
-    'attendance',
-    'tardy',
-    'tuition',
-    'billing statement',
-    'assignment posted',
-    'new assignment',
-    'grade updated',
-    'score published',
-    'family portal',
-    'parent portal',
-  ].some(function (w) {
-    return subLower.indexOf(w) !== -1
-  })
-
-  if (isSchoolDomain && !isBroadcastSubject && !isBrightArrow) {
-    return {
-      canonicalDomain: '04_Family_Health',
-      canonical_label: '04_Family_Health',
-      subLabel: 'Family/School-Student',
-      category: 'Primary',
-      action: 'keep',
-      confidence: 1.0,
-      title: subject,
-      summary:
-        'Direct 1:1 teacher or school counselor correspondence preserved in Primary Inbox.',
-      reasoning: 'Teacher 1:1 Shield',
-    }
-  }
-
-  // 06_Work_Career: Employment Agreements, Offer Letters, Employment Contracts, Recruiter Screens & Interviews
-  var isCareerSubject = [
-    'employment agreement',
-    'employment contract',
-    'offer letter',
-    'job offer',
-    'employment offer',
-    'terms of employment',
-    'independent contractor agreement',
-    'restrictive covenant',
-    'confidentiality agreement',
-    'interview confirmation',
-    'interview invitation',
-    'invitation to interview',
-    'interview with ',
-    'schedule an interview',
-    'recruiter screen',
-    'phone screen',
-  ].some(function (w) {
-    return subLower.indexOf(w) !== -1
-  })
-
-  var snipLower = (snippet || '').toLowerCase()
-  var isCareerSnippet = [
-    'employment agreement',
-    'offer of employment',
-    'terms of employment',
-    'pleased to offer you the position',
-    'pleased to offer you',
-    'pleased to confirm our offer',
-    'congratulations on your offer',
-    'employment document',
-    'restrictive covenants agreement',
-  ].some(function (w) {
-    return snipLower.indexOf(w) !== -1
-  })
-
-  if (isCareerSubject || isCareerSnippet) {
-    return {
-      canonicalDomain: '06_Work_Career',
-      canonical_label: '06_Work_Career',
-      subLabel: 'Work/Career',
-      category: 'Primary',
-      action: 'keep',
-      confidence: 0.99,
-      title: subject,
-      summary:
-        'Employment agreement, offer letter, or career interview communication preserved in Primary Inbox.',
-      reasoning: 'Career / Employment Contract Rule',
-    }
-  }
-
-  // 2. Deterministic Feeds & Broadcasts
-  // Automated Daily Agenda Digests
-  if (subLower.indexOf('your day ahead') !== -1) {
-    return {
-      canonicalDomain: '01_Household',
-      canonical_label: '01_Household',
-      subLabel: 'Household/Property',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary: 'Automated daily agenda digest routed to Updates.',
-      reasoning: 'Daily Digest',
-    }
-  }
-
-  // Smart Reorder & Device Consumables Replenishment (Amazon Smart Reorder, Alexa ink/toner alerts, Dash)
-  if (
-    sLower.indexOf('amazon.com') !== -1 ||
-    sLower.indexOf('auto-reorder@amazon.com') !== -1 ||
-    sLower.indexOf('dash@amazon.com') !== -1 ||
-    sLower.indexOf('instantink') !== -1 ||
-    sLower.indexOf('hp.com') !== -1 ||
-    sLower.indexOf('brother.com') !== -1 ||
-    sLower.indexOf('canon.com') !== -1 ||
-    sLower.indexOf('epson.com') !== -1
-  ) {
-    if (
-      subLower.indexOf('time to order the') !== -1 ||
-      subLower.indexOf('time to reorder') !== -1 ||
-      subLower.indexOf('smart reorder') !== -1 ||
-      subLower.indexOf('auto-reorder') !== -1 ||
-      subLower.indexOf('replenishment') !== -1 ||
-      subLower.indexOf('low ink') !== -1 ||
-      subLower.indexOf('ink alert') !== -1 ||
-      subLower.indexOf('toner low') !== -1 ||
-      subLower.indexOf('toner alert') !== -1 ||
-      subLower.indexOf('toner for your') !== -1 ||
-      subLower.indexOf('replacement filter') !== -1 ||
-      subLower.indexOf('reorder your') !== -1
-    ) {
-      return {
-        canonicalDomain: '01_Household',
-        canonical_label: '01_Household',
-        subLabel: 'Household/Supplies',
-        category: 'Updates',
-        action: 'archive',
-        confidence: 0.99,
-        title: subject,
-        summary:
-          'Automated smart reorder or consumable replenishment alert routed to Updates.',
-        reasoning: 'Smart Reorder',
-      }
-    }
-  }
-
-  // Bee Telemetry (BroodMinder & Apiaries)
-  if (
-    sLower.indexOf('broodminder') !== -1 ||
-    sLower.indexOf('mybroodminder') !== -1 ||
-    subLower.indexOf('hive alert') !== -1 ||
-    subLower.indexOf('events in your apiaries') !== -1 ||
-    subLower.indexOf('events in your apiary') !== -1 ||
-    subLower.indexOf('event in your apiaries') !== -1 ||
-    subLower.indexOf('event in your apiary') !== -1 ||
-    subLower.indexOf('apiary alert') !== -1 ||
-    subLower.indexOf('apiary event') !== -1 ||
-    sLower.indexOf('alerts@broodminder.com') !== -1
-  ) {
-    return {
-      canonicalDomain: '07_Community_NonProfit',
-      canonical_label: '07_Community_NonProfit',
-      subLabel: 'Projects/Telemetry',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary:
-        'Automated hive and apiary telemetry alert routed to Projects/Telemetry.',
-      reasoning: 'BroodMinder Telemetry',
-    }
-  }
-
-  // Machine & Hardware Telemetry (QNAP NAS, UniFi / Ubiquiti, Home Assistant / Nabu Casa)
-  if (
-    sLower.indexOf('qnap.com') !== -1 ||
-    sLower.indexOf('qts notification') !== -1 ||
-    sLower.indexOf('notificationcenter') !== -1 ||
-    subLower.indexOf('[qnap') !== -1 ||
-    subLower.indexOf('qts notification') !== -1 ||
-    subLower.indexOf('qvr pro') !== -1 ||
-    subLower.indexOf('qulog') !== -1
-  ) {
-    return {
-      canonicalDomain: '05_Tech_Infrastructure',
-      canonical_label: '05_Tech_Infrastructure',
-      subLabel: 'Tech/Alerts',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary:
-        'QNAP NAS system health, RAID, backup, or QVR surveillance telemetry alert routed to Tech/Alerts.',
-      reasoning: 'QNAP Telemetry',
-    }
-  }
-
-  if (
-    sLower.indexOf('ui.com') !== -1 ||
-    sLower.indexOf('ubnt.com') !== -1 ||
-    subLower.indexOf('unifi') !== -1
-  ) {
-    var isMfa =
-      subLower.indexOf('verification code') !== -1 ||
-      subLower.indexOf('mfa') !== -1 ||
-      subLower.indexOf('one-time') !== -1 ||
-      subLower.indexOf('security code') !== -1
-    if (!isMfa) {
-      return {
-        canonicalDomain: '05_Tech_Infrastructure',
-        canonical_label: '05_Tech_Infrastructure',
-        subLabel: 'Tech/Alerts',
-        category: 'Updates',
-        action: 'archive',
-        confidence: 0.99,
-        title: subject,
-        summary:
-          'UniFi Dream Machine or network infrastructure alert routed to Tech/Alerts.',
-        reasoning: 'UniFi Telemetry',
-      }
-    }
-  }
-
-  if (
-    sLower.indexOf('nabucasa.com') !== -1 ||
-    sLower.indexOf('home-assistant.io') !== -1 ||
-    subLower.indexOf('home assistant') !== -1
-  ) {
-    return {
-      canonicalDomain: '05_Tech_Infrastructure',
-      canonical_label: '05_Tech_Infrastructure',
-      subLabel: 'Tech/Alerts',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary:
-        'Home Assistant or Nabu Casa cloud telemetry/subscription alert routed to Tech/Alerts.',
-      reasoning: 'Home Assistant Telemetry',
-    }
-  }
-
-  // Non-Profit & Charity Community Newsletters & Impact Updates
-  if (
-    sLower.indexOf('ignite-hope.org') !== -1 ||
-    sLower.indexOf('helpingoneguy.com') !== -1 ||
-    sLower.indexOf('charitywater.org') !== -1 ||
-    sLower.indexOf('compassion.com') !== -1 ||
-    sLower.indexOf('worldvision.org') !== -1 ||
-    subLower.indexOf('ironmen') !== -1 ||
-    subLower.indexOf('iron men') !== -1 ||
-    ((sLower.indexOf('newsletter') !== -1 ||
-      sLower.indexOf('update') !== -1 ||
-      sLower.indexOf('impact') !== -1) &&
-      (subLower.indexOf('impact update') !== -1 ||
-        subLower.indexOf('ministry update') !== -1 ||
-        subLower.indexOf('community update') !== -1))
-  ) {
-    return {
-      canonicalDomain: '07_Community_NonProfit',
-      canonical_label: '07_Community_NonProfit',
-      subLabel: 'NonProfit/General',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.98,
-      title: subject,
-      summary:
-        'Community non-profit organization newsletter, Bible study digest, or project impact update routed to Updates.',
-      reasoning: 'NonProfit Impact Newsletter',
-    }
-  }
-
-  // Developer & Infrastructure Monitoring Alerts
-  if (
-    sLower.indexOf('notifications@linear.app') !== -1 ||
-    sLower.indexOf('linear.app') !== -1
-  ) {
-    return {
-      canonicalDomain: '05_Tech_Infrastructure',
-      canonical_label: '05_Tech_Infrastructure',
-      subLabel: 'Tech/Alerts',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary:
-        'Linear task and project notification digest routed to Tech/Alerts.',
-      reasoning: 'Linear Alert',
-    }
-  }
-  if (
-    sLower.indexOf('notifications.cubic.dev') !== -1 ||
-    sLower.indexOf('cubic') !== -1
-  ) {
-    return {
-      canonicalDomain: '05_Tech_Infrastructure',
-      canonical_label: '05_Tech_Infrastructure',
-      subLabel: 'Tech/Alerts',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary: 'Cubic AI automated code review notice routed to Tech/Alerts.',
-      reasoning: 'Cubic Code Review',
-    }
-  }
-  if (sLower.indexOf('notifications@github.com') !== -1) {
-    return {
-      canonicalDomain: '05_Tech_Infrastructure',
-      canonical_label: '05_Tech_Infrastructure',
-      subLabel: 'Tech/Alerts',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary:
-        'GitHub CI/CD workflow run or notification routed to Tech/Alerts.',
-      reasoning: 'GitHub Alert',
-    }
-  }
-  if (
-    sLower.indexOf('sonarcloud.io') !== -1 ||
-    sLower.indexOf('sentry.io') !== -1 ||
-    sLower.indexOf('vercel.com') !== -1 ||
-    sLower.indexOf('noreply-apps-scripts-notifications@google.com') !== -1
-  ) {
-    return {
-      canonicalDomain: '05_Tech_Infrastructure',
-      canonical_label: '05_Tech_Infrastructure',
-      subLabel: 'Tech/Alerts',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary:
-        'CI/CD code quality, error monitoring, or deployment alert routed to Tech/Alerts.',
-      reasoning: 'Developer Monitoring Alert',
-    }
-  }
-
-  // Developer & Cloud AI Platform Updates & Developer Tooling Promos
-  if (sLower.indexOf('googleaistudio-noreply@google.com') !== -1) {
-    return {
-      canonicalDomain: '05_Tech_Infrastructure',
-      canonical_label: '05_Tech_Infrastructure',
-      subLabel: 'Tech/Alerts',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary:
-        'Google AI Studio API quota, model deprecation, or project update routed to Tech/Alerts.',
-      reasoning: 'Google AI Studio Alert',
-    }
-  }
-  if (
-    sLower.indexOf('updates.codeant.ai') !== -1 ||
-    sLower.indexOf('codeant.ai') !== -1
-  ) {
-    return {
-      canonicalDomain: null,
-      canonical_label: null,
-      subLabel: null,
-      category: 'Promotions',
-      action: 'archive',
-      confidence: 0.98,
-      title: subject,
-      summary:
-        'Developer tooling promotional or product feature announcement routed to Promotions.',
-      reasoning: 'DevTool Promo',
-    }
-  }
-  if (sLower.indexOf('calendar-notification@google.com') !== -1) {
-    return {
-      canonicalDomain: '01_Household',
-      canonical_label: '01_Household',
-      subLabel: 'Household/Property',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary: 'Google Calendar event reminder notification routed to Updates.',
-      reasoning: 'Calendar Notification',
-    }
-  }
-
-  // Developer, Cloud & SaaS Trial Expirations & Account Plan Notices
-  if (
-    subLower.indexOf('trial is ending') !== -1 ||
-    subLower.indexOf('trial ending') !== -1 ||
-    subLower.indexOf('trial will expire') !== -1 ||
-    subLower.indexOf('trial expired') !== -1 ||
-    subLower.indexOf('trial expiration') !== -1 ||
-    subLower.indexOf('free trial is ending') !== -1 ||
-    subLower.indexOf('free trial ends') !== -1 ||
-    (subLower.indexOf('aws') !== -1 &&
-      (subLower.indexOf('upgraded to a paid plan') !== -1 ||
-        subLower.indexOf('free plan is ready') !== -1)) ||
-    ((sLower.indexOf('aws.com') !== -1 ||
-      sLower.indexOf('amazonaws.com') !== -1 ||
-      sLower.indexOf('digitalocean.com') !== -1 ||
-      sLower.indexOf('cloudflare.com') !== -1 ||
-      sLower.indexOf('azure') !== -1 ||
-      sLower.indexOf('openai.com') !== -1 ||
-      sLower.indexOf('anthropic.com') !== -1 ||
-      sLower.indexOf('supabase.com') !== -1 ||
-      sLower.indexOf('neon.tech') !== -1) &&
-      (subLower.indexOf('upgraded to a paid plan') !== -1 ||
-        subLower.indexOf('free plan is ready') !== -1 ||
-        subLower.indexOf('free tier') !== -1 ||
-        subLower.indexOf('startup credits') !== -1 ||
-        subLower.indexOf('account plan') !== -1))
-  ) {
-    return {
-      canonicalDomain: '05_Tech_Infrastructure',
-      canonical_label: '05_Tech_Infrastructure',
-      subLabel: 'Tech/Alerts',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary:
-        'Cloud provider tier status, SaaS trial expiration, or account plan notification routed to Tech/Alerts.',
-      reasoning: 'SaaS / Cloud Plan Alert',
-    }
-  }
-
-  // Package Registry & Repository Publishing Notifications (PyPI, npm, Docker Hub, crates.io)
-  if (
-    sLower.indexOf('pypi.org') !== -1 ||
-    sLower.indexOf('npmjs.com') !== -1 ||
-    sLower.indexOf('docker.com') !== -1 ||
-    sLower.indexOf('crates.io') !== -1 ||
-    subLower.indexOf('[pypi]') !== -1 ||
-    subLower.indexOf('trusted publisher') !== -1
-  ) {
-    return {
-      canonicalDomain: '05_Tech_Infrastructure',
-      canonical_label: '05_Tech_Infrastructure',
-      subLabel: 'Tech/Alerts',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary:
-        'Package repository publishing, release, or trusted publisher notification routed to Tech/Alerts.',
-      reasoning: 'Package Registry Alert',
-    }
-  }
-
-  // Third-Party App Authorization & Account Data Sharing Security Alerts (Keep in Primary)
-  if (
-    subLower.indexOf('you shared some google account data with') !== -1 ||
-    subLower.indexOf('google account data with') !== -1 ||
-    subLower.indexOf('granted access to your google account') !== -1 ||
-    subLower.indexOf('third-party access') !== -1 ||
-    subLower.indexOf('app access granted') !== -1
-  ) {
-    return {
-      canonicalDomain: '05_Tech_Infrastructure',
-      canonical_label: '05_Tech_Infrastructure',
-      subLabel: 'Tech/Security',
-      category: 'Primary',
-      action: 'keep',
-      confidence: 1.0,
-      title: subject,
-      summary:
-        'Third-party application account data sharing or authorization notice preserved in Primary Inbox as security warning.',
-      reasoning: 'Third-Party Authorization Shield',
-    }
-  }
-
-  // Authentication, 2FA, OTP & Account Security Alerts
-  if (
-    subLower.indexOf('verification code') !== -1 ||
-    subLower.indexOf('security code') !== -1 ||
-    subLower.indexOf('one-time passcode') !== -1 ||
-    subLower.indexOf('one-time password') !== -1 ||
-    subLower.indexOf('your login code') !== -1 ||
-    subLower.indexOf('new sign-in') !== -1 ||
-    subLower.indexOf('signed in from a new') !== -1 ||
-    subLower.indexOf('new device signed in') !== -1 ||
-    subLower.indexOf('sign-in from new device') !== -1 ||
-    subLower.indexOf('security alert for your') !== -1 ||
-    subLower.indexOf('password changed') !== -1 ||
-    subLower.indexOf('password reset confirmation') !== -1
-  ) {
-    return {
-      canonicalDomain: '05_Tech_Infrastructure',
-      canonical_label: '05_Tech_Infrastructure',
-      subLabel: 'Tech/Security',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary:
-        'Automated authentication verification code or device sign-in alert routed to Tech/Security.',
-      reasoning: 'Authentication/Sign-in Ping',
-    }
-  }
-
-  // Healthcare & Pharmacy Appointment Reminders & Prescription Alerts
-  if (
-    sLower.indexOf('mychart') !== -1 ||
-    sLower.indexOf('cvs.com') !== -1 ||
-    sLower.indexOf('cvshealth') !== -1 ||
-    sLower.indexOf('walgreens.com') !== -1 ||
-    sLower.indexOf('questdiagnostics.com') !== -1 ||
-    sLower.indexOf('labcorp.com') !== -1 ||
-    sLower.indexOf('zocdoc.com') !== -1 ||
-    sLower.indexOf('athenahealth.com') !== -1 ||
-    subLower.indexOf('appointment reminder') !== -1 ||
-    subLower.indexOf('upcoming appointment') !== -1 ||
-    subLower.indexOf('appointment confirmation') !== -1 ||
-    subLower.indexOf('appointment is confirmed') !== -1 ||
-    subLower.indexOf('prescription is ready') !== -1 ||
-    subLower.indexOf('prescription ready') !== -1 ||
-    subLower.indexOf('refill reminder') !== -1 ||
-    subLower.indexOf('refill confirmation') !== -1
-  ) {
-    return {
-      canonicalDomain: '04_Family_Health',
-      canonical_label: '04_Family_Health',
-      subLabel: 'Family/Health-Medical',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary:
-        'Automated patient portal appointment reminder or pharmacy prescription status notice.',
-      reasoning: 'Healthcare/Pharmacy Alert',
-    }
-  }
-
-  // Travel, Flight, Hotel & Rideshare Confirmations
-  if (
-    sLower.indexOf('delta.com') !== -1 ||
-    sLower.indexOf('southwest.com') !== -1 ||
-    sLower.indexOf('aa.com') !== -1 ||
-    sLower.indexOf('united.com') !== -1 ||
-    sLower.indexOf('airbnb.com') !== -1 ||
-    sLower.indexOf('vrbo.com') !== -1 ||
-    sLower.indexOf('marriott.com') !== -1 ||
-    sLower.indexOf('hilton.com') !== -1 ||
-    sLower.indexOf('uber.com') !== -1 ||
-    sLower.indexOf('lyft.com') !== -1 ||
-    sLower.indexOf('waymo.com') !== -1 ||
-    sLower.indexOf('waymo') !== -1
-  ) {
-    if (
-      subLower.indexOf('flight confirmation') !== -1 ||
-      subLower.indexOf('flight status') !== -1 ||
-      subLower.indexOf('boarding pass') !== -1 ||
-      subLower.indexOf('check in for your flight') !== -1 ||
-      subLower.indexOf('reservation confirmed') !== -1 ||
-      subLower.indexOf('reservation confirmation') !== -1 ||
-      subLower.indexOf('upcoming stay') !== -1 ||
-      subLower.indexOf('trip with uber') !== -1 ||
-      subLower.indexOf('ride with lyft') !== -1 ||
-      subLower.indexOf('waymo ride') !== -1 ||
-      subLower.indexOf('riding with waymo') !== -1 ||
-      subLower.indexOf('receipt') !== -1
-    ) {
-      return {
-        canonicalDomain: '01_Household',
-        canonical_label: '01_Household',
-        subLabel: 'Household/Travel',
-        category: 'Updates',
-        action: 'archive',
-        confidence: 0.99,
-        title: subject,
-        summary:
-          'Travel itinerary reservation, flight check-in, or rideshare receipt.',
-        reasoning: 'Travel Confirmation',
-      }
-    }
-  }
-
-  // Customer Feedback Surveys & Reviews
-  if (
-    subLower.indexOf('how was your experience') !== -1 ||
-    subLower.indexOf('how did we do') !== -1 ||
-    subLower.indexOf('rate your recent') !== -1 ||
-    subLower.indexOf('rate your experience') !== -1 ||
-    subLower.indexOf('rate your stay') !== -1 ||
-    subLower.indexOf('tell us what you think') !== -1 ||
-    subLower.indexOf('take our survey') !== -1 ||
-    subLower.indexOf('take our quick survey') !== -1 ||
-    subLower.indexOf('quick survey') !== -1 ||
-    subLower.indexOf('feedback requested') !== -1 ||
-    subLower.indexOf('review your purchase') !== -1 ||
-    subLower.indexOf('leave a review') !== -1 ||
-    subLower.indexOf('your opinion matters') !== -1
-  ) {
-    return {
-      canonicalDomain: null,
-      canonical_label: null,
-      subLabel: null,
-      category: 'Promotions',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary:
-        'Automated post-transaction customer satisfaction feedback or survey request.',
-      reasoning: 'Customer Survey',
-    }
-  }
-
-  // IoT, Weather & Automation Alerts (IFTTT, Vera/MiOS)
-  if (
-    sLower.indexOf('action@ifttt.com') !== -1 ||
-    sLower.indexOf('ifttt.com') !== -1 ||
-    sLower.indexOf('notify.mios.com') !== -1
-  ) {
-    return {
-      canonicalDomain: '01_Household',
-      canonical_label: '01_Household',
-      subLabel: 'Household/Property',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.98,
-      title: subject,
-      summary:
-        'Automated weather or IoT trigger notification routed to Household/Property.',
-      reasoning: 'IFTTT / Weather Alert',
-    }
-  }
-
-  // School Broadcasts & Bulletins (including BrightArrow, ParentSquare & College parent newsletters)
-  if (
-    isBrightArrow ||
-    ((isSchoolDomain ||
-      sLower.indexOf('parentsquare.com') !== -1 ||
-      sLower.indexOf('briarwoodchristianschool.org') !== -1 ||
-      sLower.indexOf('admissions@ua.edu') !== -1) &&
-      (isBroadcastSubject || sLower.indexOf('parentsquare.com') !== -1))
-  ) {
-    return {
-      canonicalDomain: '04_Family_Health',
-      canonical_label: '04_Family_Health',
-      subLabel: 'Family/School-Student',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.98,
-      title: subject,
-      summary:
-        'Routine school bulletin, newsletter, BrightArrow broadcast, or ParentSquare digest routed to Updates.',
-      reasoning: 'School Broadcast',
-    }
-  }
-
-  // School Travel Solicitations & Educational Tour Invitations (EF Tours, WorldStrides, etc.)
-  if (
-    sLower.indexOf('ef.com') !== -1 ||
-    sLower.indexOf('eftours.com') !== -1 ||
-    sLower.indexOf('worldstrides.com') !== -1 ||
-    sLower.indexOf('explorica.com') !== -1 ||
-    sLower.indexOf('acis.com') !== -1 ||
-    ((subLower.indexOf('trip to ') !== -1 ||
-      subLower.indexOf('school travel') !== -1 ||
-      subLower.indexOf('educational tour') !== -1) &&
-      (subLower.indexOf('interest meeting') !== -1 ||
-        subLower.indexOf('informational meeting') !== -1 ||
-        subLower.indexOf('rsvp') !== -1 ||
-        subLower.indexOf('enrollment discount') !== -1))
-  ) {
-    return {
-      canonicalDomain: '04_Family_Health',
-      canonical_label: '04_Family_Health',
-      subLabel: 'Family/School-Student',
-      category: 'Promotions',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary:
-        'Educational travel program solicitation or informational trip meeting announcement routed to Promotions.',
-      reasoning: 'School Travel Solicitation',
-    }
-  }
-
-  // Routine Healthcare / Benefits Wellness Broadcasts
-  if (sLower.indexOf('hello.springhealth.com') !== -1) {
-    return {
-      canonicalDomain: '04_Family_Health',
-      canonical_label: '04_Family_Health',
-      subLabel: 'Family/Health-Medical',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.98,
-      title: subject,
-      summary:
-        'Routine employer healthcare benefit announcement or wellness newsletter.',
-      reasoning: 'Benefits Broadcast',
-    }
-  }
-
-  // Order Deliveries & Shipping Tracking
-  if (
-    sLower.indexOf('ebay.com') !== -1 &&
-    (subLower.indexOf('delivered') !== -1 ||
-      subLower.indexOf('out for delivery') !== -1 ||
-      subLower.indexOf('order confirmed') !== -1 ||
-      subLower.indexOf('shipped') !== -1)
-  ) {
-    return {
-      canonicalDomain: '02_Finance_Legal',
-      canonical_label: '02_Finance_Legal',
-      subLabel: 'Finance/Purchases',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.98,
-      title: subject,
-      summary: 'Online order confirmation or package delivery tracking notice.',
-      reasoning: 'Order Tracking',
-    }
-  }
-  if (
-    (sLower.indexOf('ups.com') !== -1 ||
-      sLower.indexOf('fedex.com') !== -1 ||
-      sLower.indexOf('usps.com') !== -1 ||
-      sLower.indexOf('usps.gov') !== -1) &&
-    (subLower.indexOf('delivered') !== -1 ||
-      subLower.indexOf('out for delivery') !== -1 ||
-      subLower.indexOf('tracking') !== -1 ||
-      subLower.indexOf('scheduled delivery') !== -1 ||
-      subLower.indexOf('package') !== -1 ||
-      subLower.indexOf('shipment') !== -1)
-  ) {
-    return {
-      canonicalDomain: '02_Finance_Legal',
-      canonical_label: '02_Finance_Legal',
-      subLabel: 'Finance/Purchases',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.98,
-      title: subject,
-      summary: 'Carrier parcel shipment or package delivery notification.',
-      reasoning: 'Carrier Tracking',
-    }
-  }
-  if (
-    sLower.indexOf('amazon.com') !== -1 &&
-    (subLower.indexOf('ordered:') !== -1 ||
-      subLower.indexOf('shipped:') !== -1 ||
-      subLower.indexOf('delivered:') !== -1 ||
-      subLower.indexOf('refund issued') !== -1 ||
-      subLower.indexOf('auto-reloaded') !== -1)
-  ) {
-    return {
-      canonicalDomain: '02_Finance_Legal',
-      canonical_label: '02_Finance_Legal',
-      subLabel: 'Finance/Purchases',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.98,
-      title: subject,
-      summary: 'Routine Amazon e-commerce order, shipping, or refund update.',
-      reasoning: 'Amazon Routine',
-    }
-  }
-
-  // Routine Utility & Bank Statements
-  if (
-    sLower.indexOf('capitalone') !== -1 ||
-    sLower.indexOf('chase.com') !== -1 ||
-    sLower.indexOf('bankofamerica.com') !== -1 ||
-    sLower.indexOf('spireenergy.com') !== -1 ||
-    sLower.indexOf('spectrum') !== -1 ||
-    sLower.indexOf('alabamapower.com') !== -1 ||
-    sLower.indexOf('bwwb.org') !== -1 ||
-    sLower.indexOf('message.att-mail.com') !== -1 ||
-    sLower.indexOf('citi.com') !== -1 ||
-    sLower.indexOf('citicards') !== -1 ||
-    sLower.indexOf('americanexpress.com') !== -1 ||
-    sLower.indexOf('apcocu.org') !== -1 ||
-    sLower.indexOf('rocketmortgage.com') !== -1 ||
-    sLower.indexOf('mycirclecard.target.com') !== -1
-  ) {
-    if (
-      subLower.indexOf('statement') !== -1 ||
-      subLower.indexOf('autopay') !== -1 ||
-      subLower.indexOf('payment processed') !== -1 ||
-      subLower.indexOf('payment confirmation') !== -1 ||
-      subLower.indexOf('payment scheduled') !== -1 ||
-      subLower.indexOf('payment received') !== -1 ||
-      subLower.indexOf('scheduled payment') !== -1 ||
-      subLower.indexOf('bill is ready') !== -1 ||
-      subLower.indexOf('bill is available') !== -1 ||
-      subLower.indexOf('e-statement') !== -1 ||
-      subLower.indexOf('estatement') !== -1
-    ) {
-      return {
-        canonicalDomain: '02_Finance_Legal',
-        canonical_label: '02_Finance_Legal',
-        subLabel: 'Finance/Bills',
-        category: 'Updates',
-        action: 'archive',
-        confidence: 0.98,
-        title: subject,
-        summary: 'Routine billing statement, receipt, or AutoPay confirmation.',
-        reasoning: 'Routine Billing',
-      }
-    }
-  }
-
-  // Healthcare & Insurance Premium Billing & Payment Processing Confirmations
-  if (
-    sLower.indexOf('bcbsal.org') !== -1 ||
-    sLower.indexOf('bcbs.com') !== -1 ||
-    sLower.indexOf('bluecrosspayments') !== -1 ||
-    sLower.indexOf('uhc.com') !== -1 ||
-    sLower.indexOf('unitedhealthcare') !== -1 ||
-    sLower.indexOf('aetna.com') !== -1 ||
-    sLower.indexOf('cigna.com') !== -1 ||
-    sLower.indexOf('humana.com') !== -1
-  ) {
-    if (
-      subLower.indexOf('explanation of benefits') !== -1 ||
-      subLower.indexOf('claim') !== -1 ||
-      subLower.indexOf('claims') !== -1 ||
-      subLower.indexOf('eob') !== -1
-    ) {
-      return {
-        canonicalDomain: '02_Finance_Legal',
-        canonical_label: '02_Finance_Legal',
-        subLabel: 'Finance/Insurance',
-        category: 'Updates',
-        action: 'archive',
-        confidence: 0.99,
-        title: subject,
-        summary:
-          'Health insurance claim processing notice or explanation of benefits (EOB) notification routed to Finance/Insurance.',
-        reasoning: 'Insurance Claim / EOB Notice',
-      }
-    }
-
-    if (
-      subLower.indexOf('payment') !== -1 ||
-      subLower.indexOf('payments') !== -1 ||
-      subLower.indexOf('premium') !== -1 ||
-      subLower.indexOf('statement') !== -1 ||
-      subLower.indexOf('bill') !== -1 ||
-      subLower.indexOf('processed') !== -1 ||
-      subLower.indexOf('receipt') !== -1
-    ) {
-      return {
-        canonicalDomain: '02_Finance_Legal',
-        canonical_label: '02_Finance_Legal',
-        subLabel: 'Finance/Bills',
-        category: 'Updates',
-        action: 'archive',
-        confidence: 0.99,
-        title: subject,
-        summary:
-          'Health insurance premium payment or processing notification routed to Finance/Bills.',
-        reasoning: 'Insurance Payment Receipt',
-      }
-    }
-  }
-
-  // Auto Insurance Routine Billing (GEICO, Progressive, State Farm) with Claim Shield
-  if (
-    sLower.indexOf('geico.com') !== -1 ||
-    sLower.indexOf('progressive.com') !== -1 ||
-    sLower.indexOf('statefarm.com') !== -1
-  ) {
-    var isInsuranceClaim =
-      subLower.indexOf('claim') !== -1 ||
-      subLower.indexOf('adjuster') !== -1 ||
-      subLower.indexOf('settlement') !== -1 ||
-      subLower.indexOf('complaint') !== -1
-    if (!isInsuranceClaim) {
-      if (
-        subLower.indexOf('auto pay') !== -1 ||
-        subLower.indexOf('autopay') !== -1 ||
-        subLower.indexOf('payment') !== -1 ||
-        subLower.indexOf('bill') !== -1 ||
-        subLower.indexOf('statement') !== -1 ||
-        subLower.indexOf('policy document') !== -1 ||
-        subLower.indexOf('id card') !== -1
-      ) {
-        return {
-          canonicalDomain: '02_Finance_Legal',
-          canonical_label: '02_Finance_Legal',
-          subLabel: 'Finance/Bills',
-          category: 'Updates',
-          action: 'archive',
-          confidence: 0.99,
-          title: subject,
-          summary:
-            'Routine auto insurance billing, AutoPay notice, or policy document routed to Finance/Bills.',
-          reasoning: 'Auto Insurance Routine Billing',
-        }
-      }
-    }
-  }
-
-  // Credit Scores & Monitoring Bulletins (Capital One CreditWise, Experian, Credit Karma, etc.)
-  if (
-    sLower.indexOf('creditwise') !== -1 ||
-    sLower.indexOf('creditkarma') !== -1 ||
-    sLower.indexOf('experian') !== -1 ||
-    sLower.indexOf('equifax') !== -1 ||
-    sLower.indexOf('transunion') !== -1 ||
-    sLower.indexOf('myfico') !== -1 ||
-    sLower.indexOf('capitalone') !== -1 ||
-    sLower.indexOf('chase.com') !== -1 ||
-    sLower.indexOf('discover.com') !== -1
-  ) {
-    if (
-      subLower.indexOf('credit score') !== -1 ||
-      subLower.indexOf('score went up') !== -1 ||
-      subLower.indexOf('score went down') !== -1 ||
-      subLower.indexOf('creditwise') !== -1 ||
-      subLower.indexOf('score changed') !== -1 ||
-      subLower.indexOf('credit alert') !== -1 ||
-      subLower.indexOf('credit monitoring') !== -1 ||
-      subLower.indexOf('credit report') !== -1 ||
-      subLower.indexOf('fico score') !== -1 ||
-      subLower.indexOf('new credit inquiry') !== -1
-    ) {
-      return {
-        canonicalDomain: '02_Finance_Legal',
-        canonical_label: '02_Finance_Legal',
-        subLabel: 'Finance/Banking',
-        category: 'Updates',
-        action: 'archive',
-        confidence: 0.99,
-        title: subject,
-        summary:
-          'Automated credit score update or credit monitoring notification routed to Updates.',
-        reasoning: 'Credit Score Alert',
-      }
-    }
-  }
-
-  // Bank APY, Interest Rate Changes & Savings Yield Updates
-  if (
-    subLower.indexOf('higher apy') !== -1 ||
-    subLower.indexOf('apy has increased') !== -1 ||
-    subLower.indexOf('apy increased') !== -1 ||
-    subLower.indexOf('earns a higher apy') !== -1 ||
-    subLower.indexOf('rate increase') !== -1 ||
-    subLower.indexOf('rate decrease') !== -1 ||
-    subLower.indexOf('rate update') !== -1 ||
-    subLower.indexOf('rates are changing') !== -1 ||
-    subLower.indexOf('yield update') !== -1 ||
-    subLower.indexOf('interest rate increase') !== -1 ||
-    subLower.indexOf('savings rate increase') !== -1 ||
-    subLower.indexOf('annual percentage yield') !== -1 ||
-    (subLower.indexOf('rate change') !== -1 &&
-      (subLower.indexOf('apy') !== -1 ||
-        subLower.indexOf('cash') !== -1 ||
-        subLower.indexOf('savings') !== -1 ||
-        subLower.indexOf('interest') !== -1))
-  ) {
-    return {
-      canonicalDomain: '02_Finance_Legal',
-      canonical_label: '02_Finance_Legal',
-      subLabel: 'Finance/Banking',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary:
-        'Automated bank account APY or interest rate change notification routed to Finance/Banking.',
-      reasoning: 'Bank Rate Update',
-    }
-  }
-
-  // Commercial Terms of Service, Privacy Policy & User Agreement Updates
-  if (
-    subLower.indexOf('terms of service') !== -1 ||
-    subLower.indexOf('privacy policy') !== -1 ||
-    subLower.indexOf('terms and conditions') !== -1 ||
-    subLower.indexOf('terms of use') !== -1 ||
-    subLower.indexOf('user agreement') !== -1 ||
-    subLower.indexOf('privacy notice') !== -1 ||
-    subLower.indexOf('policy update') !== -1 ||
-    subLower.indexOf('updates to our terms') !== -1 ||
-    subLower.indexOf('updates to our privacy') !== -1 ||
-    subLower.indexOf('arbitration clause') !== -1 ||
-    subLower.indexOf('arbitration terms') !== -1 ||
-    subLower.indexOf('consumer privacy') !== -1
-  ) {
-    return {
-      canonicalDomain: null,
-      canonical_label: null,
-      subLabel: null,
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.99,
-      title: subject,
-      summary:
-        'Commercial platform terms of service, privacy policy revision, or user agreement update routed to Updates.',
-      reasoning: 'Policy / Terms Update',
-    }
-  }
-
-  // Payment Processors & Retail Receipts (PayPal, Home Depot)
-  if (
-    sLower.indexOf('paypal.com') !== -1 &&
-    (subLower.indexOf('receipt') !== -1 ||
-      subLower.indexOf('payment') !== -1 ||
-      subLower.indexOf('transaction') !== -1 ||
-      subLower.indexOf('you sent') !== -1 ||
-      subLower.indexOf('you paid') !== -1 ||
-      subLower.indexOf('you received') !== -1 ||
-      subLower.indexOf('authorized') !== -1 ||
-      subLower.indexOf('usd') !== -1)
-  ) {
-    return {
-      canonicalDomain: '02_Finance_Legal',
-      canonical_label: '02_Finance_Legal',
-      subLabel: 'Finance/Purchases',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.98,
-      title: subject,
-      summary:
-        'Electronic payment transaction receipt or transfer confirmation.',
-      reasoning: 'Payment Receipt',
-    }
-  }
-  if (
-    sLower.indexOf('homedepot.com') !== -1 &&
-    (subLower.indexOf('order') !== -1 ||
-      subLower.indexOf('receipt') !== -1 ||
-      subLower.indexOf('picked up') !== -1 ||
-      subLower.indexOf('ready for pickup') !== -1)
-  ) {
-    return {
-      canonicalDomain: '02_Finance_Legal',
-      canonical_label: '02_Finance_Legal',
-      subLabel: 'Finance/Purchases',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.98,
-      title: subject,
-      summary: 'Home Depot store receipt or order pickup confirmation.',
-      reasoning: 'Retail Order / Receipt',
-    }
-  }
-
-  // General Retail Purchases & Order Receipts (Target, Costco, Best Buy, Walmart)
-  if (
-    (sLower.indexOf('target.com') !== -1 ||
-      sLower.indexOf('costco.com') !== -1 ||
-      sLower.indexOf('bestbuy.com') !== -1 ||
-      sLower.indexOf('walmart.com') !== -1) &&
-    (subLower.indexOf('order') !== -1 ||
-      subLower.indexOf('receipt') !== -1 ||
-      subLower.indexOf('ready for pickup') !== -1 ||
-      subLower.indexOf('picked up') !== -1 ||
-      subLower.indexOf('shipped') !== -1 ||
-      subLower.indexOf('delivered') !== -1)
-  ) {
-    return {
-      canonicalDomain: '02_Finance_Legal',
-      canonical_label: '02_Finance_Legal',
-      subLabel: 'Finance/Purchases',
-      category: 'Updates',
-      action: 'archive',
-      confidence: 0.98,
-      title: subject,
-      summary: 'Retail store order confirmation, receipt, or pickup notice.',
-      reasoning: 'Retail Order / Receipt',
-    }
-  }
-
-  // Vehicle Maintenance, Fuel & Parts Receipts (Shell, AutoZone, Advance Auto, RockAuto)
-  if (
-    sLower.indexOf('ereceiptshell.com') !== -1 ||
-    sLower.indexOf('shell e-receipt') !== -1 ||
-    sLower.indexOf('autozone.com') !== -1 ||
-    sLower.indexOf('advanceautoparts.com') !== -1 ||
-    sLower.indexOf('rockauto.com') !== -1
-  ) {
-    if (
-      subLower.indexOf('receipt') !== -1 ||
-      subLower.indexOf('purchase') !== -1 ||
-      subLower.indexOf('order') !== -1 ||
-      subLower.indexOf('fuel') !== -1
-    ) {
-      return {
-        canonicalDomain: '03_Vehicles',
-        canonical_label: '03_Vehicles',
-        subLabel: 'Vehicles/Maintenance',
-        category: 'Updates',
-        action: 'archive',
-        confidence: 0.99,
-        title: subject,
-        summary:
-          'Automated vehicle fuel purchase receipt or parts order confirmation routed to Vehicles/Maintenance.',
-        reasoning: 'Vehicle Fuel/Maintenance Receipt',
-      }
-    }
-  }
-
-  // Newsletters, Digests, Political Blasts, Social Media
-  if (
-    sLower.indexOf('nytimes.com') !== -1 ||
-    sLower.indexOf('nextdoor.com') !== -1 ||
-    sLower.indexOf('substack.com') !== -1 ||
-    sLower.indexOf('dougforalabama') !== -1 ||
-    sLower.indexOf('ossoff') !== -1 ||
-    sLower.indexOf('the passion translation') !== -1 ||
-    sLower.indexOf('redditmail.com') !== -1 ||
-    sLower.indexOf('daily.therundown.ai') !== -1 ||
-    sLower.indexOf('aibreakfast') !== -1 ||
-    sLower.indexOf('mail.instagram.com') !== -1 ||
-    sLower.indexOf('facebookmail.com') !== -1 ||
-    sLower.indexOf('linkedin.com') !== -1 ||
-    sLower.indexOf('pinterest.com') !== -1 ||
-    sLower.indexOf('quora.com') !== -1 ||
-    sLower.indexOf('youtube.com') !== -1 ||
-    sLower.indexOf('twitter.com') !== -1 ||
-    sLower.indexOf('x.com') !== -1
-  ) {
-    return {
-      canonicalDomain: null,
-      canonical_label: null,
-      subLabel: null,
-      category: 'Social',
-      action: 'archive',
-      confidence: 0.98,
-      title: subject,
-      summary:
-        'Routine media newsletter, Substack digest, social media alert, or political appeal.',
-      reasoning: 'News/Newsletter/Social',
-    }
-  }
-
-  // Retail & E-Commerce Marketing Blasts
-  var isScarsella = sLower.indexOf('scarsella') !== -1
-  var isScarsellaCurriculum =
-    isScarsella &&
-    /\b(curriculum|schedule|testing|belt|forms?)\b/i.test(
-      (subject || '') + ' ' + (snippet || '')
-    )
-
-  var isPromoSubject =
-    /\b(sale|\d+%\s*off|deal of the day|daily deals?|clearance|limited time offer|coupon|promo code|shop now|shop today|exclusive offer|special offer|flash sale|black friday|cyber monday|memorial day sale|labor day sale|presidents day sale|discount code|save \$\d+|save up to|free shipping|buy one get one|bogo|don't miss out|last chance to save|doorbusters?|rewards balance|earn bonus points|member exclusive)\b/i.test(
-      subject || ''
-    )
-  var isNonTransactional =
-    subLower.indexOf('order') === -1 &&
-    subLower.indexOf('receipt') === -1 &&
-    subLower.indexOf('invoice') === -1 &&
-    subLower.indexOf('statement') === -1 &&
-    subLower.indexOf('autopay') === -1 &&
-    subLower.indexOf('tracking') === -1 &&
-    subLower.indexOf('shipped') === -1 &&
-    subLower.indexOf('delivered') === -1
-
-  var isRetailVendor =
-    sLower.indexOf('lowes') !== -1 ||
-    sLower.indexOf('mannlake') !== -1 ||
-    sLower.indexOf('urotuning') !== -1 ||
-    sLower.indexOf('ray-ban') !== -1 ||
-    sLower.indexOf('americanmeadows') !== -1 ||
-    sLower.indexOf('foxhound') !== -1 ||
-    sLower.indexOf('bhphotovideo') !== -1 ||
-    sLower.indexOf('starbucks') !== -1 ||
-    sLower.indexOf('birminghamhomebuyers') !== -1 ||
-    sLower.indexOf('trailerparts') !== -1 ||
-    sLower.indexOf('hillco') !== -1 ||
-    sLower.indexOf('target.com') !== -1 ||
-    sLower.indexOf('costco.com') !== -1 ||
-    sLower.indexOf('bestbuy.com') !== -1 ||
-    sLower.indexOf('walmart.com') !== -1 ||
-    sLower.indexOf('doordash.com') !== -1 ||
-    sLower.indexOf('kohls.com') !== -1 ||
-    sLower.indexOf('samsclub.com') !== -1 ||
-    sLower.indexOf('em1.cloudflare.com') !== -1
-
-  if (
-    (isRetailVendor && isNonTransactional) ||
-    (isScarsella && !isScarsellaCurriculum) ||
-    (isPromoSubject && isNonTransactional)
-  ) {
-    return {
-      canonicalDomain: null,
-      canonical_label: null,
-      subLabel: null,
-      category: 'Promotions',
-      action: 'archive',
-      confidence: 0.98,
-      title: subject,
-      summary:
-        'Commercial vendor retail promo, discount, or marketing announcement.',
-      reasoning: 'Retail Promo',
-    }
-  }
-
-  return null
-}
-
-/**
- * Removes any pre-existing conflicting Core Domain labels, Sub-Labels, legacy flat labels,
- * and redundant 'Retention/Permanent' tags to enforce a strict, clean label budget.
- */
-function cleanConflictingLabels(thread, targetDomain, targetSubLabel, config) {
-  if (!thread || typeof thread.getLabels !== 'function') return
+function getFileHash(blob) {
+  if (!blob) return ''
   try {
-    var existingLabels = thread.getLabels() || []
-    var canonicalDomains = (config && config.canonicalDomains) || []
-
-    var legacyFlatLabels = [
-      'Finance',
-      'Household',
-      'Family',
-      'Projects',
-      'Work',
-      'Community',
-      'Tech',
-      'Purchases',
-      'Banking',
-      'Bills',
-      'eBills',
-      'Insurance',
-      'Sent',
-      'Archives',
-    ]
-
-    for (var j = 0; j < existingLabels.length; j++) {
-      var lObj = existingLabels[j]
-      var lName =
-        typeof lObj.getName === 'function' ? lObj.getName() : String(lObj)
-
-      // 1. Strip redundant Retention/Permanent (Inverted Model: blank = permanent)
-      if (lName === 'Retention/Permanent') {
-        try {
-          thread.removeLabel(lObj)
-          console.log(
-            '[cleanConflictingLabels] Stripped Retention/Permanent: ' + lName
-          )
-        } catch (err) {
-          console.warn(
-            '[cleanConflictingLabels] Failed removing label ' +
-              lName +
-              ': ' +
-              err.message
-          )
-        }
-        continue
-      }
-
-      // 2. Protect valid short-lived retention expiration tags
-      if (lName.indexOf('Retention/') === 0) {
-        continue
-      }
-
-      // 3. Protect global status and system labels
-      if (lName === ((config && config.processedLabel) || 'Processed')) {
-        continue
-      }
-
-      // 4. Clean legacy flat labels
-      var isLegacy = false
-      for (var f = 0; f < legacyFlatLabels.length; f++) {
-        if (lName.toLowerCase() === legacyFlatLabels[f].toLowerCase()) {
-          try {
-            thread.removeLabel(lObj)
-            console.log(
-              '[cleanConflictingLabels] Stripped legacy flat label: ' + lName
-            )
-          } catch (err) {
-            console.warn(
-              '[cleanConflictingLabels] Failed removing legacy flat label ' +
-                lName +
-                ': ' +
-                err.message
-            )
-          }
-          isLegacy = true
-          break
-        }
-      }
-      if (isLegacy) continue
-
-      // 5. Clean ALL Core Domain labels (threads only carry Sub-Labels, never raw domain codes)
-      var isDomainCode = isRootDomainLabel(lName)
-      if (!isDomainCode) {
-        for (var d = 0; d < canonicalDomains.length; d++) {
-          if (lName === canonicalDomains[d]) {
-            isDomainCode = true
-            break
-          }
-        }
-      }
-      if (isDomainCode) {
-        try {
-          thread.removeLabel(lObj)
-          console.log(
-            '[cleanConflictingLabels] Removed domain code label: ' + lName
-          )
-        } catch (err) {
-          console.warn(
-            '[cleanConflictingLabels] Failed removing domain code label ' +
-              lName +
-              ': ' +
-              err.message
-          )
-        }
-        continue
-      }
-
-      // 6. Clean conflicting sub-labels if they don't match targetSubLabel
-      if (
-        lName.indexOf('/') !== -1 &&
-        lName !== targetSubLabel &&
-        lName.indexOf('Archives') === -1 &&
-        lName.indexOf('Retention/') === -1
-      ) {
-        try {
-          thread.removeLabel(lObj)
-          console.log(
-            '[cleanConflictingLabels] Removed conflicting sub-label: ' + lName
-          )
-        } catch (err) {
-          console.warn(
-            '[cleanConflictingLabels] Failed removing conflicting sub-label ' +
-              lName +
-              ': ' +
-              err.message
-          )
-        }
-      }
+    let bytes = blob
+    if (typeof blob === 'object' && typeof blob.getBytes === 'function') {
+      bytes = blob.getBytes()
     }
-  } catch (e) {
-    console.warn('[cleanConflictingLabels] Error cleaning labels: ' + e.message)
+    if (!bytes) return ''
+    const util =
+      typeof Utilities !== 'undefined' && Utilities
+        ? Utilities
+        : typeof globalThis !== 'undefined' && globalThis.Utilities
+          ? globalThis.Utilities
+          : null
+    if (util && typeof util.computeDigest === 'function') {
+      const rawDigest = util.computeDigest(util.DigestAlgorithm.MD5, bytes)
+      return rawDigest
+        .map((b) => {
+          const v = b < 0 ? b + 256 : b
+          return v.toString(16).padStart(2, '0')
+        })
+        .join('')
+    }
+    return ''
+  } catch {
+    return ''
   }
 }
 
-/**
- * Automatically purges emails older than their category retention policy (2 years for Promotions/Social/Forums).
- * Core household domains (01_Household - 07_Community_NonProfit), Primary, Updates, Starred, and User Replied/Sent threads are 100% EXEMPT.
- */
-function purgeExpiredEmailsByRetentionPolicy(customConfig, customServices) {
-  console.log(
-    '[purgeExpiredEmailsByRetentionPolicy] Starting weekly category retention cleanup...'
+function validateClassification(classification, canonicalDomains) {
+  if (!classification || typeof classification !== 'object') return false
+  if (
+    !classification.canonical_label ||
+    typeof classification.canonical_label !== 'string'
   )
-  var services = customServices || {}
-  var config =
-    customConfig ||
-    (typeof getAiClassifierConfig === 'function' ? getAiClassifierConfig() : {})
-
-  var gmail =
-    services.GmailApp || (typeof GmailApp !== 'undefined' ? GmailApp : null)
-  if (!gmail) {
-    console.error(
-      '[purgeExpiredEmailsByRetentionPolicy] GmailApp service is missing.'
-    )
-    return { trashedCount: 0, exemptedCount: 0 }
-  }
-
-  // Explicitly exclude threads sent by user or containing user replies
-  var retentionQuery =
-    '(category:promotions OR category:social OR category:forums) older_than:2y -is:starred -from:me'
-
-  var threads = gmail.search(retentionQuery, 0, 50) || []
-  console.log(
-    '[purgeExpiredEmailsByRetentionPolicy] Found ' +
-      threads.length +
-      ' expired thread(s) matching 2-year retention query.'
+    return false
+  if (!Number.isFinite(classification.confidence)) return false
+  if (classification.confidence < 0 || classification.confidence > 1)
+    return false
+  if (
+    classification.reasoning === undefined ||
+    typeof classification.reasoning !== 'string'
   )
-
-  if (threads.length === 0) {
-    return { trashedCount: 0, exemptedCount: 0 }
-  }
-
-  var coreDomainLabels = config.canonicalDomains || [
-    '01_Household',
-    '02_Finance_Legal',
-    '03_Vehicles',
-    '04_Family_Health',
-    '05_Tech_Infrastructure',
-    '06_Work_Career',
-    '07_Community_NonProfit',
-  ]
-  var trashedCount = 0
-  var exemptedCount = 0
-
-  for (var i = 0; i < threads.length; i++) {
-    try {
-      var thread = threads[i]
-      if (!thread) continue
-      var labels =
-        typeof thread.getLabels === 'function' ? thread.getLabels() || [] : []
-      var isExempt = false
-
-      // Safety Shield 1: Check if thread contains any Core Household Domain label
-      // OR any classifier sub-label. Under the strict single-label model a saved
-      // core thread often carries ONLY its sub-label (e.g. "Finance/Banking") with
-      // the canonical-domain code stripped, so exempting canonical codes alone
-      // would let the 2-year purge trash indefinitely-retained core mail. Any
-      // user sub-label (contains '/', excluding the ephemeral Retention/* tags)
-      // therefore also grants exemption.
-      for (var l = 0; l < labels.length; l++) {
-        var labelName =
-          typeof labels[l].getName === 'function'
-            ? labels[l].getName()
-            : String(labels[l])
-        for (var cd = 0; cd < coreDomainLabels.length; cd++) {
-          if (labelName.indexOf(coreDomainLabels[cd]) !== -1) {
-            isExempt = true
-            break
-          }
-        }
-        if (isExempt) break
-        if (
-          labelName.indexOf('/') !== -1 &&
-          labelName.indexOf('Retention/') !== 0
-        ) {
-          isExempt = true
-          break
-        }
-      }
-
-      // Safety Shield 2: Check if user sent a message or replied in this thread
-      if (!isExempt) {
-        if (isThreadSentOrRepliedByUser(thread, config.userAccountEmail)) {
-          isExempt = true
-        }
-      }
-
-      if (!isExempt) {
-        if (typeof thread.moveToTrash === 'function') {
-          thread.moveToTrash()
-        }
-        trashedCount++
-      } else {
-        exemptedCount++
-        var subj =
-          typeof thread.getFirstMessageSubject === 'function'
-            ? thread.getFirstMessageSubject()
-            : thread.getId()
-        console.log(
-          '[purgeExpiredEmailsByRetentionPolicy] Exempted thread from trash (contains core domain label or user reply): ' +
-            subj
-        )
-      }
-    } catch (err) {
-      console.warn(
-        '[purgeExpiredEmailsByRetentionPolicy] Error processing thread: ' +
-          err.message
-      )
-    }
-  }
-
-  console.log(
-    '[purgeExpiredEmailsByRetentionPolicy] Retention cleanup complete. Moved ' +
-      trashedCount +
-      ' expired thread(s) to Trash.'
+    return false
+  if (
+    canonicalDomains &&
+    !canonicalDomains.includes(classification.canonical_label)
   )
-  return { trashedCount: trashedCount, exemptedCount: exemptedCount }
+    return false
+  return true
 }
 
+const VALID_ONTOLOGICAL_CATEGORIES_ = [
+  'Primary',
+  'Updates',
+  'Promotions',
+  'Social',
+  'Forums',
+]
+const VALID_ONTOLOGICAL_ACTIONS_ = ['keep', 'archive', 'trash', 'mark_read']
+
 /**
- * Checks if a thread contains any messages sent or replied by the account owner.
+ * Validates an ontological classification response object returned by classifyWithGemini.
+ *
+ * @param {Object} classification - Parsed response from Gemini
+ * @param {string[]} [canonicalDomains] - Allowed canonical domain keys
+ * @returns {boolean}
  */
-function isThreadSentOrRepliedByUser(thread, userEmail) {
-  try {
-    var primaryEmail = (userEmail || '').toLowerCase()
-    if (!primaryEmail || !thread || typeof thread.getMessages !== 'function') {
+function validateOntologicalClassification(classification, canonicalDomains) {
+  if (
+    !classification ||
+    typeof classification !== 'object' ||
+    Array.isArray(classification)
+  ) {
+    return false
+  }
+  if (
+    typeof classification.confidence === 'number' &&
+    (!Number.isFinite(classification.confidence) ||
+      classification.confidence < 0 ||
+      classification.confidence > 1)
+  ) {
+    return false
+  }
+  if (
+    classification.confidence !== undefined &&
+    typeof classification.confidence !== 'number'
+  ) {
+    return false
+  }
+  var domain = classification.canonicalDomain
+  if (domain !== null && domain !== undefined && domain !== '') {
+    if (typeof domain !== 'string') return false
+    if (
+      Array.isArray(canonicalDomains) &&
+      canonicalDomains.length > 0 &&
+      canonicalDomains.indexOf(domain) === -1
+    ) {
       return false
     }
-    var messages = thread.getMessages() || []
-    for (var m = 0; m < messages.length; m++) {
-      var msg = messages[m]
-      if (!msg || typeof msg.getFrom !== 'function') continue
-      var rawFrom = msg.getFrom()
-      var fromAddr = (
-        rawFrom && typeof rawFrom === 'string' ? rawFrom : ''
-      ).toLowerCase()
-      if (fromAddr.indexOf(primaryEmail) !== -1) {
-        return true
-      }
-    }
-  } catch (e) {
-    console.warn(
-      '[isThreadSentOrRepliedByUser] Error checking message senders:',
-      e.message
-    )
-  }
-  return false
-}
-
-/**
- * Guards destructive actions (trash/archive) behind a strict validation of the
- * parsed Gemini response. Returns true only when the action is a recognized
- * destructive verb AND the response carries a finite confidence at or above the
- * destructive-action minimum. Any malformed, manipulated, or low-confidence
- * response returns false so the thread is preserved in the Inbox.
- */
-var DESTRUCTIVE_CONFIDENCE_MIN = 0.85
-
-function isDestructiveActionAllowed_(classification) {
-  if (!classification || typeof classification !== 'object') {
-    return false
   }
   if (
-    classification.action !== 'trash' &&
-    classification.action !== 'archive'
+    classification.category !== undefined &&
+    classification.category !== null &&
+    VALID_ONTOLOGICAL_CATEGORIES_.indexOf(classification.category) === -1
   ) {
     return false
   }
-  var confidence = classification.confidence
-  if (typeof confidence !== 'number' || !isFinite(confidence)) {
+  if (
+    classification.action !== undefined &&
+    classification.action !== null &&
+    VALID_ONTOLOGICAL_ACTIONS_.indexOf(classification.action) === -1
+  ) {
     return false
   }
-  return confidence >= DESTRUCTIVE_CONFIDENCE_MIN
+  return true
 }
 
-/**
- * Sets up a weekly cloud trigger to run purgeExpiredEmailsByRetentionPolicy every Sunday at 1:00 AM.
- */
-function setupWeeklyRetentionTrigger() {
-  var triggers = ScriptApp.getProjectTriggers()
-  for (var i = 0; i < triggers.length; i++) {
-    if (
-      triggers[i].getHandlerFunction() === 'purgeExpiredEmailsByRetentionPolicy'
-    ) {
-      ScriptApp.deleteTrigger(triggers[i])
-    }
-  }
-
-  ScriptApp.newTrigger('purgeExpiredEmailsByRetentionPolicy')
-    .timeBased()
-    .onWeekDay(ScriptApp.WeekDay.SUNDAY)
-    .atHour(1)
-    .create()
-
-  console.log(
-    '[setupWeeklyRetentionTrigger] Established weekly Sunday 1:00 AM retention cleanup trigger.'
-  )
-}
-
-/**
- * Sets up a daily cloud trigger to run auditEmailClassifications every morning at 6:00 AM.
- */
-function setupDailyAuditTrigger() {
-  var triggers = ScriptApp.getProjectTriggers()
-  for (var i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === 'auditEmailClassifications') {
-      ScriptApp.deleteTrigger(triggers[i])
-    }
-  }
-
-  ScriptApp.newTrigger('auditEmailClassifications')
-    .timeBased()
-    .everyDays(1)
-    .atHour(6)
-    .create()
-
-  console.log(
-    '[setupDailyAuditTrigger] Established daily 6:00 AM classification audit trigger.'
-  )
-}
-
-/**
- * Sets up a recurring cloud trigger to run auditEmailClassifications every 4 hours.
- */
-function setupFourHourAuditTrigger() {
-  var triggers = ScriptApp.getProjectTriggers()
-  for (var i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === 'auditEmailClassifications') {
-      ScriptApp.deleteTrigger(triggers[i])
-    }
-  }
-
-  ScriptApp.newTrigger('auditEmailClassifications')
-    .timeBased()
-    .everyHours(4)
-    .create()
-
-  console.log(
-    '[setupFourHourAuditTrigger] Established 4-hour classification audit trigger.'
-  )
-}
-
-/**
- * Daily audit routine that inspects recently processed threads for classification anomalies,
- * missing or duplicate domain labels, and potential prompt tuning opportunities.
- * Logs anomalies to console and optionally emails a digest if AUDIT_DIGEST_EMAIL is configured.
- *
- * @param {Object} [customConfig] - Optional override configuration
- * @param {Object} [customServices] - Optional injected services (GmailApp)
- * @returns {Object} report - { scannedCount, flaggedCount, findings, summary }
- */
-function auditEmailClassifications(customConfig, customServices) {
-  console.log(
-    '[auditEmailClassifications] Starting daily classification audit sweep...'
-  )
-  var services = customServices || {}
-  var config =
-    customConfig ||
-    (typeof getAiClassifierConfig === 'function' ? getAiClassifierConfig() : {})
-  var gmail =
-    (services && services.GmailApp) ||
-    (typeof GmailApp !== 'undefined' ? GmailApp : null)
-  var lookback = config.auditLookbackDays || 2
-  var query =
-    'label:' +
-    (config.processedLabel || 'Processed') +
-    ' newer_than:' +
-    lookback +
-    'd'
-
-  var threads =
-    gmail && typeof gmail.search === 'function'
-      ? gmail.search(query, 0, 50)
-      : []
-  console.log(
-    '[auditEmailClassifications] Found ' +
-      threads.length +
-      ' processed thread(s) in last ' +
-      lookback +
-      ' day(s).'
-  )
-
-  var report = auditClassifications(threads, config)
-  console.log('[auditEmailClassifications] ' + report.summary)
-
-  if (report.flaggedCount > 0) {
-    var digest = formatAuditDigest(report)
-    console.warn('[auditEmailClassifications] Anomalies detected:\n' + digest)
-
-    if (
-      config.auditDigestEmail &&
-      gmail &&
-      typeof gmail.sendEmail === 'function'
-    ) {
-      try {
-        gmail.sendEmail(
-          config.auditDigestEmail,
-          '[Gmail AI Classifier] Daily Classification Audit: ' +
-            report.flaggedCount +
-            ' anomalies detected',
-          digest
-        )
-        console.log(
-          '[auditEmailClassifications] Audit digest email sent to ' +
-            config.auditDigestEmail
-        )
-      } catch (e) {
-        console.error(
-          '[auditEmailClassifications] Failed to send audit digest email:',
-          e.message
-        )
-      }
-    }
-  } else {
-    console.log(
-      '[auditEmailClassifications] All analyzed threads are compliant with taxonomy rules.'
-    )
-  }
-
-  return report
-}
-
-/**
- * Audits a collection of processed Gmail threads for classification anomalies.
- *
- * @param {Array} threads - Array of GmailThread-like objects
- * @param {Object} config - Classifier config
- * @returns {Object} report - { scannedCount, flaggedCount, findings, summary }
- */
-function auditClassifications(threads, config) {
-  var canonicalDomains = (config && config.canonicalDomains) || [
-    '01_Household',
-    '02_Finance_Legal',
-    '03_Vehicles',
-    '04_Family_Health',
-    '05_Tech_Infrastructure',
-    '06_Work_Career',
-    '07_Community_NonProfit',
-  ]
-
-  var PROMO_KEYWORDS =
-    /\b(sale|\d+% off|deal of the day|clearance|limited time offer|coupon|shop now)\b/i
-  var NEWSLETTER_KEYWORDS =
-    /\b(weekly digest|daily digest|newsletter|roundup|top stories)\b/i
-  var ORDER_KEYWORDS =
-    /\b(order confirmation|your order|receipt|payment received|invoice|shipped)\b/i
-  var TOS_KEYWORDS =
-    /\b(terms of service|privacy policy|terms and conditions|user agreement|arbitration terms)\b/i
-  var SURVEY_KEYWORDS =
-    /\b(survey|feedback|net promoter|nps|rate your experience|how did we do|review us)\b/i
-  var POLITICAL_KEYWORDS =
-    /\b(campaign|pac|fundraiser|election|candidate|contribute now|donate to our campaign)\b/i
-  var NON_CANONICAL_SENDER_PATTERNS =
-    /@.*(substack|redditmail|nextdoor|facebookmail|instagram|twitter|x\.com|pinterest|quora)\.com\b|newsletters?@/i
-
-  var findings = []
-
-  if (!Array.isArray(threads)) {
-    return {
-      scannedCount: 0,
-      flaggedCount: 0,
-      findings: [],
-      summary: 'No threads to audit.',
-    }
-  }
-
-  threads.forEach(function (thread) {
-    if (!thread) return
-    var id =
-      typeof thread.getId === 'function' ? thread.getId() : thread.id || ''
-    var subject =
-      typeof thread.getFirstMessageSubject === 'function'
-        ? thread.getFirstMessageSubject()
-        : thread.subject || ''
-
-    var sender = ''
-    if (typeof thread.getMessages === 'function') {
-      var msgs = thread.getMessages()
-      if (msgs && msgs.length > 0 && typeof msgs[0].getFrom === 'function') {
-        sender = msgs[0].getFrom()
-      }
-    } else if (thread.sender) {
-      sender = thread.sender
-    }
-
-    var rawLabels = []
-    if (typeof thread.getLabels === 'function') {
-      var labelObjs = thread.getLabels() || []
-      rawLabels = labelObjs.map(function (l) {
-        return typeof l.getName === 'function' ? l.getName() : String(l)
-      })
-    } else if (Array.isArray(thread.labels)) {
-      rawLabels = thread.labels
-    }
-
-    var assignedCanonical = []
-    rawLabels.forEach(function (l) {
-      if (!l || typeof l !== 'string') return
-      if (canonicalDomains.indexOf(l) !== -1) {
-        if (assignedCanonical.indexOf(l) === -1) assignedCanonical.push(l)
-        return
-      }
-      var match = l.match(/^(0[1-7]_[A-Za-z_]+)/)
-      if (match && canonicalDomains.indexOf(match[1]) !== -1) {
-        if (assignedCanonical.indexOf(match[1]) === -1) {
-          assignedCanonical.push(match[1])
-        }
-      }
-    })
-
-    // Collect any canonical domains represented via sub-labels (e.g. "Finance/Banking" -> "02_Finance_Legal")
-    var sublabelDomains = []
-    rawLabels.forEach(function (l) {
-      var lLower = (l || '').toLowerCase()
-      if (
-        lLower.indexOf('household/') === 0 &&
-        sublabelDomains.indexOf('01_Household') === -1
-      ) {
-        sublabelDomains.push('01_Household')
-      } else if (
-        lLower.indexOf('finance/') === 0 &&
-        sublabelDomains.indexOf('02_Finance_Legal') === -1
-      ) {
-        sublabelDomains.push('02_Finance_Legal')
-      } else if (
-        lLower.indexOf('vehicles/') === 0 &&
-        sublabelDomains.indexOf('03_Vehicles') === -1
-      ) {
-        sublabelDomains.push('03_Vehicles')
-      } else if (
-        lLower.indexOf('family/') === 0 &&
-        sublabelDomains.indexOf('04_Family_Health') === -1
-      ) {
-        sublabelDomains.push('04_Family_Health')
-      } else if (
-        lLower.indexOf('tech/') === 0 &&
-        sublabelDomains.indexOf('05_Tech_Infrastructure') === -1
-      ) {
-        sublabelDomains.push('05_Tech_Infrastructure')
-      } else if (
-        lLower.indexOf('work/') === 0 &&
-        sublabelDomains.indexOf('06_Work_Career') === -1
-      ) {
-        sublabelDomains.push('06_Work_Career')
-      } else if (
-        (lLower.indexOf('community/') === 0 ||
-          lLower.indexOf('projects/') === 0) &&
-        sublabelDomains.indexOf('07_Community_NonProfit') === -1
-      ) {
-        sublabelDomains.push('07_Community_NonProfit')
-      }
-    })
-
-    sublabelDomains.forEach(function (sd) {
-      if (assignedCanonical.indexOf(sd) === -1) {
-        assignedCanonical.push(sd)
-      }
-    })
-
-    var isInTrash = false
-    if (typeof thread.isInTrash === 'function') {
-      try {
-        isInTrash = thread.isInTrash()
-      } catch (tErr) {}
-    } else if (thread.isInTrash === true || thread.isTrash === true) {
-      isInTrash = true
-    }
-
-    var flags = []
-    var fullText = (subject + ' ' + sender).toLowerCase()
-    var isReceiptOrOrder = ORDER_KEYWORDS.test(fullText)
-    var isNonCanonicalStream =
-      isInTrash ||
-      (!isReceiptOrOrder &&
-        (rawLabels.some(function (l) {
-          return /promotions|social|forums|marketing|promo|deal|newsletter/i.test(
-            l
-          )
-        }) ||
-          NON_CANONICAL_SENDER_PATTERNS.test(sender) ||
-          PROMO_KEYWORDS.test(subject) ||
-          NEWSLETTER_KEYWORDS.test(subject) ||
-          TOS_KEYWORDS.test(subject) ||
-          SURVEY_KEYWORDS.test(subject) ||
-          POLITICAL_KEYWORDS.test(subject)))
-
-    // 1. Missing Domain
-    if (assignedCanonical.length === 0 && !isNonCanonicalStream) {
-      flags.push(
-        'MISSING_CANONICAL_DOMAIN: Thread marked as processed has no canonical domain label.'
-      )
-    }
-
-    // 2. Conflicting Domains
-    if (assignedCanonical.length > 1) {
-      flags.push(
-        'CONFLICTING_DOMAINS: Multiple canonical domain labels assigned: ' +
-          assignedCanonical.join(', ')
-      )
-    }
-
-    // 3. Heuristic Checks
-    if (ORDER_KEYWORDS.test(fullText)) {
-      var hasFinanceOrHousehold = assignedCanonical.some(function (l) {
-        return (
-          l.indexOf('02_Finance_Legal') !== -1 ||
-          l.indexOf('01_Household') !== -1 ||
-          l.indexOf('03_Vehicles') !== -1
-        )
-      })
-      if (assignedCanonical.length > 0 && !hasFinanceOrHousehold) {
-        flags.push(
-          'SUSPICIOUS_ROUTING: Purchase/receipt keywords detected but domain is ' +
-            assignedCanonical.join(', ') +
-            ' instead of 02_Finance_Legal.'
-        )
-      }
-    }
-
-    if (PROMO_KEYWORDS.test(subject) && assignedCanonical.length > 0) {
-      var hasMarketingSublabel = rawLabels.some(function (l) {
-        return /promo|marketing|deal|coupon/i.test(l)
-      })
-      if (!hasMarketingSublabel) {
-        flags.push(
-          'PROMOTIONAL_CONTENT: Promotional sale keywords in subject tagged under core domain ' +
-            assignedCanonical.join(', ') +
-            ' without marketing sub-label.'
-        )
-      }
-    }
-
-    if (NEWSLETTER_KEYWORDS.test(subject) && assignedCanonical.length > 0) {
-      var hasNewsletterSublabel = rawLabels.some(function (l) {
-        return /newsletter|digest|news/i.test(l)
-      })
-      if (!hasNewsletterSublabel) {
-        flags.push(
-          'UNLABELED_NEWSLETTER: Generic newsletter/digest subject tagged under core domain ' +
-            assignedCanonical.join(', ') +
-            ' without newsletter sub-label.'
-        )
-      }
-    }
-
-    if (
-      TOS_KEYWORDS.test(subject) &&
-      assignedCanonical.some(function (l) {
-        return l.indexOf('02_Finance_Legal') !== -1
-      })
-    ) {
-      flags.push(
-        'COMMERCIAL_TOS_IN_LEGAL: Routine commercial terms of service/privacy policy update tagged under 02_Finance_Legal instead of non-canonical broadcast.'
-      )
-    }
-
-    // 4. Drive Attachment Persistence & Tagging Check
-    var driveApp =
-      (config && config.driveApp) ||
-      (typeof DriveApp !== 'undefined' ? DriveApp : null)
-    if (
-      driveApp &&
-      assignedCanonical.length === 1 &&
-      typeof thread.getMessages === 'function'
-    ) {
-      var domain = assignedCanonical[0]
-      var subLabel =
-        rawLabels.find(function (l) {
-          if (!l || typeof l !== 'string' || l.indexOf('/') === -1) return false
-          if (/^0[1-7]_/.test(l)) {
-            return l.indexOf(domain + '/') === 0
-          }
-          return true
-        }) || ''
-      var subfolderName = resolveTaxonomySubfolderName(domain, subLabel)
-      var msgs = thread.getMessages() || []
-      msgs.forEach(function (msg) {
-        var atts = getMessageAttachments_(msg)
-        atts.forEach(function (att) {
-          if (isEligibleAttachment(att)) {
-            var attName =
-              typeof att.getName === 'function'
-                ? att.getName()
-                : att.name || 'unnamed'
-            try {
-              var targetFolder = ensureDriveTaxonomyFolder(
-                domain,
-                subfolderName,
-                driveApp
-              )
-              var existingFiles = targetFolder.getFilesByName(attName)
-              if (
-                !existingFiles ||
-                (typeof existingFiles.hasNext === 'function' &&
-                  !existingFiles.hasNext())
-              ) {
-                flags.push(
-                  'MISSING_DRIVE_ATTACHMENT: Eligible attachment "' +
-                    attName +
-                    '" is missing from Drive folder "' +
-                    domain +
-                    '/' +
-                    subfolderName +
-                    '".'
-                )
-              } else if (typeof existingFiles.next === 'function') {
-                var driveFile = existingFiles.next()
-                var desc =
-                  typeof driveFile.getDescription === 'function'
-                    ? driveFile.getDescription()
-                    : ''
-                if (!desc || desc.indexOf('[AI_INDEXED]') === -1) {
-                  flags.push(
-                    'UNTAGGED_DRIVE_ATTACHMENT: Attachment "' +
-                      attName +
-                      '" exists in Drive but lacks [AI_INDEXED] metadata description.'
-                  )
-                }
-              }
-            } catch (err) {
-              // Non-blocking folder check
-            }
-          }
-        })
-      })
-    }
-
-    // 5. Archived from Inbox Without Action Check
-    var isArchived =
-      (typeof thread.isInInbox === 'function' &&
-        thread.isInInbox() === false) ||
-      thread.isInInbox === false
-    if (isArchived && assignedCanonical.length > 0) {
-      var isStarred =
-        (typeof thread.isStarred === 'function' &&
-          thread.isStarred() === true) ||
-        thread.isStarred === true
-      var userEmail = (config && config.userAccountEmail) || ''
-      var isSentOrReplied =
-        typeof isThreadSentOrRepliedByUser === 'function'
-          ? isThreadSentOrRepliedByUser(thread, userEmail)
-          : false
-      var hasSecondaryCategory = rawLabels.some(function (l) {
-        return /promotions|updates|social|forums|archive/i.test(l)
-      })
-
-      if (!isStarred && !isSentOrReplied && !hasSecondaryCategory) {
-        flags.push(
-          'ARCHIVED_WITHOUT_ACTION: Thread tagged under ' +
-            assignedCanonical.join(', ') +
-            ' was archived from Inbox without user reply or star; candidate for secondary stream routing (Updates).'
-        )
-      }
-    }
-
-    if (flags.length > 0) {
-      findings.push({
-        threadId: id,
-        subject: subject,
-        sender: sender,
-        canonicalLabels: assignedCanonical,
-        allLabels: rawLabels,
-        flags: flags,
-      })
-    }
-  })
-
-  return {
-    scannedCount: threads.length,
-    flaggedCount: findings.length,
-    findings: findings,
-    summary:
-      'Audited ' +
-      threads.length +
-      ' thread(s); ' +
-      findings.length +
-      ' anomaly flag(s) identified.',
-  }
-}
-
-/**
- * Formats an audit report into a human-readable email digest or log message.
- *
- * @param {Object} report - Result from auditClassifications
- * @returns {string} Formatted digest text
- */
-function formatAuditDigest(report) {
-  if (!report || report.flaggedCount === 0) {
-    return (
-      'Gmail AI Classifier Audit: All ' +
-      (report ? report.scannedCount : 0) +
-      ' analyzed threads are compliant. No anomalies detected.'
-    )
-  }
-
-  var text = '===================================================\n'
-  text += '   GMAIL AI CLASSIFICATION AUDIT REPORT\n'
-  text += '===================================================\n'
-  text += report.summary + '\n\n'
-
-  report.findings.forEach(function (finding, idx) {
-    if (!finding) return
-    var labelsStr =
-      Array.isArray(finding.canonicalLabels) &&
-      finding.canonicalLabels.length > 0
-        ? finding.canonicalLabels.join(', ')
-        : '(none)'
-    var flagsList = Array.isArray(finding.flags) ? finding.flags : []
-
-    text +=
-      idx + 1 + '. Subject: "' + (finding.subject || '(no subject)') + '"\n'
-    text += '   Sender:  ' + (finding.sender || '(unknown)') + '\n'
-    text += '   Labels:  ' + labelsStr + '\n'
-    text += '   Flags:\n'
-    flagsList.forEach(function (f) {
-      text += '     • ' + f + '\n'
-    })
-    text += '\n'
-  })
-
-  text += '---------------------------------------------------\n'
-  text +=
-    'Tuning Action: Update ScriptProperty CUSTOM_PROMPT_RULES to add calibrated sender rules.\n'
-  text += '===================================================\n'
-  return text
-}
-
-/**
- * Creates an automatic Cloud Trigger that runs email classification every 5 minutes 24/7.
- */
-function setupFiveMinuteTrigger() {
-  stopAllTriggers()
-  ScriptApp.newTrigger('processEmailsWithAiClassifier')
-    .timeBased()
-    .everyMinutes(5)
-    .create()
-  setupWeeklyRetentionTrigger()
-  setupDailyAuditTrigger()
-  console.log(
-    '[setupFiveMinuteTrigger] Successfully established 5-minute recurring cloud trigger, weekly retention trigger, and daily audit trigger.'
-  )
-}
-
-/**
- * Clears all active time-driven triggers for this script.
- */
-function stopAllTriggers() {
-  var triggers = ScriptApp.getProjectTriggers()
-  for (var i = 0; i < triggers.length; i++) {
-    ScriptApp.deleteTrigger(triggers[i])
-  }
-  console.log('[stopAllTriggers] All script triggers removed.')
-}
-
-function listAvailableGeminiModels(config, services) {
-  var urlFetch =
-    (services && services.UrlFetchApp) ||
-    (typeof UrlFetchApp !== 'undefined' ? UrlFetchApp : null)
-  if (!urlFetch) return []
-  var cfg =
-    config ||
-    (typeof getAiClassifierConfig === 'function' ? getAiClassifierConfig() : {})
-  if (!cfg || !cfg.geminiApiKey) return []
-  var url =
-    'https://generativelanguage.googleapis.com/v1beta/models?key=' +
-    cfg.geminiApiKey
-  try {
-    var response = urlFetch.fetch(url, { muteHttpExceptions: true })
-    if (response.getResponseCode() === 200) {
-      var data = JSON.parse(response.getContentText())
-      var modelNames = (data.models || []).map(function (m) {
-        return m.name
-      })
-      console.log(
-        '[listAvailableGeminiModels] Available models for key:',
-        JSON.stringify(modelNames)
-      )
-      return modelNames
-    } else {
-      console.warn(
-        '[listAvailableGeminiModels] HTTP ' +
-          response.getResponseCode() +
-          ': ' +
-          response.getContentText()
-      )
-    }
-  } catch (e) {
-    console.warn(
-      '[listAvailableGeminiModels] Error querying models:',
-      e.message
-    )
-  }
-  return []
+function _sleep(ms) {
+  if (typeof Utilities !== 'undefined') Utilities.sleep(ms)
 }
 
 /**
@@ -2716,8 +139,8 @@ function listAvailableGeminiModels(config, services) {
  * @returns {string} Prompt text for Gemini API
  */
 function buildOntologicalPrompt(config, sender, subject, snippet) {
-  var domains = (config && config.canonicalDomains) || []
-  var prompt =
+  const domains = (config && config.canonicalDomains) || []
+  let prompt =
     'You are an executive email classifier. Perform semantic classification into ONE canonical domain key from: ' +
     JSON.stringify(domains) +
     ' (or null if non-canonical).\n\n' +
@@ -2807,47 +230,134 @@ function buildOntologicalPrompt(config, sender, subject, snippet) {
   return prompt
 }
 
+/**
+ * Calls the Gemini REST API and returns a validated classification object, or null.
+ *
+ * Returns null on network errors, malformed responses, refused responses, or
+ * responses whose canonical_label does not match a configured domain.
+ * Retries transient 429/5xx responses with exponential backoff (up to 3 attempts).
+ *
+ * @param {Object} config - Classifier configuration (modelEndpoint, geminiApiKey, canonicalDomains)
+ * @param {string} sender - Email sender address
+ * @param {string} subject - Email subject line
+ * @param {string} bodyText - Plain-text body snippet (max 1,200 chars recommended)
+ * @param {Object} urlFetchApp - GAS UrlFetchApp service (injected for testability)
+ * @param {Function} [sleepFn] - Sleep function for retry delays (injected for testability, defaults to _sleep)
+ * @returns {Object|null} Validated classification or null
+ */
+function classifyEmailWithGemini(
+  config,
+  sender,
+  subject,
+  bodyText,
+  urlFetchApp,
+  sleepFn
+) {
+  const url = config.modelEndpoint
+  const sleep = sleepFn || _sleep
+
+  const prompt =
+    'You are an executive email classifier.\n' +
+    'Classify the following email into exactly ONE of these canonical domain labels:\n' +
+    config.canonicalDomains.join('\n') +
+    '\n\n' +
+    'Email Details:\n' +
+    'Sender: ' +
+    sender +
+    '\n' +
+    'Subject: ' +
+    subject +
+    '\n' +
+    'Body Snippet: ' +
+    bodyText +
+    '\n\n' +
+    'Respond ONLY in JSON format with these exact fields:\n' +
+    '{"canonical_label": "<one of the labels above>", "confidence": <0.0-1.0>, "reasoning": "<one sentence>"}'
+
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { response_mime_type: 'application/json' },
+  }
+
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    headers: {
+      'x-goog-api-key': config.geminiApiKey,
+    },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  }
+
+  const MAX_ATTEMPTS = 3
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    try {
+      const response = urlFetchApp.fetch(url, options)
+      const statusCode = response.getResponseCode()
+
+      if (statusCode === 429 || (statusCode >= 500 && statusCode < 600)) {
+        if (attempt < MAX_ATTEMPTS - 1) {
+          sleep(Math.pow(2, attempt) * 1000)
+          continue
+        }
+        console.error(
+          '[classifyEmailWithGemini] Transient error after retries, status:',
+          statusCode
+        )
+        return null
+      }
+
+      if (statusCode < 200 || statusCode >= 300) {
+        console.error(
+          '[classifyEmailWithGemini] HTTP error from Gemini API, status:',
+          statusCode
+        )
+        return null
+      }
+
+      const jsonText = response.getContentText()
+      const parsed = JSON.parse(jsonText)
+      const outputText = parsed.candidates[0].content.parts[0].text
+      const classification = JSON.parse(outputText)
+      if (!validateClassification(classification, config.canonicalDomains)) {
+        console.error(
+          '[classifyEmailWithGemini] Invalid classification response:',
+          JSON.stringify(classification)
+        )
+        return null
+      }
+      return classification
+    } catch (e) {
+      console.error(
+        '[classifyEmailWithGemini] Error calling Gemini REST API:',
+        e.message
+      )
+      return null
+    }
+  }
+}
+
 function computeStringHash(str, services) {
   if (!str) return ''
   try {
-    if (
-      services &&
-      services.Utilities &&
-      typeof services.Utilities.computeDigest === 'function'
-    ) {
-      var digest = services.Utilities.computeDigest(
-        services.Utilities.DigestAlgorithm.MD5,
-        str
-      )
+    var utils =
+      (services && services.Utilities) ||
+      (typeof Utilities !== 'undefined' ? Utilities : null)
+    if (utils && typeof utils.computeDigest === 'function') {
+      var algo = (utils.DigestAlgorithm && utils.DigestAlgorithm.MD5) || 'MD5'
+      var digest = utils.computeDigest(algo, str)
       return digest
         .map(function (b) {
           return ('0' + (b & 0xff).toString(16)).slice(-2)
         })
         .join('')
     }
-    if (
-      typeof Utilities !== 'undefined' &&
-      Utilities &&
-      typeof Utilities.computeDigest === 'function'
-    ) {
-      var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, str)
-      return digest
-        .map(function (b) {
-          return ('0' + (b & 0xff).toString(16)).slice(-2)
-        })
-        .join('')
-    }
-    if (typeof require !== 'undefined') {
-      var crypto = require('crypto')
-      return crypto.createHash('md5').update(str).digest('hex')
-    }
-  } catch (e) {
+  } catch {
     // Non-blocking fallback
   }
   var hash = 0
   for (var i = 0; i < str.length; i++) {
-    hash = (hash << 5) - hash + str.charCodeAt(i)
-    hash |= 0
+    hash = Math.trunc((hash << 5) - hash + str.charCodeAt(i))
   }
   return 'h_' + Math.abs(hash).toString(16)
 }
@@ -2881,6 +391,8 @@ function classifyWithGemini(sender, subject, snippet, config, services) {
       ? PropertiesService.getScriptProperties()
       : null)
 
+  var canonicalDomains = config && config.canonicalDomains
+
   // 1. Check classification cache
   var cacheKey = null
   if (cache) {
@@ -2892,10 +404,14 @@ function classifyWithGemini(sender, subject, snippet, config, services) {
         var cachedJson = cache.get(cacheKey)
         if (cachedJson) {
           var cachedResult = JSON.parse(cachedJson)
-          console.log('[classifyWithGemini] Cache hit for: ' + subject)
-          return cachedResult
+          if (
+            validateOntologicalClassification(cachedResult, canonicalDomains)
+          ) {
+            console.log('[classifyWithGemini] Cache hit for: ' + subject)
+            return cachedResult
+          }
         }
-      } catch (cErr) {
+      } catch {
         // Cache read is non-blocking
       }
     }
@@ -2944,13 +460,16 @@ function classifyWithGemini(sender, subject, snippet, config, services) {
     return null
   }
 
+  var maxRetryDelayMs = null
+
   for (var e = 0; e < endpoints.length; e++) {
-    var separator = endpoints[e].indexOf('?') === -1 ? '?' : '&'
-    var url =
-      endpoints[e] + separator + 'key=' + (config && config.geminiApiKey)
+    var url = endpoints[e]
     var options = {
       method: 'post',
       contentType: 'application/json',
+      headers: {
+        'x-goog-api-key': (config && config.geminiApiKey) || '',
+      },
       payload: JSON.stringify(payload),
       muteHttpExceptions: true,
     }
@@ -2971,7 +490,10 @@ function classifyWithGemini(sender, subject, snippet, config, services) {
         ) {
           var textOutput = resData.candidates[0].content.parts[0].text
           var parsedObj = extractJsonSubstring(textOutput)
-          if (parsedObj) {
+          if (
+            parsedObj &&
+            validateOntologicalClassification(parsedObj, canonicalDomains)
+          ) {
             console.log(
               '[classifyWithGemini] Success using endpoint: ' + endpoints[e]
             )
@@ -2981,15 +503,22 @@ function classifyWithGemini(sender, subject, snippet, config, services) {
             if (cache && cacheKey) {
               try {
                 cache.put(cacheKey, JSON.stringify(parsedObj), 21600)
-              } catch (cPutErr) {
+              } catch {
                 // Cache write is non-blocking
               }
             }
             return parsedObj
           }
+          console.warn(
+            '[classifyWithGemini] Invalid ontological response schema from endpoint: ' +
+              endpoints[e]
+          )
         }
       } else if (statusCode === 429) {
         var delayMs = parseRetryDelayMs(response)
+        if (maxRetryDelayMs === null || delayMs > maxRetryDelayMs) {
+          maxRetryDelayMs = delayMs
+        }
         console.warn(
           '[classifyWithGemini] Endpoint ' +
             endpoints[e] +
@@ -2997,9 +526,6 @@ function classifyWithGemini(sender, subject, snippet, config, services) {
             delayMs / 1000 +
             's before fallback...'
         )
-        if (props) {
-          recordCircuitBreakerFailure(props, delayMs)
-        }
         sleepFn(delayMs)
       } else {
         console.warn(
@@ -3034,7 +560,7 @@ function classifyWithGemini(sender, subject, snippet, config, services) {
     '[classifyWithGemini] All model endpoints failed or rate-limited.'
   )
   if (props) {
-    recordCircuitBreakerFailure(props)
+    recordCircuitBreakerFailure(props, maxRetryDelayMs)
   }
   return null
 }
@@ -3052,7 +578,7 @@ function extractJsonSubstring(text) {
     var rawJson = text.substring(start, end + 1)
     try {
       return JSON.parse(rawJson)
-    } catch (e) {
+    } catch {
       try {
         var cleaned = rawJson.replace(/,\s*([\]}])/g, '$1')
         return JSON.parse(cleaned)
@@ -3075,8 +601,8 @@ function parseRetryDelayMs(response) {
         : null) || {}
     var retryHeader = headers['Retry-After'] || headers['retry-after']
     if (retryHeader) {
-      var seconds = parseInt(retryHeader, 10)
-      if (!isNaN(seconds) && seconds > 0) {
+      var seconds = Number.parseInt(retryHeader, 10)
+      if (!Number.isNaN(seconds) && seconds > 0) {
         return Math.min(seconds * 1000, 30000)
       }
     }
@@ -3092,8 +618,8 @@ function parseRetryDelayMs(response) {
           var detail = resData.error.details[i]
           if (detail.retryDelay) {
             var secStr = detail.retryDelay.replace('s', '')
-            var sec = parseFloat(secStr)
-            if (!isNaN(sec) && sec > 0) {
+            var sec = Number.parseFloat(secStr)
+            if (!Number.isNaN(sec) && sec > 0) {
               return Math.min(Math.ceil(sec * 1000), 30000)
             }
           }
@@ -3114,8 +640,8 @@ function isCircuitBreakerOpen(props, nowMs) {
   if (!props || typeof props.getProperty !== 'function') return false
   var untilStr = props.getProperty('GEMINI_BACKOFF_UNTIL')
   if (!untilStr) return false
-  var until = parseInt(untilStr, 10)
-  if (isNaN(until)) return false
+  var until = Number.parseInt(untilStr, 10)
+  if (Number.isNaN(until)) return false
   var now = typeof nowMs === 'number' ? nowMs : Date.now()
   return now < until
 }
@@ -3129,8 +655,8 @@ function recordCircuitBreakerFailure(props, retryDelayMs, nowMs) {
   var currentFailures = 0
   if (typeof props.getProperty === 'function') {
     var fStr = props.getProperty('GEMINI_BACKOFF_FAILURES')
-    currentFailures = parseInt(fStr || '0', 10)
-    if (isNaN(currentFailures)) currentFailures = 0
+    currentFailures = Number.parseInt(fStr || '0', 10)
+    if (Number.isNaN(currentFailures)) currentFailures = 0
   }
   var failures = currentFailures + 1
   props.setProperty('GEMINI_BACKOFF_FAILURES', String(failures))
@@ -3169,8 +695,8 @@ function getThreadRetryCount_(thread, cache) {
   var threadId = typeof thread.getId === 'function' ? thread.getId() : ''
   if (!threadId) return 0
   var val = cache.get('retry_count_' + threadId)
-  var count = parseInt(val || '0', 10)
-  return isNaN(count) ? 0 : count
+  var count = Number.parseInt(val || '0', 10)
+  return Number.isNaN(count) ? 0 : count
 }
 
 /**
@@ -3183,7 +709,7 @@ function incrementThreadRetryCount_(thread, cache) {
   var count = getThreadRetryCount_(thread, cache) + 1
   try {
     cache.put('retry_count_' + threadId, String(count), 21600)
-  } catch (e) {
+  } catch {
     // Cache write is non-blocking
   }
   return count
@@ -3198,53 +724,99 @@ function clearThreadRetryCount_(thread, cache) {
   if (!threadId) return
   try {
     cache.remove('retry_count_' + threadId)
-  } catch (e) {
+  } catch {
     // Non-blocking
   }
 }
 
-function ensureUserLabel(labelName, gmailApp, gmailAdvanced) {
-  var app = gmailApp || (typeof GmailApp !== 'undefined' ? GmailApp : null)
-  if (!app || !labelName) return null
+function listAvailableGeminiModels(config, services) {
+  var urlFetch =
+    (services && services.UrlFetchApp) ||
+    (typeof UrlFetchApp !== 'undefined' ? UrlFetchApp : null)
+  if (!urlFetch) return []
+  var cfg =
+    config ||
+    (typeof getAiClassifierConfig === 'function' ? getAiClassifierConfig() : {})
+  if (!cfg || !cfg.geminiApiKey) return []
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models'
   try {
-    var label =
-      typeof app.getUserLabelByName === 'function'
-        ? app.getUserLabelByName(labelName)
-        : null
-    if (label) return label
+    var response = urlFetch.fetch(url, {
+      headers: {
+        'x-goog-api-key': cfg.geminiApiKey,
+      },
+      muteHttpExceptions: true,
+    })
+    if (response.getResponseCode() === 200) {
+      var data = JSON.parse(response.getContentText())
+      var modelNames = (data.models || []).map(function (m) {
+        return m.name
+      })
+      console.log(
+        '[listAvailableGeminiModels] Available models for key:',
+        JSON.stringify(modelNames)
+      )
+      return modelNames
+    } else {
+      console.warn(
+        '[listAvailableGeminiModels] HTTP ' +
+          response.getResponseCode() +
+          ': ' +
+          response.getContentText()
+      )
+    }
+  } catch (e) {
+    console.warn(
+      '[listAvailableGeminiModels] Error querying models:',
+      e.message
+    )
+  }
+  return []
+}
 
-    if (typeof app.getUserLabels === 'function') {
-      var allLabels = app.getUserLabels() || []
-      for (var i = 0; i < allLabels.length; i++) {
-        if (
-          allLabels[i] &&
-          typeof allLabels[i].getName === 'function' &&
-          allLabels[i].getName().toLowerCase() === labelName.toLowerCase()
-        ) {
-          return allLabels[i]
-        }
+/**
+ * Ensures a Gmail user label exists, creating it if necessary.
+ *
+ * @param {string} labelName - Full label name (e.g. "01_Household/Primary")
+ * @param {Object} gmailApp - GAS GmailApp service (injected for testability)
+ * @returns {Object|null} GmailLabel or null on failure
+ */
+function ensureGmailLabel(labelName, gmailApp, gmailAdvanced) {
+  if (
+    !gmailApp ||
+    !labelName ||
+    typeof gmailApp.getUserLabelByName !== 'function'
+  ) {
+    return null
+  }
+  const existing = gmailApp.getUserLabelByName(labelName)
+  if (existing) return existing
+
+  if (typeof gmailApp.getUserLabels === 'function') {
+    const allLabels = gmailApp.getUserLabels() || []
+    for (let i = 0; i < allLabels.length; i++) {
+      if (
+        allLabels[i] &&
+        typeof allLabels[i].getName === 'function' &&
+        allLabels[i].getName().toLowerCase() === labelName.toLowerCase()
+      ) {
+        return allLabels[i]
       }
     }
+  }
 
-    if (labelName.indexOf('/') !== -1) {
-      var parts = labelName.split('/')
-      var currentPath = ''
-      for (var p = 0; p < parts.length - 1; p++) {
-        currentPath = currentPath ? currentPath + '/' + parts[p] : parts[p]
-        ensureUserLabel(currentPath, app, gmailAdvanced)
-      }
+  if (labelName.indexOf('/') !== -1) {
+    const parts = labelName.split('/')
+    let currentPath = ''
+    for (let p = 0; p < parts.length - 1; p++) {
+      currentPath = currentPath ? currentPath + '/' + parts[p] : parts[p]
+      ensureGmailLabel(currentPath, gmailApp, gmailAdvanced)
     }
+  }
 
-    var adv =
-      gmailAdvanced || (typeof Gmail !== 'undefined' && Gmail ? Gmail : null)
-    if (
-      adv &&
-      adv.Users &&
-      adv.Users.Labels &&
-      typeof adv.Users.Labels.create === 'function'
-    ) {
+  try {
+    if (gmailAdvanced?.Users?.Labels?.create) {
       try {
-        adv.Users.Labels.create(
+        gmailAdvanced.Users.Labels.create(
           {
             name: labelName,
             labelListVisibility: 'labelShow',
@@ -3252,20 +824,18 @@ function ensureUserLabel(labelName, gmailApp, gmailAdvanced) {
           },
           'me'
         )
-        var created = app.getUserLabelByName(labelName)
+        const created = gmailApp.getUserLabelByName(labelName)
         if (created) return created
-      } catch (advancedErr) {
+      } catch {
         // Fall back to standard createLabel
       }
     }
-    label = app.createLabel(labelName)
-    console.log('[ensureUserLabel] Created new label: ' + labelName)
-    return label
+    return gmailApp.createLabel(labelName)
   } catch (e) {
     try {
-      if (typeof app.getUserLabels === 'function') {
-        var existingLabels = app.getUserLabels() || []
-        for (var j = 0; j < existingLabels.length; j++) {
+      if (typeof gmailApp.getUserLabels === 'function') {
+        const existingLabels = gmailApp.getUserLabels() || []
+        for (let j = 0; j < existingLabels.length; j++) {
           if (
             existingLabels[j] &&
             typeof existingLabels[j].getName === 'function' &&
@@ -3276,416 +846,92 @@ function ensureUserLabel(labelName, gmailApp, gmailAdvanced) {
           }
         }
       }
-    } catch (e2) {}
+    } catch {}
     console.error(
-      '[ensureUserLabel] Error creating label: ' + labelName + ' ' + e.message
+      '[ensureGmailLabel] Error creating label:',
+      labelName,
+      e.message
     )
     return null
   }
 }
 
-var ensureGmailLabel = ensureUserLabel
+/**
+ * Creates a permanent Gmail filter rule mapping a sender address to a label.
+ *
+ * Returns true if the filter was created, false if the Advanced Gmail Service
+ * was unavailable or creation failed.
+ *
+ * @param {string} senderEmail - Sender address (raw, may include display name)
+ * @param {string} labelName - Target canonical label name
+ * @param {Object|null} gmailService - GAS Gmail advanced service (injected; may be null)
+ * @param {Object} gmailApp - GAS GmailApp service (injected for testability)
+ * @returns {boolean}
+ */
+function createPermanentGmailFilter(
+  senderEmail,
+  labelName,
+  gmailService,
+  gmailApp
+) {
+  if (!senderEmail || typeof senderEmail !== 'string') return false
+  if (!labelName || typeof labelName !== 'string') return false
+  const ltIdx = senderEmail.indexOf('<')
+  const gtIdx = senderEmail.indexOf('>', ltIdx + 1)
+  const cleanSender =
+    ltIdx !== -1 && gtIdx !== -1
+      ? senderEmail.slice(ltIdx + 1, gtIdx).trim()
+      : senderEmail.trim()
+  const targetLabel = ensureGmailLabel(labelName, gmailApp)
+  if (!targetLabel) return false
 
-function createGmailFilterRule(senderEmail, targetLabelName) {
-  // Decommissioned: Static filter auto-creation causes multi-label collisions,
-  // filter bloat, and duplicate rules across multi-purpose senders.
-  console.log(
-    '[createGmailFilterRule] Permanent filter auto-creation is permanently decommissioned. No-op.'
-  )
-}
-
-function getNotePathForDomain(domain, subLabel) {
-  var map = {
-    '01_Household': '01_Household/index.md',
-    '02_Finance_Legal': '02_Finance_Legal/index.md',
-    '03_Vehicles': '03_Vehicles/index.md',
-    '04_Family_Health': '04_Family_Health/index.md',
-    '05_Tech_Infrastructure': '05_Tech_Infrastructure/index.md',
-    '06_Work_Career': '06_Work_Career/index.md',
-    '07_Community_NonProfit': '07_Community_NonProfit/index.md',
-  }
-  if (typeof PropertiesService !== 'undefined') {
+  if (gmailService?.Users?.Settings?.Filters) {
     try {
-      var customMapJson =
-        PropertiesService.getScriptProperties().getProperty('CUSTOM_NOTE_PATHS')
-      if (customMapJson) {
-        var customMap = JSON.parse(customMapJson)
-        if (customMap && customMap[domain]) {
-          return customMap[domain]
+      const existingFilters = gmailService.Users.Settings.Filters.list('me')
+      if (existingFilters?.filter) {
+        const duplicate = existingFilters.filter.some(function (f) {
+          return f.criteria?.from === cleanSender
+        })
+        if (duplicate) {
+          console.log(
+            '[createPermanentGmailFilter] Filter already exists for label:',
+            labelName
+          )
+          return true
         }
       }
     } catch (e) {
-      // Fall through to default map
+      console.error(
+        '[createPermanentGmailFilter] Error checking existing filters:',
+        e.message
+      )
     }
-  }
-  return map[domain] || null
-}
 
-function formatProgressiveDisclosureEntry(
-  dateStr,
-  title,
-  sender,
-  subject,
-  summaryText,
-  accountEmail,
-  attachments
-) {
-  var entry = '\n### ' + dateStr + ' — ' + title + '\n'
-  entry += '- **Account**: ' + accountEmail + '\n'
-  entry += '- **From**: ' + sender + '\n'
-  entry += '- **Subject**: ' + subject + '\n'
-  if (summaryText) {
-    entry += '- **Summary**:\n  > ' + summaryText.trim() + '\n'
-  }
-  if (attachments && attachments.length > 0) {
-    entry += '- **Attachments**:\n'
-    for (var a = 0; a < attachments.length; a++) {
-      var att = attachments[a]
-      if (att && att.name) {
-        if (att.url) {
-          entry += '  - [' + att.name + '](' + att.url + ')\n'
-        } else {
-          entry += '  - ' + att.name + '\n'
-        }
-      }
+    const filterBody = {
+      criteria: { from: cleanSender },
+      action: { addLabelIds: [targetLabel.getId()] },
     }
-  }
-  return entry
-}
 
-/**
- * Computes search date range object ({ after: 'YYYY/MM/DD', before: 'YYYY/MM/DD' }) around a given date string.
- */
-function getSearchDateRange_(dateStr, days) {
-  var parts = dateStr.split('-')
-  var year = parseInt(parts[0], 10)
-  var month = parseInt(parts[1], 10) - 1
-  var day = parseInt(parts[2], 10)
-  var dt = new Date(year, month, day)
-
-  var beforeDt = new Date(dt.getTime() + (days + 1) * 86400000)
-  var afterDt = new Date(dt.getTime() - days * 86400000)
-
-  function fmt(d) {
-    var y = d.getFullYear()
-    var m = ('0' + (d.getMonth() + 1)).slice(-2)
-    var da = ('0' + d.getDate()).slice(-2)
-    return y + '/' + m + '/' + da
-  }
-  return { after: fmt(afterDt), before: fmt(beforeDt) }
-}
-
-/**
- * Detects evidence of mojibake (UTF-8 flattened to '?') in a line, distinct from
- * a legitimate question mark. A standalone trailing '?' (e.g. "Ready?") is NOT
- * mojibake; a '?' inside a word, a spaced ' ? ' separator, a doubled '??', or a
- * U+FFFD replacement character is.
- */
-function hasMojibakeMarker_(text) {
-  if (!text) return false
-  return (
-    /\S \? \S/.test(text) ||
-    /\?\?/.test(text) ||
-    /[A-Za-z]\?[A-Za-z]/.test(text) ||
-    /�/.test(text)
-  )
-}
-
-/**
- * Searches Gmail for original raw subject and from header corresponding to a damaged entry.
- */
-function searchGmailForOriginalHeader_(senderEmail, dateStr, damagedSubject) {
-  try {
-    var range = getSearchDateRange_(dateStr, 2)
-    var query =
-      'from:' +
-      senderEmail +
-      ' after:' +
-      range.after +
-      ' before:' +
-      range.before
-    var threads = GmailApp.search(query, 0, 10)
-    // Gmail search does not guarantee ordering; sort by last-message date
-    // (newest first) so the closest matching thread is selected deterministically.
-    threads.sort(function (a, b) {
-      var dateA =
-        a && typeof a.getLastMessageDate === 'function'
-          ? a.getLastMessageDate()
-          : 0
-      var dateB =
-        b && typeof b.getLastMessageDate === 'function'
-          ? b.getLastMessageDate()
-          : 0
-      return dateB - dateA
-    })
-    var normDamaged = damagedSubject.toLowerCase().replace(/[^a-z0-9]/g, '')
-    if (!normDamaged) return null
-
-    for (var t = 0; t < threads.length; t++) {
-      var messages =
-        threads[t] && typeof threads[t].getMessages === 'function'
-          ? threads[t].getMessages()
-          : []
-      for (var m = 0; m < messages.length; m++) {
-        var msg = messages[m]
-        if (!msg) continue
-        var realSub =
-          typeof msg.getSubject === 'function'
-            ? msg.getSubject()
-            : msg.subject || ''
-        var normReal = realSub.toLowerCase().replace(/[^a-z0-9]/g, '')
-        if (
-          normReal === normDamaged ||
-          (normDamaged.length > 8 &&
-            (normReal.indexOf(normDamaged) !== -1 ||
-              normDamaged.indexOf(normReal) !== -1))
-        ) {
-          return {
-            subject: realSub,
-            from:
-              typeof msg.getFrom === 'function'
-                ? msg.getFrom()
-                : msg.from || '',
-          }
-        }
-      }
-    }
-  } catch (e) {
-    console.warn('[searchGmailForOriginalHeader_] Search error: ' + e.message)
-  }
-  return null
-}
-
-/**
- * Fetches file content and SHA from GitHub REST API.
- */
-function fetchGitHubFileContent_(filePath, token) {
-  var url =
-    'https://api.github.com/repos/don-petry/self-private/contents/' + filePath
-  var options = {
-    method: 'get',
-    headers: {
-      Authorization: 'Bearer ' + token,
-      Accept: 'application/vnd.github.v3+json',
-      'User-Agent': 'GoogleAppsScript-Ingester',
-    },
-    muteHttpExceptions: true,
-  }
-  var res = UrlFetchApp.fetch(url, options)
-  if (res.getResponseCode() === 200) {
-    var data = JSON.parse(res.getContentText())
-    var rawContent = Utilities.newBlob(
-      Utilities.base64Decode(data.content)
-    ).getDataAsString()
-    return { content: rawContent, sha: data.sha }
-  }
-  return null
-}
-
-/**
- * Commits updated file content to GitHub REST API.
- */
-function commitGitHubFileDirect_(
-  filePath,
-  updatedContent,
-  sha,
-  commitMessage,
-  token
-) {
-  var url =
-    'https://api.github.com/repos/don-petry/self-private/contents/' + filePath
-  var encoded = Utilities.base64Encode(
-    Utilities.newBlob(updatedContent).getBytes()
-  )
-  var payload = {
-    message: commitMessage,
-    content: encoded,
-    sha: sha,
-  }
-  var options = {
-    method: 'put',
-    contentType: 'application/json',
-    headers: {
-      Authorization: 'Bearer ' + token,
-      Accept: 'application/vnd.github.v3+json',
-      'User-Agent': 'GoogleAppsScript-Ingester',
-    },
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true,
-  }
-  var res = UrlFetchApp.fetch(url, options)
-  return res.getResponseCode() === 200 || res.getResponseCode() === 201
-}
-
-/**
- * One-time backfill helper that queries Gmail to restore exact original UTF-8
- * Subject and From headers for historical activity log entries that were flattened to '?'.
- */
-function backfillOriginalEmailHeaders() {
-  console.log(
-    '[backfillOriginalEmailHeaders] Starting historical header restoration from Gmail...'
-  )
-  var config = getAiClassifierConfig()
-  if (!config.githubToken) {
-    console.error('[backfillOriginalEmailHeaders] GITHUB_PAT is missing.')
-    return
-  }
-
-  var targetFiles = [
-    '01_Household/index.md',
-    '02_Finance_Legal/index.md',
-    '03_Vehicles/index.md',
-    '04_Family_Health/index.md',
-    '05_Tech_Infrastructure/index.md',
-    '06_Work_Career/index.md',
-    '07_Community_NonProfit/index.md',
-  ]
-
-  var totalRestored = 0
-
-  for (var f = 0; f < targetFiles.length; f++) {
-    var filePath = targetFiles[f]
-    console.log('[backfillOriginalEmailHeaders] Processing: ' + filePath)
-
-    var fileData = fetchGitHubFileContent_(filePath, config.githubToken)
-    if (!fileData) {
+    try {
+      gmailService.Users.Settings.Filters.create(filterBody, 'me')
       console.log(
-        '[backfillOriginalEmailHeaders] File not found or empty: ' + filePath
+        '[createPermanentGmailFilter] Permanent filter created for label:',
+        labelName
       )
-      continue
-    }
-
-    var lines = fileData.content.split('\n')
-    var modified = false
-    var fileRestoredCount = 0
-    var currentDate = null
-
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i]
-      var dateMatch = line.match(/^#{2,4} (\d{4}-\d{2}-\d{2})/)
-      if (dateMatch) {
-        currentDate = dateMatch[1]
-        continue
-      }
-
-      if (
-        line.indexOf('- **Subject**:') === 0 &&
-        hasMojibakeMarker_(line) &&
-        currentDate
-      ) {
-        var damagedSubject = line.substring('- **Subject**: '.length).trim()
-
-        var fromLine = ''
-        for (
-          var j = Math.max(0, i - 3);
-          j <= Math.min(lines.length - 1, i + 3);
-          j++
-        ) {
-          if (lines[j].indexOf('- **From**:') === 0) {
-            fromLine = lines[j].substring('- **From**: '.length).trim()
-            break
-          }
-        }
-
-        var senderEmail = ''
-        var emailMatch = fromLine.match(/<([^>]+)>/)
-        if (emailMatch) {
-          senderEmail = emailMatch[1]
-        } else if (fromLine.indexOf('@') !== -1) {
-          senderEmail = fromLine
-        }
-
-        if (senderEmail) {
-          var realEmail = searchGmailForOriginalHeader_(
-            senderEmail,
-            currentDate,
-            damagedSubject
-          )
-          if (
-            realEmail &&
-            realEmail.subject &&
-            realEmail.subject !== damagedSubject &&
-            /[^\x00-\x7F]/.test(realEmail.subject)
-          ) {
-            // Only restore when the Gmail subject differs from the flattened
-            // value AND actually reintroduces non-ASCII content. This prevents a
-            // legitimate subject like "Ready?" from being overwritten by a
-            // similarly-named-but-different message ("Ready").
-            console.log(
-              '[backfillOriginalEmailHeaders] Restoring: "' +
-                damagedSubject +
-                '" -> "' +
-                realEmail.subject +
-                '"'
-            )
-            lines[i] = '- **Subject**: ' + realEmail.subject
-            modified = true
-            fileRestoredCount++
-            totalRestored++
-
-            for (
-              var k = Math.max(0, i - 3);
-              k <= Math.min(lines.length - 1, i + 3);
-              k++
-            ) {
-              if (
-                lines[k].indexOf('- **From**:') === 0 &&
-                hasMojibakeMarker_(lines[k]) &&
-                realEmail.from
-              ) {
-                lines[k] = '- **From**: ' + realEmail.from
-                break
-              }
-            }
-          }
-        }
-      }
-    }
-
-    if (modified) {
-      var newContent = lines.join('\n')
-      var commitMsg =
-        'chore(notes): restore ' +
-        fileRestoredCount +
-        ' original Gmail headers in ' +
-        filePath
-      var committed = commitGitHubFileDirect_(
-        filePath,
-        newContent,
-        fileData.sha,
-        commitMsg,
-        config.githubToken
+      return true
+    } catch (e) {
+      console.error(
+        '[createPermanentGmailFilter] Error creating filter:',
+        e.message
       )
-      if (!committed) {
-        console.error(
-          '[backfillOriginalEmailHeaders] Failed to commit updates to ' +
-            filePath +
-            '; not counting ' +
-            fileRestoredCount +
-            ' header(s) as restored.'
-        )
-        totalRestored -= fileRestoredCount
-        continue
-      }
-      console.log(
-        '[backfillOriginalEmailHeaders] Successfully updated ' +
-          filePath +
-          ' (' +
-          fileRestoredCount +
-          ' headers restored).'
-      )
-    } else {
-      console.log(
-        '[backfillOriginalEmailHeaders] No damaged headers to restore in ' +
-          filePath
-      )
+      return false
     }
   }
 
   console.log(
-    '[backfillOriginalEmailHeaders] Finished header restoration. Total headers restored: ' +
-      totalRestored
+    '[createPermanentGmailFilter] Advanced Gmail service not enabled. Skipped.'
   )
+  return false
 }
 
 /**
@@ -3759,11 +1005,2794 @@ function setGmailCategoryTab(thread, targetCategory, gmailService) {
   }
 }
 
+/**
+ * Removes any pre-existing conflicting Core Domain labels, Sub-Labels, legacy flat labels,
+ * and redundant 'Retention/Permanent' tags to enforce a strict, clean label budget.
+ */
+function cleanConflictingLabels(thread, targetDomain, targetSubLabel, config) {
+  if (!thread || typeof thread.getLabels !== 'function') return
+  try {
+    var existingLabels = thread.getLabels() || []
+    var canonicalDomains = (config && config.canonicalDomains) || []
+
+    var legacyFlatLabels = [
+      'Finance',
+      'Household',
+      'Family',
+      'Projects',
+      'Work',
+      'Community',
+      'Tech',
+      'Purchases',
+      'Banking',
+      'Bills',
+      'eBills',
+      'Insurance',
+      'Sent',
+      'Archives',
+    ]
+
+    var removeLabelSafe = function (lObj, msgPrefix) {
+      try {
+        thread.removeLabel(lObj)
+        console.log('[cleanConflictingLabels] ' + msgPrefix)
+      } catch (err) {
+        console.warn(
+          '[cleanConflictingLabels] Failed ' + msgPrefix + ': ' + err.message
+        )
+      }
+    }
+
+    for (var j = 0; j < existingLabels.length; j++) {
+      var lObj = existingLabels[j]
+      var lName =
+        typeof lObj.getName === 'function' ? lObj.getName() : String(lObj)
+
+      // 1. Strip redundant Retention/Permanent (Inverted Model: blank = permanent)
+      if (lName === 'Retention/Permanent') {
+        removeLabelSafe(lObj, 'Stripped Retention/Permanent: ' + lName)
+        continue
+      }
+
+      // 2. Protect valid short-lived retention expiration tags
+      if (lName.indexOf('Retention/') === 0) {
+        continue
+      }
+
+      // 3. Protect global status and system labels
+      if (lName === ((config && config.processedLabel) || 'Processed')) {
+        continue
+      }
+
+      // 4. Clean legacy flat labels
+      var isLegacy = false
+      for (var f = 0; f < legacyFlatLabels.length; f++) {
+        if (lName.toLowerCase() === legacyFlatLabels[f].toLowerCase()) {
+          removeLabelSafe(lObj, 'Stripped legacy flat label: ' + lName)
+          isLegacy = true
+          break
+        }
+      }
+      if (isLegacy) continue
+
+      // 5. Clean ALL Core Domain labels (threads only carry Sub-Labels, never raw domain codes)
+      var isDomainCode =
+        isRootDomainLabel(lName) || canonicalDomains.indexOf(lName) !== -1
+      if (isDomainCode) {
+        removeLabelSafe(lObj, 'Removed domain code label: ' + lName)
+        continue
+      }
+
+      // 6. Clean conflicting sub-labels if they don't match targetSubLabel
+      if (
+        lName.indexOf('/') !== -1 &&
+        lName !== targetSubLabel &&
+        lName.indexOf('Archives') === -1 &&
+        lName.indexOf('Retention/') === -1
+      ) {
+        removeLabelSafe(lObj, 'Removed conflicting sub-label: ' + lName)
+      }
+    }
+  } catch (e) {
+    console.warn('[cleanConflictingLabels] Error cleaning labels: ' + e.message)
+  }
+}
+
+/**
+ * Extracts the normalized email address from a From header string.
+ *
+ * @param {string} sender - Raw sender header
+ * @returns {string} Lowercase email address or empty string
+ */
+function extractSenderAddress_(sender) {
+  const raw = String(sender || '')
+    .trim()
+    .toLowerCase()
+  const angleMatch = /<([^<>@\s]+@[^<>@\s]+)>/.exec(raw)
+  if (angleMatch) return angleMatch[1]
+  const plainMatch = /([^\s<>,"']+@[a-z0-9.-]+\.[a-z]{2,})/i.exec(raw)
+  return plainMatch ? plainMatch[1].toLowerCase() : ''
+}
+
+/**
+ * Extracts the hostname portion of the sender's email address.
+ *
+ * @param {string} sender - Raw sender header
+ * @returns {string} Lowercase domain host or empty string
+ */
+function extractSenderHost_(sender) {
+  const addr = extractSenderAddress_(sender)
+  if (addr) {
+    const atIdx = addr.lastIndexOf('@')
+    return atIdx === -1 ? '' : addr.slice(atIdx + 1)
+  }
+  const raw = String(sender || '')
+    .trim()
+    .toLowerCase()
+  return /^[a-z0-9.-]+\.[a-z]{2,}$/.test(raw) ? raw : ''
+}
+
+/**
+ * Checks whether the sender's hostname exactly matches or is a subdomain of
+ * any domain in the provided list. Prevents substring false positives (e.g.
+ * 'x.com' matching 'netflix.com' or 'fedex.com').
+ *
+ * @param {string} sender - Raw sender header
+ * @param {string[]} domains - Candidate root/sub domains
+ * @returns {boolean} True if sender host matches any domain
+ */
+function matchesSenderDomain_(sender, domains) {
+  const host = extractSenderHost_(sender)
+  if (!host || !Array.isArray(domains)) return false
+  for (let i = 0; i < domains.length; i++) {
+    const target = String(domains[i] || '')
+      .trim()
+      .toLowerCase()
+    if (target && (host === target || host.endsWith('.' + target))) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * Checks whether the sender's email address exactly matches any address in the list.
+ *
+ * @param {string} sender - Raw sender header
+ * @param {string[]} addresses - Candidate email addresses
+ * @returns {boolean} True if sender address matches
+ */
+function matchesSenderAddress_(sender, addresses) {
+  const addr = extractSenderAddress_(sender)
+  if (!addr || !Array.isArray(addresses)) return false
+  for (let i = 0; i < addresses.length; i++) {
+    const target = String(addresses[i] || '')
+      .trim()
+      .toLowerCase()
+    if (target && addr === target) return true
+  }
+  return false
+}
+
+/**
+ * Checks whether the lowercased text contains any of the given substrings.
+ *
+ * @param {string} textLower - Lowercased hay-stack string
+ * @param {string[]} terms - Lowercase needle terms
+ * @returns {boolean} True if any term is found
+ */
+function containsAny_(textLower, terms) {
+  if (!textLower || !Array.isArray(terms)) return false
+  for (let i = 0; i < terms.length; i++) {
+    if (textLower.indexOf(terms[i]) !== -1) return true
+  }
+  return false
+}
+
+/**
+ * Builds a normalized deterministic classification result object.
+ *
+ * @param {string|null} canonicalDomain - Canonical domain or null
+ * @param {string|null} subLabel - Sub-label or null
+ * @param {string} category - Inbox category ('Primary', 'Updates', 'Promotions', 'Social')
+ * @param {string} action - Action ('keep', 'archive', 'trash')
+ * @param {number} confidence - Confidence score (0.0 to 1.0)
+ * @param {string} subject - Email subject
+ * @param {string} summary - Classification summary
+ * @param {string} reasoning - Rule reasoning identifier
+ * @returns {Object} Classification result
+ */
+function makeDeterministicResult_(
+  canonicalDomain,
+  subLabel,
+  category,
+  action,
+  confidence,
+  subject,
+  summary,
+  reasoning
+) {
+  return {
+    canonicalDomain: canonicalDomain,
+    canonical_label: canonicalDomain,
+    subLabel: subLabel,
+    category: category,
+    action: action,
+    confidence: confidence,
+    title: subject,
+    summary: summary,
+    reasoning: reasoning,
+  }
+}
+
+const SCHOOL_DOMAINS_ = [
+  'bcsk12.org',
+  'bcs-lions.org',
+  'briarwoodchristianschool.org',
+  'mcaabhm.org',
+  'jeffersonstate.edu',
+]
+
+const SCHOOL_BROADCAST_TERMS_ = [
+  'weekly',
+  'newsletter',
+  'bulletin',
+  'school update',
+  'campus update',
+  'district update',
+  'bcs update',
+  'lions update',
+  'digest',
+  'progress is ready',
+  'lunch',
+  'menu',
+  'portraits',
+  'news',
+  'noteworthy',
+  'announcement',
+  'athletics',
+  'e learning',
+  'e-learning',
+  'report card update',
+  'trunk or treat',
+  'spirit week',
+  'pto',
+  'pta',
+  'open house',
+  'picture day',
+  'fall festival',
+  'spring festival',
+  'school announcement',
+  'tryouts',
+  'tryout',
+  'try-outs',
+  'try-out',
+  'auditions',
+  'audition',
+  'team tryouts',
+  'absent',
+  'attendance',
+  'tardy',
+  'tuition',
+  'billing statement',
+  'assignment posted',
+  'new assignment',
+  'grade updated',
+  'score published',
+  'family portal',
+  'parent portal',
+]
+
+const CAREER_SUBJECT_TERMS_ = [
+  'employment agreement',
+  'employment contract',
+  'offer letter',
+  'job offer',
+  'employment offer',
+  'terms of employment',
+  'independent contractor agreement',
+  'restrictive covenant',
+  'confidentiality agreement',
+  'interview confirmation',
+  'interview invitation',
+  'invitation to interview',
+  'interview with ',
+  'schedule an interview',
+  'recruiter screen',
+  'phone screen',
+]
+
+const CAREER_SNIPPET_TERMS_ = [
+  'employment agreement',
+  'offer of employment',
+  'terms of employment',
+  'pleased to offer you the position',
+  'pleased to offer you',
+  'pleased to confirm our offer',
+  'congratulations on your offer',
+  'employment document',
+  'restrictive covenants agreement',
+]
+
+const DETERMINISTIC_RULES_ = [
+  {
+    match: function (ctx) {
+      return ctx.subLower.indexOf('your day ahead') !== -1
+    },
+    domain: '01_Household',
+    subLabel: 'Household/Property',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary: 'Automated daily agenda digest routed to Updates.',
+    reasoning: 'Daily Digest',
+  },
+  {
+    match: function (ctx) {
+      return (
+        (matchesSenderDomain_(ctx.sender, [
+          'amazon.com',
+          'hp.com',
+          'brother.com',
+          'canon.com',
+          'epson.com',
+        ]) ||
+          matchesSenderAddress_(ctx.sender, [
+            'auto-reorder@amazon.com',
+            'dash@amazon.com',
+          ]) ||
+          ctx.sLower.indexOf('instantink') !== -1) &&
+        containsAny_(ctx.subLower, [
+          'time to order the',
+          'time to reorder',
+          'smart reorder',
+          'auto-reorder',
+          'replenishment',
+          'low ink',
+          'ink alert',
+          'toner low',
+          'toner alert',
+          'toner for your',
+          'replacement filter',
+          'reorder your',
+        ])
+      )
+    },
+    domain: '01_Household',
+    subLabel: 'Household/Supplies',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Automated smart reorder or consumable replenishment alert routed to Updates.',
+    reasoning: 'Smart Reorder',
+  },
+  {
+    match: function (ctx) {
+      return (
+        matchesSenderDomain_(ctx.sender, [
+          'broodminder.com',
+          'mybroodminder.com',
+        ]) ||
+        containsAny_(ctx.sLower, ['broodminder', 'mybroodminder']) ||
+        containsAny_(ctx.subLower, [
+          'hive alert',
+          'events in your apiaries',
+          'events in your apiary',
+          'event in your apiaries',
+          'event in your apiary',
+          'apiary alert',
+          'apiary event',
+        ])
+      )
+    },
+    domain: '07_Community_NonProfit',
+    subLabel: 'Projects/Telemetry',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Automated hive and apiary telemetry alert routed to Projects/Telemetry.',
+    reasoning: 'BroodMinder Telemetry',
+  },
+  {
+    match: function (ctx) {
+      return (
+        matchesSenderDomain_(ctx.sender, ['qnap.com']) ||
+        containsAny_(ctx.sLower, ['qts notification', 'notificationcenter']) ||
+        containsAny_(ctx.subLower, [
+          '[qnap',
+          'qts notification',
+          'qvr pro',
+          'qulog',
+        ])
+      )
+    },
+    domain: '05_Tech_Infrastructure',
+    subLabel: 'Tech/Alerts',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'QNAP NAS system health, RAID, backup, or QVR surveillance telemetry alert routed to Tech/Alerts.',
+    reasoning: 'QNAP Telemetry',
+  },
+  {
+    match: function (ctx) {
+      return (
+        (matchesSenderDomain_(ctx.sender, ['ui.com', 'ubnt.com']) ||
+          ctx.subLower.indexOf('unifi') !== -1) &&
+        !containsAny_(ctx.subLower, [
+          'verification code',
+          'mfa',
+          'one-time',
+          'security code',
+        ])
+      )
+    },
+    domain: '05_Tech_Infrastructure',
+    subLabel: 'Tech/Alerts',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'UniFi Dream Machine or network infrastructure alert routed to Tech/Alerts.',
+    reasoning: 'UniFi Telemetry',
+  },
+  {
+    match: function (ctx) {
+      return (
+        matchesSenderDomain_(ctx.sender, [
+          'nabucasa.com',
+          'home-assistant.io',
+        ]) || ctx.subLower.indexOf('home assistant') !== -1
+      )
+    },
+    domain: '05_Tech_Infrastructure',
+    subLabel: 'Tech/Alerts',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Home Assistant or Nabu Casa cloud telemetry/subscription alert routed to Tech/Alerts.',
+    reasoning: 'Home Assistant Telemetry',
+  },
+  {
+    match: function (ctx) {
+      return (
+        matchesSenderDomain_(ctx.sender, [
+          'ignite-hope.org',
+          'helpingoneguy.com',
+          'charitywater.org',
+          'compassion.com',
+          'worldvision.org',
+        ]) ||
+        containsAny_(ctx.subLower, ['ironmen', 'iron men']) ||
+        (containsAny_(ctx.sLower, ['newsletter', 'update', 'impact']) &&
+          containsAny_(ctx.subLower, [
+            'impact update',
+            'ministry update',
+            'community update',
+          ]))
+      )
+    },
+    domain: '07_Community_NonProfit',
+    subLabel: 'NonProfit/General',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.98,
+    summary:
+      'Community non-profit organization newsletter, Bible study digest, or project impact update routed to Updates.',
+    reasoning: 'NonProfit Impact Newsletter',
+  },
+  {
+    match: function (ctx) {
+      return matchesSenderDomain_(ctx.sender, ['linear.app'])
+    },
+    domain: '05_Tech_Infrastructure',
+    subLabel: 'Tech/Alerts',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Linear task and project notification digest routed to Tech/Alerts.',
+    reasoning: 'Linear Alert',
+  },
+  {
+    match: function (ctx) {
+      return (
+        matchesSenderDomain_(ctx.sender, [
+          'notifications.cubic.dev',
+          'cubic.dev',
+        ]) || ctx.sLower.indexOf('cubic') !== -1
+      )
+    },
+    domain: '05_Tech_Infrastructure',
+    subLabel: 'Tech/Alerts',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary: 'Cubic AI automated code review notice routed to Tech/Alerts.',
+    reasoning: 'Cubic Code Review',
+  },
+  {
+    match: function (ctx) {
+      return matchesSenderAddress_(ctx.sender, ['notifications@github.com'])
+    },
+    domain: '05_Tech_Infrastructure',
+    subLabel: 'Tech/Alerts',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary: 'GitHub CI/CD workflow run or notification routed to Tech/Alerts.',
+    reasoning: 'GitHub Alert',
+  },
+  {
+    match: function (ctx) {
+      return (
+        matchesSenderDomain_(ctx.sender, [
+          'sonarcloud.io',
+          'sentry.io',
+          'vercel.com',
+        ]) ||
+        matchesSenderAddress_(ctx.sender, [
+          'noreply-apps-scripts-notifications@google.com',
+        ])
+      )
+    },
+    domain: '05_Tech_Infrastructure',
+    subLabel: 'Tech/Alerts',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'CI/CD code quality, error monitoring, or deployment alert routed to Tech/Alerts.',
+    reasoning: 'Developer Monitoring Alert',
+  },
+  {
+    match: function (ctx) {
+      return matchesSenderAddress_(ctx.sender, [
+        'googleaistudio-noreply@google.com',
+      ])
+    },
+    domain: '05_Tech_Infrastructure',
+    subLabel: 'Tech/Alerts',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Google AI Studio API quota, model deprecation, or project update routed to Tech/Alerts.',
+    reasoning: 'Google AI Studio Alert',
+  },
+  {
+    match: function (ctx) {
+      return matchesSenderDomain_(ctx.sender, [
+        'updates.codeant.ai',
+        'codeant.ai',
+      ])
+    },
+    domain: null,
+    subLabel: null,
+    category: 'Promotions',
+    action: 'archive',
+    confidence: 0.98,
+    summary:
+      'Developer tooling promotional or product feature announcement routed to Promotions.',
+    reasoning: 'DevTool Promo',
+  },
+  {
+    match: function (ctx) {
+      return matchesSenderAddress_(ctx.sender, [
+        'calendar-notification@google.com',
+      ])
+    },
+    domain: '01_Household',
+    subLabel: 'Household/Property',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary: 'Google Calendar event reminder notification routed to Updates.',
+    reasoning: 'Calendar Notification',
+  },
+  {
+    match: function (ctx) {
+      return (
+        containsAny_(ctx.subLower, [
+          'trial is ending',
+          'trial ending',
+          'trial will expire',
+          'trial expired',
+          'trial expiration',
+          'free trial is ending',
+          'free trial ends',
+        ]) ||
+        (ctx.subLower.indexOf('aws') !== -1 &&
+          containsAny_(ctx.subLower, [
+            'upgraded to a paid plan',
+            'free plan is ready',
+          ])) ||
+        ((matchesSenderDomain_(ctx.sender, [
+          'aws.com',
+          'amazonaws.com',
+          'digitalocean.com',
+          'cloudflare.com',
+          'openai.com',
+          'anthropic.com',
+          'supabase.com',
+          'neon.tech',
+        ]) ||
+          ctx.sLower.indexOf('azure') !== -1) &&
+          containsAny_(ctx.subLower, [
+            'upgraded to a paid plan',
+            'free plan is ready',
+            'free tier',
+            'startup credits',
+            'account plan',
+          ]))
+      )
+    },
+    domain: '05_Tech_Infrastructure',
+    subLabel: 'Tech/Alerts',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Cloud provider tier status, SaaS trial expiration, or account plan notification routed to Tech/Alerts.',
+    reasoning: 'SaaS / Cloud Plan Alert',
+  },
+  {
+    match: function (ctx) {
+      return (
+        matchesSenderDomain_(ctx.sender, [
+          'pypi.org',
+          'npmjs.com',
+          'docker.com',
+          'crates.io',
+        ]) || containsAny_(ctx.subLower, ['[pypi]', 'trusted publisher'])
+      )
+    },
+    domain: '05_Tech_Infrastructure',
+    subLabel: 'Tech/Alerts',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Package repository publishing, release, or trusted publisher notification routed to Tech/Alerts.',
+    reasoning: 'Package Registry Alert',
+  },
+  {
+    match: function (ctx) {
+      return containsAny_(ctx.subLower, [
+        'you shared some google account data with',
+        'google account data with',
+        'granted access to your google account',
+        'third-party access',
+        'app access granted',
+      ])
+    },
+    domain: '05_Tech_Infrastructure',
+    subLabel: 'Tech/Security',
+    category: 'Primary',
+    action: 'keep',
+    confidence: 1.0,
+    summary:
+      'Third-party application account data sharing or authorization notice preserved in Primary Inbox as security warning.',
+    reasoning: 'Third-Party Authorization Shield',
+  },
+  {
+    match: function (ctx) {
+      return containsAny_(ctx.subLower, [
+        'verification code',
+        'security code',
+        'one-time passcode',
+        'one-time password',
+        'your login code',
+        'new sign-in',
+        'signed in from a new',
+        'new device signed in',
+        'sign-in from new device',
+        'security alert for your',
+        'password changed',
+        'password reset confirmation',
+      ])
+    },
+    domain: '05_Tech_Infrastructure',
+    subLabel: 'Tech/Security',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Automated authentication verification code or device sign-in alert routed to Tech/Security.',
+    reasoning: 'Authentication/Sign-in Ping',
+  },
+  {
+    match: function (ctx) {
+      return (
+        matchesSenderDomain_(ctx.sender, [
+          'cvs.com',
+          'walgreens.com',
+          'questdiagnostics.com',
+          'labcorp.com',
+          'zocdoc.com',
+          'athenahealth.com',
+        ]) ||
+        containsAny_(ctx.sLower, ['mychart', 'cvshealth']) ||
+        containsAny_(ctx.subLower, [
+          'appointment reminder',
+          'upcoming appointment',
+          'appointment confirmation',
+          'appointment is confirmed',
+          'prescription is ready',
+          'prescription ready',
+          'refill reminder',
+          'refill confirmation',
+        ])
+      )
+    },
+    domain: '04_Family_Health',
+    subLabel: 'Family/Health-Medical',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Automated patient portal appointment reminder or pharmacy prescription status notice.',
+    reasoning: 'Healthcare/Pharmacy Alert',
+  },
+  {
+    match: function (ctx) {
+      return (
+        (matchesSenderDomain_(ctx.sender, [
+          'delta.com',
+          'southwest.com',
+          'aa.com',
+          'united.com',
+          'airbnb.com',
+          'vrbo.com',
+          'marriott.com',
+          'hilton.com',
+          'uber.com',
+          'lyft.com',
+          'waymo.com',
+        ]) ||
+          ctx.sLower.indexOf('waymo') !== -1) &&
+        containsAny_(ctx.subLower, [
+          'flight confirmation',
+          'flight status',
+          'boarding pass',
+          'check in for your flight',
+          'reservation confirmed',
+          'reservation confirmation',
+          'upcoming stay',
+          'trip with uber',
+          'ride with lyft',
+          'waymo ride',
+          'riding with waymo',
+          'receipt',
+        ])
+      )
+    },
+    domain: '01_Household',
+    subLabel: 'Household/Travel',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Travel itinerary reservation, flight check-in, or rideshare receipt.',
+    reasoning: 'Travel Confirmation',
+  },
+  {
+    match: function (ctx) {
+      return containsAny_(ctx.subLower, [
+        'how was your experience',
+        'how did we do',
+        'rate your recent',
+        'rate your experience',
+        'rate your stay',
+        'tell us what you think',
+        'take our survey',
+        'take our quick survey',
+        'quick survey',
+        'feedback requested',
+        'review your purchase',
+        'leave a review',
+        'your opinion matters',
+      ])
+    },
+    domain: null,
+    subLabel: null,
+    category: 'Promotions',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Automated post-transaction customer satisfaction feedback or survey request.',
+    reasoning: 'Customer Survey',
+  },
+  {
+    match: function (ctx) {
+      return matchesSenderDomain_(ctx.sender, ['ifttt.com', 'notify.mios.com'])
+    },
+    domain: '01_Household',
+    subLabel: 'Household/Property',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.98,
+    summary:
+      'Automated weather or IoT trigger notification routed to Household/Property.',
+    reasoning: 'IFTTT / Weather Alert',
+  },
+  {
+    match: function (ctx) {
+      const isParentSquare = matchesSenderDomain_(ctx.sender, [
+        'parentsquare.com',
+      ])
+      return (
+        ctx.isBrightArrow ||
+        ((ctx.isSchoolDomain ||
+          isParentSquare ||
+          matchesSenderAddress_(ctx.sender, ['admissions@ua.edu'])) &&
+          (ctx.isBroadcastSubject || isParentSquare))
+      )
+    },
+    domain: '04_Family_Health',
+    subLabel: 'Family/School-Student',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.98,
+    summary:
+      'Routine school bulletin, newsletter, BrightArrow broadcast, or ParentSquare digest routed to Updates.',
+    reasoning: 'School Broadcast',
+  },
+  {
+    match: function (ctx) {
+      return (
+        matchesSenderDomain_(ctx.sender, [
+          'ef.com',
+          'eftours.com',
+          'worldstrides.com',
+          'explorica.com',
+          'acis.com',
+        ]) ||
+        (containsAny_(ctx.subLower, [
+          'trip to ',
+          'school travel',
+          'educational tour',
+        ]) &&
+          containsAny_(ctx.subLower, [
+            'interest meeting',
+            'informational meeting',
+            'rsvp',
+            'enrollment discount',
+          ]))
+      )
+    },
+    domain: '04_Family_Health',
+    subLabel: 'Family/School-Student',
+    category: 'Promotions',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Educational travel program solicitation or informational trip meeting announcement routed to Promotions.',
+    reasoning: 'School Travel Solicitation',
+  },
+  {
+    match: function (ctx) {
+      return matchesSenderDomain_(ctx.sender, [
+        'hello.springhealth.com',
+        'springhealth.com',
+      ])
+    },
+    domain: '04_Family_Health',
+    subLabel: 'Family/Health-Medical',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.98,
+    summary:
+      'Routine employer healthcare benefit announcement or wellness newsletter.',
+    reasoning: 'Benefits Broadcast',
+  },
+  {
+    match: function (ctx) {
+      return (
+        matchesSenderDomain_(ctx.sender, ['ebay.com']) &&
+        containsAny_(ctx.subLower, [
+          'delivered',
+          'out for delivery',
+          'order confirmed',
+          'shipped',
+        ])
+      )
+    },
+    domain: '02_Finance_Legal',
+    subLabel: 'Finance/Purchases',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.98,
+    summary: 'Online order confirmation or package delivery tracking notice.',
+    reasoning: 'Order Tracking',
+  },
+  {
+    match: function (ctx) {
+      return (
+        matchesSenderDomain_(ctx.sender, [
+          'ups.com',
+          'fedex.com',
+          'usps.com',
+          'usps.gov',
+        ]) &&
+        containsAny_(ctx.subLower, [
+          'delivered',
+          'out for delivery',
+          'tracking',
+          'scheduled delivery',
+          'package',
+          'shipment',
+        ])
+      )
+    },
+    domain: '02_Finance_Legal',
+    subLabel: 'Finance/Purchases',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.98,
+    summary: 'Carrier parcel shipment or package delivery notification.',
+    reasoning: 'Carrier Tracking',
+  },
+  {
+    match: function (ctx) {
+      return (
+        matchesSenderDomain_(ctx.sender, ['amazon.com']) &&
+        containsAny_(ctx.subLower, [
+          'ordered:',
+          'shipped:',
+          'delivered:',
+          'refund issued',
+          'auto-reloaded',
+        ])
+      )
+    },
+    domain: '02_Finance_Legal',
+    subLabel: 'Finance/Purchases',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.98,
+    summary: 'Routine Amazon e-commerce order, shipping, or refund update.',
+    reasoning: 'Amazon Routine',
+  },
+  {
+    match: function (ctx) {
+      return (
+        (matchesSenderDomain_(ctx.sender, [
+          'chase.com',
+          'bankofamerica.com',
+          'spireenergy.com',
+          'alabamapower.com',
+          'bwwb.org',
+          'message.att-mail.com',
+          'att-mail.com',
+          'citi.com',
+          'americanexpress.com',
+          'apcocu.org',
+          'rocketmortgage.com',
+          'mycirclecard.target.com',
+        ]) ||
+          containsAny_(ctx.sLower, ['capitalone', 'spectrum', 'citicards'])) &&
+        containsAny_(ctx.subLower, [
+          'statement',
+          'autopay',
+          'payment processed',
+          'payment confirmation',
+          'payment scheduled',
+          'payment received',
+          'scheduled payment',
+          'bill is ready',
+          'bill is available',
+          'e-statement',
+          'estatement',
+        ])
+      )
+    },
+    domain: '02_Finance_Legal',
+    subLabel: 'Finance/Bills',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.98,
+    summary: 'Routine billing statement, receipt, or AutoPay confirmation.',
+    reasoning: 'Routine Billing',
+  },
+  {
+    match: function (ctx) {
+      return (
+        (matchesSenderDomain_(ctx.sender, [
+          'bcbsal.org',
+          'bcbs.com',
+          'uhc.com',
+          'aetna.com',
+          'cigna.com',
+          'humana.com',
+        ]) ||
+          containsAny_(ctx.sLower, [
+            'bluecrosspayments',
+            'unitedhealthcare',
+          ])) &&
+        containsAny_(ctx.subLower, [
+          'explanation of benefits',
+          'claim',
+          'claims',
+          'eob',
+        ])
+      )
+    },
+    domain: '02_Finance_Legal',
+    subLabel: 'Finance/Insurance',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Health insurance claim processing notice or explanation of benefits (EOB) notification routed to Finance/Insurance.',
+    reasoning: 'Insurance Claim / EOB Notice',
+  },
+  {
+    match: function (ctx) {
+      return (
+        (matchesSenderDomain_(ctx.sender, [
+          'bcbsal.org',
+          'bcbs.com',
+          'uhc.com',
+          'aetna.com',
+          'cigna.com',
+          'humana.com',
+        ]) ||
+          containsAny_(ctx.sLower, [
+            'bluecrosspayments',
+            'unitedhealthcare',
+          ])) &&
+        containsAny_(ctx.subLower, [
+          'payment',
+          'payments',
+          'premium',
+          'statement',
+          'bill',
+          'processed',
+          'receipt',
+        ])
+      )
+    },
+    domain: '02_Finance_Legal',
+    subLabel: 'Finance/Bills',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Health insurance premium payment or processing notification routed to Finance/Bills.',
+    reasoning: 'Insurance Payment Receipt',
+  },
+  {
+    match: function (ctx) {
+      return (
+        matchesSenderDomain_(ctx.sender, [
+          'geico.com',
+          'progressive.com',
+          'statefarm.com',
+        ]) &&
+        !containsAny_(ctx.subLower, [
+          'claim',
+          'adjuster',
+          'settlement',
+          'complaint',
+        ]) &&
+        containsAny_(ctx.subLower, [
+          'auto pay',
+          'autopay',
+          'payment',
+          'bill',
+          'statement',
+          'policy document',
+          'id card',
+        ])
+      )
+    },
+    domain: '02_Finance_Legal',
+    subLabel: 'Finance/Bills',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Routine auto insurance billing, AutoPay notice, or policy document routed to Finance/Bills.',
+    reasoning: 'Auto Insurance Routine Billing',
+  },
+  {
+    match: function (ctx) {
+      return (
+        (matchesSenderDomain_(ctx.sender, ['chase.com', 'discover.com']) ||
+          containsAny_(ctx.sLower, [
+            'creditwise',
+            'creditkarma',
+            'experian',
+            'equifax',
+            'transunion',
+            'myfico',
+            'capitalone',
+          ])) &&
+        containsAny_(ctx.subLower, [
+          'credit score',
+          'score went up',
+          'score went down',
+          'creditwise',
+          'score changed',
+          'credit alert',
+          'credit monitoring',
+          'credit report',
+          'fico score',
+          'new credit inquiry',
+        ])
+      )
+    },
+    domain: '02_Finance_Legal',
+    subLabel: 'Finance/Banking',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Automated credit score update or credit monitoring notification routed to Updates.',
+    reasoning: 'Credit Score Alert',
+  },
+  {
+    match: function (ctx) {
+      return (
+        containsAny_(ctx.subLower, [
+          'higher apy',
+          'apy has increased',
+          'apy increased',
+          'earns a higher apy',
+          'rate increase',
+          'rate decrease',
+          'rate update',
+          'rates are changing',
+          'yield update',
+          'interest rate increase',
+          'savings rate increase',
+          'annual percentage yield',
+        ]) ||
+        (ctx.subLower.indexOf('rate change') !== -1 &&
+          containsAny_(ctx.subLower, ['apy', 'cash', 'savings', 'interest']))
+      )
+    },
+    domain: '02_Finance_Legal',
+    subLabel: 'Finance/Banking',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Automated bank account APY or interest rate change notification routed to Finance/Banking.',
+    reasoning: 'Bank Rate Update',
+  },
+  {
+    match: function (ctx) {
+      return containsAny_(ctx.subLower, [
+        'terms of service',
+        'privacy policy',
+        'terms and conditions',
+        'terms of use',
+        'user agreement',
+        'privacy notice',
+        'policy update',
+        'updates to our terms',
+        'updates to our privacy',
+        'arbitration clause',
+        'arbitration terms',
+        'consumer privacy',
+      ])
+    },
+    domain: null,
+    subLabel: null,
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Commercial platform terms of service, privacy policy revision, or user agreement update routed to Updates.',
+    reasoning: 'Policy / Terms Update',
+  },
+  {
+    match: function (ctx) {
+      return (
+        matchesSenderDomain_(ctx.sender, ['paypal.com']) &&
+        containsAny_(ctx.subLower, [
+          'receipt',
+          'payment',
+          'transaction',
+          'you sent',
+          'you paid',
+          'you received',
+          'authorized',
+          'usd',
+        ])
+      )
+    },
+    domain: '02_Finance_Legal',
+    subLabel: 'Finance/Purchases',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.98,
+    summary: 'Electronic payment transaction receipt or transfer confirmation.',
+    reasoning: 'Payment Receipt',
+  },
+  {
+    match: function (ctx) {
+      return (
+        matchesSenderDomain_(ctx.sender, ['homedepot.com']) &&
+        containsAny_(ctx.subLower, [
+          'order',
+          'receipt',
+          'picked up',
+          'ready for pickup',
+        ])
+      )
+    },
+    domain: '02_Finance_Legal',
+    subLabel: 'Finance/Purchases',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.98,
+    summary: 'Home Depot store receipt or order pickup confirmation.',
+    reasoning: 'Retail Order / Receipt',
+  },
+  {
+    match: function (ctx) {
+      return (
+        matchesSenderDomain_(ctx.sender, [
+          'target.com',
+          'costco.com',
+          'bestbuy.com',
+          'walmart.com',
+        ]) &&
+        containsAny_(ctx.subLower, [
+          'order',
+          'receipt',
+          'ready for pickup',
+          'picked up',
+          'shipped',
+          'delivered',
+        ])
+      )
+    },
+    domain: '02_Finance_Legal',
+    subLabel: 'Finance/Purchases',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.98,
+    summary: 'Retail store order confirmation, receipt, or pickup notice.',
+    reasoning: 'Retail Order / Receipt',
+  },
+  {
+    match: function (ctx) {
+      return (
+        (matchesSenderDomain_(ctx.sender, [
+          'ereceiptshell.com',
+          'autozone.com',
+          'advanceautoparts.com',
+          'rockauto.com',
+        ]) ||
+          ctx.sLower.indexOf('shell e-receipt') !== -1) &&
+        containsAny_(ctx.subLower, ['receipt', 'purchase', 'order', 'fuel'])
+      )
+    },
+    domain: '03_Vehicles',
+    subLabel: 'Vehicles/Maintenance',
+    category: 'Updates',
+    action: 'archive',
+    confidence: 0.99,
+    summary:
+      'Automated vehicle fuel purchase receipt or parts order confirmation routed to Vehicles/Maintenance.',
+    reasoning: 'Vehicle Fuel/Maintenance Receipt',
+  },
+  {
+    match: function (ctx) {
+      return (
+        matchesSenderDomain_(ctx.sender, [
+          'nytimes.com',
+          'nextdoor.com',
+          'substack.com',
+          'redditmail.com',
+          'daily.therundown.ai',
+          'therundown.ai',
+          'mail.instagram.com',
+          'instagram.com',
+          'facebookmail.com',
+          'linkedin.com',
+          'pinterest.com',
+          'quora.com',
+          'youtube.com',
+          'twitter.com',
+          'x.com',
+        ]) ||
+        containsAny_(ctx.sLower, [
+          'dougforalabama',
+          'ossoff',
+          'the passion translation',
+          'aibreakfast',
+        ])
+      )
+    },
+    domain: null,
+    subLabel: null,
+    category: 'Social',
+    action: 'archive',
+    confidence: 0.98,
+    summary:
+      'Routine media newsletter, Substack digest, social media alert, or political appeal.',
+    reasoning: 'News/Newsletter/Social',
+  },
+]
+
+/**
+ * Fast-path deterministic rule-based classifier.
+ * Categorizes unambiguous broadcast feeds, machine telemetry, routine receipts,
+ * and social newsletters in 0ms without consuming Gemini API quota.
+ * Strictly respects safety shields (user-sent, family, and 1:1 teacher correspondence).
+ *
+ * @param {string} sender - Email sender header
+ * @param {string} subject - Email subject line
+ * @param {string} snippet - Email body snippet
+ * @param {Object} [thread] - GmailThread object (for sender/reply safety checks)
+ * @param {Object} [config] - Classifier configuration
+ * @returns {Object|null} Classification object or null if email requires Gemini LLM reasoning
+ */
+function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
+  const sLower = (sender || '').toLowerCase()
+  const subLower = (subject || '').toLowerCase()
+  const snipLower = (snippet || '').toLowerCase()
+  const userEmail = (
+    config && config.userAccountEmail ? config.userAccountEmail : ''
+  ).toLowerCase()
+
+  // 1. Safety Shields
+  if (thread && typeof thread.getMessages === 'function' && userEmail) {
+    try {
+      const msgs = thread.getMessages() || []
+      for (let m = 0; m < msgs.length; m++) {
+        const fromA = (
+          msgs[m] && typeof msgs[m].getFrom === 'function'
+            ? msgs[m].getFrom()
+            : (msgs[m] && msgs[m].from) || ''
+        ).toLowerCase()
+        if (fromA.indexOf(userEmail) !== -1) {
+          return makeDeterministicResult_(
+            null,
+            null,
+            'Primary',
+            'keep',
+            1.0,
+            subject,
+            'User-sent or replied thread preserved in Primary Inbox.',
+            'User-Sent Shield'
+          )
+        }
+      }
+    } catch {
+      // ignore thread check errors
+    }
+  }
+
+  // Family 1:1 Shield (configurable via config.familyEmails or customPromptRules)
+  const familyList =
+    config && config.familyEmails
+      ? config.familyEmails.toLowerCase().split(',')
+      : []
+  if (
+    familyList.length > 0 &&
+    familyList.some(function (f) {
+      return f.trim() && sLower.indexOf(f.trim()) !== -1
+    })
+  ) {
+    return makeDeterministicResult_(
+      '04_Family_Health',
+      'Family/Correspondence',
+      'Primary',
+      'keep',
+      1.0,
+      subject,
+      'Direct family correspondence preserved in Primary Inbox.',
+      'Family 1:1 Shield'
+    )
+  }
+
+  // Teacher / Academic Counselor 1:1 Shield (exclude mass broadcast subjects)
+  const isSchoolDomain = matchesSenderDomain_(sender, SCHOOL_DOMAINS_)
+  const isBrightArrow =
+    matchesSenderDomain_(sender, ['brightarrow.com']) ||
+    sLower.indexOf('brightarrow') !== -1
+  const isBroadcastSubject = containsAny_(subLower, SCHOOL_BROADCAST_TERMS_)
+
+  if (isSchoolDomain && !isBroadcastSubject && !isBrightArrow) {
+    return makeDeterministicResult_(
+      '04_Family_Health',
+      'Family/School-Student',
+      'Primary',
+      'keep',
+      1.0,
+      subject,
+      'Direct 1:1 teacher or school counselor correspondence preserved in Primary Inbox.',
+      'Teacher 1:1 Shield'
+    )
+  }
+
+  // 06_Work_Career: Employment Agreements, Offer Letters, Employment Contracts, Recruiter Screens & Interviews
+  if (
+    containsAny_(subLower, CAREER_SUBJECT_TERMS_) ||
+    containsAny_(snipLower, CAREER_SNIPPET_TERMS_)
+  ) {
+    return makeDeterministicResult_(
+      '06_Work_Career',
+      'Work/Career',
+      'Primary',
+      'keep',
+      0.99,
+      subject,
+      'Employment agreement, offer letter, or career interview communication preserved in Primary Inbox.',
+      'Career / Employment Contract Rule'
+    )
+  }
+
+  // 2. Deterministic Feeds & Broadcasts
+  const ruleContext = {
+    sender: sender,
+    sLower: sLower,
+    subLower: subLower,
+    snipLower: snipLower,
+    isSchoolDomain: isSchoolDomain,
+    isBrightArrow: isBrightArrow,
+    isBroadcastSubject: isBroadcastSubject,
+  }
+  for (let r = 0; r < DETERMINISTIC_RULES_.length; r++) {
+    const rule = DETERMINISTIC_RULES_[r]
+    if (rule.match(ruleContext)) {
+      return makeDeterministicResult_(
+        rule.domain,
+        rule.subLabel,
+        rule.category,
+        rule.action,
+        rule.confidence,
+        subject,
+        rule.summary,
+        rule.reasoning
+      )
+    }
+  }
+
+  // Retail & E-Commerce Marketing Blasts
+  const isScarsella = sLower.indexOf('scarsella') !== -1
+  const isScarsellaCurriculum =
+    isScarsella &&
+    /\b(curriculum|schedule|testing|belt|forms?)\b/i.test(
+      (subject || '') + ' ' + (snippet || '')
+    )
+
+  const isPromoSubject =
+    /\b(sale|\d+%\s*off|deal of the day|daily deals?|clearance|limited time offer|coupon|promo code|shop now|shop today|exclusive offer|special offer|flash sale|black friday|cyber monday|memorial day sale|labor day sale|presidents day sale|discount code|save \$\d+|save up to|free shipping|buy one get one|bogo|don't miss out|last chance to save|doorbusters?|rewards balance|earn bonus points|member exclusive)\b/i.test(
+      subject || ''
+    )
+  const isNonTransactional = !containsAny_(subLower, [
+    'order',
+    'receipt',
+    'invoice',
+    'statement',
+    'autopay',
+    'tracking',
+    'shipped',
+    'delivered',
+  ])
+
+  const isRetailVendor =
+    matchesSenderDomain_(sender, [
+      'target.com',
+      'costco.com',
+      'bestbuy.com',
+      'walmart.com',
+      'doordash.com',
+      'kohls.com',
+      'samsclub.com',
+      'em1.cloudflare.com',
+    ]) ||
+    containsAny_(sLower, [
+      'lowes',
+      'mannlake',
+      'urotuning',
+      'ray-ban',
+      'americanmeadows',
+      'foxhound',
+      'bhphotovideo',
+      'starbucks',
+      'birminghamhomebuyers',
+      'trailerparts',
+      'hillco',
+    ])
+
+  if (
+    (isRetailVendor && isNonTransactional) ||
+    (isScarsella && !isScarsellaCurriculum) ||
+    (isPromoSubject && isNonTransactional)
+  ) {
+    return makeDeterministicResult_(
+      null,
+      null,
+      'Promotions',
+      'archive',
+      0.98,
+      subject,
+      'Commercial vendor retail promo, discount, or marketing announcement.',
+      'Retail Promo'
+    )
+  }
+
+  return null
+}
+
+/**
+ * Processes a batch of Gmail threads: classify, label, and optionally create filters.
+ *
+ * @param {Object[]} threads - Array of GmailThread objects
+ * @param {Object} config - Classifier configuration
+ * @param {Object} services - Injected GAS services: { GmailApp, UrlFetchApp, Gmail }
+ * @returns {Object[]} Array of result objects describing outcome per thread
+ */
+function processThreadBatch(threads, config, services) {
+  const processedLabel = ensureGmailLabel(
+    config.processedLabel,
+    services.GmailApp
+  )
+  if (!processedLabel) {
+    console.error(
+      '[processThreadBatch] Processed label unavailable; aborting batch to avoid reprocessing.'
+    )
+    return []
+  }
+  const results = []
+
+  threads.forEach(function (thread) {
+    const threadId =
+      typeof thread.getId === 'function'
+        ? thread.getId()
+        : thread.id || 'unknown'
+    const messages =
+      typeof thread.getMessages === 'function' ? thread.getMessages() : []
+    if (!messages || messages.length === 0) {
+      results.push({ threadId: threadId, status: 'empty' })
+      return
+    }
+
+    const latestMsg = messages[0]
+    const sender =
+      typeof latestMsg.getFrom === 'function'
+        ? latestMsg.getFrom()
+        : latestMsg.from || ''
+    const subject =
+      typeof latestMsg.getSubject === 'function'
+        ? latestMsg.getSubject()
+        : latestMsg.subject || ''
+    let bodySnippet =
+      typeof latestMsg.getPlainBody === 'function'
+        ? latestMsg.getPlainBody().substring(0, 1200)
+        : latestMsg.snippet || ''
+    bodySnippet = enrichSnippetWithAttachments_(bodySnippet, latestMsg)
+
+    let classification = deterministicRuleClassify_(
+      sender,
+      subject,
+      bodySnippet,
+      thread,
+      config
+    )
+    if (!classification) {
+      classification = classifyEmailWithGemini(
+        config,
+        sender,
+        subject,
+        bodySnippet,
+        services.UrlFetchApp
+      )
+    }
+    if (!classification) {
+      console.log('[processThreadBatch] Could not classify thread:', threadId)
+      results.push({ threadId: threadId, status: 'unclassified' })
+      return
+    }
+
+    console.log(
+      '[processThreadBatch] Classified as:',
+      classification.canonical_label,
+      '(Confidence:',
+      classification.confidence,
+      ')'
+    )
+
+    var primaryTag = classification.subLabel
+    if (!primaryTag || isRootDomainLabel(primaryTag)) {
+      var dom = classification.canonicalDomain || classification.canonical_label
+      primaryTag = (dom && DEFAULT_DOMAIN_SUBLABEL_MAP[dom]) || dom || null
+    }
+
+    if (typeof cleanConflictingLabels === 'function') {
+      cleanConflictingLabels(
+        thread,
+        classification.canonicalDomain || classification.canonical_label,
+        primaryTag,
+        config
+      )
+    }
+
+    if (primaryTag) {
+      const categoryLabel = ensureGmailLabel(
+        primaryTag,
+        services.GmailApp,
+        services.Gmail
+      )
+      if (!categoryLabel) {
+        console.error(
+          '[processThreadBatch] Failed to create category label:',
+          primaryTag
+        )
+        results.push({
+          threadId: threadId,
+          status: 'label_creation_failed',
+        })
+        return
+      }
+      thread.addLabel(categoryLabel)
+    }
+    thread.addLabel(processedLabel)
+
+    // Category-Driven Action Invariant:
+    // Primary belongs in the Action Queue (Inbox).
+    // Non-Primary categories (Updates, Promotions, Social, Forums) are Informational Streams
+    // that deterministically bypass the Primary Inbox into their category tab and domain sub-label.
+    if (
+      classification.category &&
+      classification.category !== 'Primary' &&
+      classification.action !== 'trash'
+    ) {
+      classification.action = 'archive'
+    }
+
+    if (
+      classification.category &&
+      classification.action !== 'trash' &&
+      typeof setGmailCategoryTab === 'function'
+    ) {
+      setGmailCategoryTab(thread, classification.category, services.Gmail)
+    }
+
+    if (
+      classification.action === 'archive' &&
+      typeof thread.moveToArchive === 'function'
+    ) {
+      thread.moveToArchive()
+    }
+
+    let filterCreated = false
+    if (classification.confidence >= config.autoFilterConfidenceThreshold) {
+      filterCreated = createPermanentGmailFilter(
+        sender,
+        classification.canonical_label,
+        services.Gmail,
+        services.GmailApp
+      )
+    }
+
+    let savedAttachments = []
+    if (services && services.DriveApp) {
+      savedAttachments = persistCanonicalAttachmentsToDrive(
+        thread,
+        classification,
+        config,
+        services
+      )
+    }
+
+    results.push({
+      threadId: threadId,
+      status: 'classified',
+      label: classification.canonical_label,
+      confidence: classification.confidence,
+      filterCreated: filterCreated,
+      savedAttachments: savedAttachments,
+    })
+  })
+
+  return results
+}
+
+const RULE6_PATTERNS = [
+  [/\S \? \S/, "' ? ' between words (was an em dash or a · separator)"],
+  [/\?\?/, "'??' (was a multi-codepoint emoji)"],
+  [/[A-Za-z]\?[A-Za-z]/, "'?' inside a word (was a curly apostrophe)"],
+  [/\uFFFD/, 'U+FFFD replacement character'],
+]
+
+/**
+ * Resolves the target GitHub repository owner and name from injected services,
+ * environment variables, ScriptProperties, or config.
+ *
+ * @param {Object} [services] - Optional injected services
+ * @returns {{ repoOwner: string, repoName: string }}
+ */
+function resolveGitHubRepoTarget_(services) {
+  const props =
+    services?.PropertiesService ||
+    (typeof PropertiesService !== 'undefined' ? PropertiesService : null)
+  const scriptProps = props?.getScriptProperties?.()
+  const cfg =
+    typeof getAiClassifierConfig === 'function' ? getAiClassifierConfig() : {}
+  const envOwner =
+    typeof process !== 'undefined' && process.env
+      ? process.env.GITHUB_REPO_OWNER
+      : ''
+  const envName =
+    typeof process !== 'undefined' && process.env
+      ? process.env.GITHUB_REPO_NAME
+      : ''
+
+  const repoOwner =
+    services?.githubRepoOwner ||
+    envOwner ||
+    scriptProps?.getProperty?.('GITHUB_REPO_OWNER') ||
+    cfg.githubRepoOwner ||
+    ''
+  const repoName =
+    services?.githubRepoName ||
+    envName ||
+    scriptProps?.getProperty?.('GITHUB_REPO_NAME') ||
+    cfg.githubRepoName ||
+    ''
+
+  return { repoOwner, repoName }
+}
+
+/** Refuse to write an entry that already shows mojibake. */
+function assertClean_(text, what) {
+  if (!text) return
+  const scrubbed = String(text).replace(/https?:\/\/\S+/gi, '')
+  for (let i = 0; i < RULE6_PATTERNS.length; i++) {
+    if (RULE6_PATTERNS[i][0].test(scrubbed)) {
+      throw new Error(
+        'Rule 6: refusing to write ' + what + ' — ' + RULE6_PATTERNS[i][1]
+      )
+    }
+  }
+}
+
+/** Refuse to write when a non-ASCII char in the source text became '?' on the way out. */
+function assertNoAsciiReplacement_(source, rendered) {
+  if (!source || !rendered) return
+  if (rendered.indexOf('?') === -1) return
+  const lost = []
+  for (let i = 0; i < source.length; i++) {
+    const c = source.charAt(i)
+    if (
+      c.charCodeAt(0) > 127 &&
+      rendered.indexOf(c) === -1 &&
+      lost.indexOf(c) === -1
+    ) {
+      lost.push(c)
+    }
+  }
+  if (lost.length) {
+    throw new Error(
+      'Rule 6: refusing to write text that flattened non-ASCII to "?": ' +
+        lost.join(' ') +
+        ' — encode as UTF-8, not ASCII.'
+    )
+  }
+}
+
+function extractTopicTitleFromPath(filePath) {
+  if (!filePath || typeof filePath !== 'string') {
+    return 'Ingested Records'
+  }
+  const trimmed = filePath.trim()
+  if (!trimmed || trimmed === '/') {
+    return 'Ingested Records'
+  }
+  const parts = trimmed.split('/').filter(Boolean)
+  if (parts.length === 0) {
+    return 'Ingested Records'
+  }
+  const topic = parts.length > 1 ? parts[parts.length - 2] : parts[0]
+  // Strip any trailing file extension (e.g. ".md") before title-casing so a
+  // single-segment path like "digital-backups.md" becomes "Digital Backups".
+  const cleaned = topic.replace(/\.[^.]+$/, '').replace(/-/g, ' ')
+  if (!cleaned) return 'Ingested Records'
+  return cleaned.replace(/\b\w/g, function (l) {
+    return l.toUpperCase()
+  })
+}
+
+function insertEntryIntoLogSection(fullContent, newEntry) {
+  if (!fullContent && !newEntry) return ''
+  if (!fullContent) return String(newEntry)
+  if (!newEntry) return String(fullContent)
+
+  const detailsMarker = '</details>'
+  const detailsIndex = fullContent.indexOf(detailsMarker)
+
+  if (detailsIndex !== -1) {
+    return (
+      fullContent.substring(0, detailsIndex) +
+      newEntry +
+      '\n' +
+      fullContent.substring(detailsIndex)
+    )
+  }
+
+  const section3Marker = '## 3. Ingested Activity'
+  const section3Index = fullContent.indexOf(section3Marker)
+
+  if (section3Index !== -1) {
+    const lineBreakIndex = fullContent.indexOf('\n', section3Index)
+    return (
+      fullContent.substring(0, lineBreakIndex + 1) +
+      newEntry +
+      '\n' +
+      fullContent.substring(lineBreakIndex + 1)
+    )
+  }
+
+  return fullContent + '\n' + newEntry
+}
+
+function formatProgressiveDisclosureEntry(
+  dateStr,
+  title,
+  sender,
+  subject,
+  summaryText,
+  accountEmail,
+  attachments
+) {
+  let entry = '\n### ' + dateStr + ' — ' + title + '\n'
+  entry += '- **Account**: ' + accountEmail + '\n'
+  entry += '- **From**: ' + sender + '\n'
+  entry += '- **Subject**: ' + subject + '\n'
+  if (summaryText) {
+    entry += '- **Summary**:\n  > ' + summaryText.trim() + '\n'
+  }
+  if (attachments && attachments.length > 0) {
+    entry += '- **Attachments**:\n'
+    for (let a = 0; a < attachments.length; a++) {
+      const att = attachments[a]
+      if (att?.name) {
+        if (att.url) {
+          entry += '  - [' + att.name + '](' + att.url + ')\n'
+        } else {
+          entry += '  - ' + att.name + '\n'
+        }
+      }
+    }
+  }
+  return entry
+}
+
+function getNotePathForDomain(domain, _subLabel) {
+  const map = {
+    '01_Household': '01_Household/index.md',
+    '02_Finance_Legal': '02_Finance_Legal/index.md',
+    '03_Vehicles': '03_Vehicles/index.md',
+    '04_Family_Health': '04_Family_Health/index.md',
+    '05_Tech_Infrastructure': '05_Tech_Infrastructure/index.md',
+    '06_Work_Career': '06_Work_Career/index.md',
+    '07_Community_NonProfit': '07_Community_NonProfit/index.md',
+  }
+  if (typeof PropertiesService !== 'undefined') {
+    try {
+      const customMapJson =
+        PropertiesService.getScriptProperties().getProperty('CUSTOM_NOTE_PATHS')
+      if (customMapJson) {
+        const customMap = JSON.parse(customMapJson)
+        if (customMap && customMap[domain]) {
+          return customMap[domain]
+        }
+      }
+    } catch {
+      // Fall through to default map
+    }
+  }
+  return map[domain] || null
+}
+
+function appendMarkdownEntryToGitHubRepo(
+  filePath,
+  entryMd,
+  commitMessage,
+  services
+) {
+  const props =
+    services?.PropertiesService ||
+    (typeof PropertiesService !== 'undefined' ? PropertiesService : null)
+  const githubToken = props?.getScriptProperties()?.getProperty('GITHUB_PAT')
+  if (!githubToken) {
+    console.log(
+      '[gitHubSync] GITHUB_PAT ScriptProperty not set. Skipping GitHub commit.'
+    )
+    return false
+  }
+
+  const sleep = services?.sleepFn || _sleep
+  const maxRetries = 3
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const result = executeGitHubCommit(
+      filePath,
+      entryMd,
+      commitMessage,
+      githubToken,
+      services
+    )
+    if (result === true || result === 'IDEMPOTENT_SKIP') {
+      return true
+    }
+    console.log(
+      '[gitHubSync] Retry attempt',
+      attempt,
+      'of',
+      maxRetries,
+      'for',
+      filePath
+    )
+    sleep(1000 * attempt)
+  }
+
+  console.error(
+    '[gitHubSync] Failed to commit entry to GitHub after',
+    maxRetries,
+    'attempts:',
+    filePath
+  )
+  return false
+}
+
+function executeGitHubCommit(
+  filePath,
+  entryMd,
+  commitMessage,
+  githubToken,
+  services
+) {
+  if (!filePath || !entryMd) {
+    console.warn('[gitHubSync] Missing filePath or entryMd for GitHub commit.')
+    return false
+  }
+  const urlFetchApp =
+    services?.UrlFetchApp ||
+    (typeof UrlFetchApp !== 'undefined' ? UrlFetchApp : null)
+  const utils =
+    services?.Utilities || (typeof Utilities !== 'undefined' ? Utilities : null)
+
+  const { repoOwner, repoName } = resolveGitHubRepoTarget_(services)
+  if (!repoOwner || !repoName) {
+    console.warn(
+      '[gitHubSync] GITHUB_REPO_OWNER or GITHUB_REPO_NAME not configured. Skipping GitHub commit.'
+    )
+    return false
+  }
+
+  const encodedPath = String(filePath)
+    .split('/')
+    .filter(Boolean)
+    .map(function (segment) {
+      return encodeURIComponent(segment)
+    })
+    .join('/')
+
+  const url =
+    'https://api.github.com/repos/' +
+    encodeURIComponent(repoOwner) +
+    '/' +
+    encodeURIComponent(repoName) +
+    '/contents/' +
+    encodedPath
+  const headers = {
+    Authorization: 'Bearer ' + githubToken,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'Google-Apps-Script',
+  }
+
+  try {
+    const getOptions = {
+      method: 'get',
+      headers: headers,
+      muteHttpExceptions: true,
+    }
+    const res = urlFetchApp.fetch(url, getOptions)
+    const statusCode = res.getResponseCode()
+
+    let sha = null
+    let rawContent = ''
+
+    if (statusCode === 404) {
+      console.log(
+        '[gitHubSync] File not found on GitHub (HTTP 404). Initializing new note:',
+        filePath
+      )
+      const topicTitle = extractTopicTitleFromPath(filePath)
+      const dateStr = utils?.formatDate
+        ? utils.formatDate(new Date(), 'GMT', 'yyyy-MM-dd')
+        : new Date().toISOString().slice(0, 10)
+      rawContent =
+        '---\ntitle: ' +
+        topicTitle +
+        '\ncreated: ' +
+        dateStr +
+        '\nnotebook: household\nsection: general\n---\n\n' +
+        '# ' +
+        topicTitle +
+        '\n\n' +
+        '## 1. Executive Summary & Active Status\n- Ingested records log.\n\n' +
+        '## 2. Key References & Quick Links\n| Topic | Asset |\n| :--- | :--- |\n\n' +
+        '## 3. Ingested Activity Logs\n<details open><summary><b>Activity Logs</b></summary>\n</details>\n'
+    } else if (statusCode === 200) {
+      const fileData = JSON.parse(res.getContentText())
+      sha = fileData.sha
+      // GitHub Contents API wraps Base64 in newlines every 60 chars; strip them
+      // before decoding since some decoders reject embedded whitespace.
+      rawContent = utils
+        .newBlob(
+          utils.base64Decode((fileData.content || '').replace(/[\r\n]/g, ''))
+        )
+        .getDataAsString()
+
+      if (
+        rawContent.indexOf(entryMd.trim()) !== -1 ||
+        (commitMessage && rawContent.indexOf(commitMessage) !== -1)
+      ) {
+        console.log(
+          '[gitHubSync] Idempotent Skip: Entry already exists in',
+          filePath
+        )
+        return 'IDEMPOTENT_SKIP'
+      }
+    } else {
+      console.error(
+        '[gitHubSync] Error fetching file from GitHub (HTTP ' +
+          statusCode +
+          '):',
+        res.getContentText()
+      )
+      return false
+    }
+
+    const updatedContent = insertEntryIntoLogSection(rawContent, entryMd)
+
+    assertClean_(entryMd, 'new entry for ' + filePath)
+
+    const base64Updated = utils.base64Encode(
+      utils.newBlob(updatedContent).getBytes()
+    )
+
+    // Validate the ACTUAL Base64 round trip at the payload boundary: decode what
+    // we are about to PUT and confirm no non-ASCII character was flattened to
+    // '?'. Comparing updatedContent to entryMd/rawContent directly is inert
+    // because updatedContent contains both source strings unchanged.
+    const renderedContent = utils
+      .newBlob(utils.base64Decode(base64Updated))
+      .getDataAsString()
+    assertNoAsciiReplacement_(updatedContent, renderedContent)
+
+    const putPayload = {
+      message:
+        commitMessage ||
+        'feat(ingestion): append ingested document entry via Google Apps Script',
+      content: base64Updated,
+      branch: 'main',
+    }
+    if (sha) {
+      putPayload.sha = sha
+    }
+
+    const putOptions = {
+      method: 'put',
+      headers: headers,
+      contentType: 'application/json',
+      payload: JSON.stringify(putPayload),
+      muteHttpExceptions: true,
+    }
+
+    const putRes = urlFetchApp.fetch(url, putOptions)
+    const putStatus = putRes.getResponseCode()
+
+    if (putStatus === 200 || putStatus === 201) {
+      console.log(
+        '[gitHubSync] Successfully committed markdown entry to GitHub:',
+        filePath
+      )
+      return true
+    } else if (putStatus === 409) {
+      console.warn('[gitHubSync] SHA collision (HTTP 409) on file:', filePath)
+      return false
+    } else {
+      console.error(
+        '[gitHubSync] Error committing to GitHub (HTTP ' + putStatus + '):',
+        putRes.getContentText()
+      )
+      return false
+    }
+  } catch (e) {
+    console.error('[gitHubSync] Exception calling GitHub API:', e.message)
+    return false
+  }
+}
+
+function formatAuditDate_(d) {
+  const y = d.getFullYear()
+  const m = ('0' + (d.getMonth() + 1)).slice(-2)
+  const da = ('0' + d.getDate()).slice(-2)
+  return y + '/' + m + '/' + da
+}
+
+function getSearchDateRange_(dateStr, days) {
+  const parts = dateStr.split('-')
+  const year = Number.parseInt(parts[0], 10)
+  const month = Number.parseInt(parts[1], 10) - 1
+  const day = Number.parseInt(parts[2], 10)
+  const dt = new Date(year, month, day)
+
+  const beforeDt = new Date(dt.getTime() + (days + 1) * 86400000)
+  const afterDt = new Date(dt.getTime() - days * 86400000)
+
+  return {
+    after: formatAuditDate_(afterDt),
+    before: formatAuditDate_(beforeDt),
+  }
+}
+
+/**
+ * Checks whether a sender matches known non-canonical newsletter or social domains.
+ *
+ * @param {string} sender - Raw sender header
+ * @returns {boolean} True if sender is a non-canonical newsletter/social source
+ */
+function isNonCanonicalSender_(sender) {
+  return (
+    matchesSenderDomain_(sender, [
+      'substack.com',
+      'redditmail.com',
+      'nextdoor.com',
+      'facebookmail.com',
+      'instagram.com',
+      'twitter.com',
+      'x.com',
+      'pinterest.com',
+      'quora.com',
+    ]) || /\bnewsletters?@/i.test(String(sender || ''))
+  )
+}
+
+/**
+ * Checks whether a thread has been assigned a secondary Gmail category tab
+ * (Updates, Promotions, Social, Forums) via user labels, thread properties,
+ * or the Advanced Gmail API (`CATEGORY_*` system label IDs).
+ *
+ * @param {Object} thread - GmailThread or mock object
+ * @param {string[]} rawLabels - User label names on the thread
+ * @param {Object} [services] - Optional injected services ({ Gmail })
+ * @returns {boolean} True if thread is in a secondary category stream
+ */
+function hasSecondaryCategory_(thread, rawLabels, services) {
+  if (
+    Array.isArray(rawLabels) &&
+    rawLabels.some(function (l) {
+      return /promotions|updates|social|forums|archive/i.test(String(l || ''))
+    })
+  ) {
+    return true
+  }
+
+  const threadCat =
+    typeof thread?.getCategory === 'function'
+      ? thread.getCategory()
+      : thread?.category || ''
+  if (
+    threadCat &&
+    /promotions|updates|social|forums|CATEGORY_(UPDATES|PROMOTIONS|SOCIAL|FORUMS)/i.test(
+      String(threadCat)
+    )
+  ) {
+    return true
+  }
+
+  const gmailAdv =
+    services?.Gmail || (typeof Gmail !== 'undefined' ? Gmail : null)
+  const threadId =
+    typeof thread?.getId === 'function' ? thread.getId() : thread?.id || ''
+  if (threadId && typeof gmailAdv?.Users?.Threads?.get === 'function') {
+    try {
+      const threadMeta = gmailAdv.Users.Threads.get('me', threadId)
+      const labelIds = [].concat(
+        Array.isArray(threadMeta?.labelIds) ? threadMeta.labelIds : []
+      )
+      if (Array.isArray(threadMeta?.messages)) {
+        for (let m = 0; m < threadMeta.messages.length; m++) {
+          if (Array.isArray(threadMeta.messages[m]?.labelIds)) {
+            labelIds.push(...threadMeta.messages[m].labelIds)
+          }
+        }
+      }
+      if (
+        labelIds.some(function (id) {
+          return /^CATEGORY_(UPDATES|PROMOTIONS|SOCIAL|FORUMS)$/i.test(
+            String(id || '')
+          )
+        })
+      ) {
+        return true
+      }
+    } catch {
+      // Non-blocking fallback when Advanced Gmail API is unavailable
+    }
+  }
+
+  return false
+}
+
+/**
+ * Audits a collection of processed Gmail threads for classification anomalies.
+ *
+ * @param {Array} threads - Array of GmailThread-like objects
+ * @param {Object} config - Classifier config
+ * @param {Object} [services] - Optional injected services ({ Gmail })
+ * @returns {Object} report - { scannedCount, flaggedCount, findings, summary }
+ */
+function auditClassifications(threads, config, services) {
+  const canonicalDomains = config?.canonicalDomains || [
+    '01_Household',
+    '02_Finance_Legal',
+    '03_Vehicles',
+    '04_Family_Health',
+    '05_Tech_Infrastructure',
+    '06_Work_Career',
+    '07_Community_NonProfit',
+  ]
+
+  const PROMO_KEYWORDS =
+    /\b(sale|\d+% off|deal of the day|clearance|limited time offer|coupon|shop now)\b/i
+  const NEWSLETTER_KEYWORDS =
+    /\b(weekly digest|daily digest|newsletter|roundup|top stories)\b/i
+  const ORDER_KEYWORDS =
+    /\b(order confirmation|your order|receipt|payment received|invoice|shipped)\b/i
+  const TOS_KEYWORDS =
+    /\b(terms of service|privacy policy|terms and conditions|user agreement|arbitration terms)\b/i
+  const SURVEY_KEYWORDS =
+    /\b(survey|feedback|net promoter|nps|rate your experience|how did we do|review us)\b/i
+  const POLITICAL_KEYWORDS =
+    /\b(campaign|pac|fundraiser|election|candidate|contribute now|donate to our campaign)\b/i
+
+  const findings = []
+
+  if (!Array.isArray(threads)) {
+    return {
+      scannedCount: 0,
+      flaggedCount: 0,
+      findings: [],
+      summary: 'No threads to audit.',
+    }
+  }
+
+  threads.forEach((thread) => {
+    if (!thread) return
+    const id =
+      typeof thread.getId === 'function' ? thread.getId() : thread.id || ''
+    const subject =
+      typeof thread.getFirstMessageSubject === 'function'
+        ? thread.getFirstMessageSubject()
+        : thread.subject || ''
+
+    let sender = ''
+    if (typeof thread.getMessages === 'function') {
+      const msgs = thread.getMessages()
+      if (msgs && msgs.length > 0 && typeof msgs[0].getFrom === 'function') {
+        sender = msgs[0].getFrom()
+      }
+    } else if (thread.sender) {
+      sender = thread.sender
+    }
+
+    let rawLabels = []
+    if (typeof thread.getLabels === 'function') {
+      const labelObjs = thread.getLabels() || []
+      rawLabels = labelObjs.map((l) =>
+        typeof l.getName === 'function' ? l.getName() : String(l)
+      )
+    } else if (Array.isArray(thread.labels)) {
+      rawLabels = thread.labels
+    }
+
+    const assignedCanonical = []
+    rawLabels.forEach((l) => {
+      if (!l || typeof l !== 'string') return
+      const resolved = resolveCanonicalDomainFromLabels([l], canonicalDomains)
+      if (resolved && canonicalDomains.includes(resolved)) {
+        if (!assignedCanonical.includes(resolved)) {
+          assignedCanonical.push(resolved)
+        }
+        return
+      }
+      const match = l.match(/^(0[1-7]_[A-Za-z_]+)/)
+      if (match && canonicalDomains.includes(match[1])) {
+        if (!assignedCanonical.includes(match[1])) {
+          assignedCanonical.push(match[1])
+        }
+      }
+    })
+
+    let isInTrash = false
+    if (typeof thread.isInTrash === 'function') {
+      try {
+        isInTrash = thread.isInTrash()
+      } catch {}
+    } else if (thread.isInTrash === true || thread.isTrash === true) {
+      isInTrash = true
+    }
+
+    const flags = []
+    const fullText = (subject + ' ' + sender).toLowerCase()
+    const isReceiptOrOrder = ORDER_KEYWORDS.test(fullText)
+    const isNonCanonicalStream =
+      isInTrash ||
+      (!isReceiptOrOrder &&
+        (rawLabels.some((l) =>
+          /promotions|social|forums|marketing|promo|deal|newsletter/i.test(l)
+        ) ||
+          isNonCanonicalSender_(sender) ||
+          PROMO_KEYWORDS.test(subject) ||
+          NEWSLETTER_KEYWORDS.test(subject) ||
+          TOS_KEYWORDS.test(subject) ||
+          SURVEY_KEYWORDS.test(subject) ||
+          POLITICAL_KEYWORDS.test(subject)))
+
+    // 1. Missing Domain
+    if (assignedCanonical.length === 0 && !isNonCanonicalStream) {
+      flags.push(
+        'MISSING_CANONICAL_DOMAIN: Thread marked as processed has no canonical domain label.'
+      )
+    }
+
+    // 2. Conflicting Domains
+    if (assignedCanonical.length > 1) {
+      flags.push(
+        'CONFLICTING_DOMAINS: Multiple canonical domain labels assigned: ' +
+          assignedCanonical.join(', ')
+      )
+    }
+
+    // 3. Heuristic Checks
+    if (ORDER_KEYWORDS.test(fullText)) {
+      const hasFinanceOrHousehold = assignedCanonical.some(
+        (l) =>
+          l.includes('02_Finance_Legal') ||
+          l.includes('01_Household') ||
+          l.includes('03_Vehicles')
+      )
+      if (assignedCanonical.length > 0 && !hasFinanceOrHousehold) {
+        flags.push(
+          'SUSPICIOUS_ROUTING: Purchase/receipt keywords detected but domain is ' +
+            assignedCanonical.join(', ') +
+            ' instead of 02_Finance_Legal.'
+        )
+      }
+    }
+
+    if (PROMO_KEYWORDS.test(subject) && assignedCanonical.length > 0) {
+      const hasMarketingSublabel = rawLabels.some((l) =>
+        /promo|marketing|deal|coupon/i.test(l)
+      )
+      if (!hasMarketingSublabel) {
+        flags.push(
+          'PROMOTIONAL_CONTENT: Promotional sale keywords in subject tagged under core domain ' +
+            assignedCanonical.join(', ') +
+            ' without marketing sub-label.'
+        )
+      }
+    }
+
+    if (NEWSLETTER_KEYWORDS.test(subject) && assignedCanonical.length > 0) {
+      const hasNewsletterSublabel = rawLabels.some((l) =>
+        /newsletter|digest|news/i.test(l)
+      )
+      if (!hasNewsletterSublabel) {
+        flags.push(
+          'UNLABELED_NEWSLETTER: Generic newsletter/digest subject tagged under core domain ' +
+            assignedCanonical.join(', ') +
+            ' without newsletter sub-label.'
+        )
+      }
+    }
+
+    if (
+      TOS_KEYWORDS.test(subject) &&
+      assignedCanonical.some((l) => l.includes('02_Finance_Legal'))
+    ) {
+      flags.push(
+        'COMMERCIAL_TOS_IN_LEGAL: Routine commercial terms of service/privacy policy update tagged under 02_Finance_Legal instead of non-canonical broadcast.'
+      )
+    }
+
+    // 4. Drive Attachment Persistence & Tagging Check
+    const driveApp =
+      config?.driveApp || (typeof DriveApp !== 'undefined' ? DriveApp : null)
+    if (
+      driveApp &&
+      assignedCanonical.length === 1 &&
+      typeof thread.getMessages === 'function'
+    ) {
+      const domain = assignedCanonical[0]
+      const subLabel =
+        rawLabels.find((l) => {
+          if (!l || typeof l !== 'string' || !l.includes('/')) return false
+          if (/^0[1-7]_/.test(l)) {
+            return l.startsWith(domain + '/')
+          }
+          return true
+        }) || ''
+      const subfolderName = resolveTaxonomySubfolderName(domain, subLabel)
+      const msgs = thread.getMessages() || []
+      msgs.forEach((msg) => {
+        const atts = getMessageAttachments_(msg)
+        atts.forEach((att) => {
+          if (isEligibleAttachment(att)) {
+            const attName =
+              typeof att.getName === 'function'
+                ? att.getName()
+                : att.name || 'unnamed'
+            try {
+              const targetFolder = findDriveTaxonomyFolder_(
+                domain,
+                subfolderName,
+                driveApp,
+                config?.driveRootFolderName
+              )
+              const existingFiles = targetFolder
+                ? targetFolder.getFilesByName(attName)
+                : null
+              if (
+                !existingFiles ||
+                (typeof existingFiles.hasNext === 'function' &&
+                  !existingFiles.hasNext())
+              ) {
+                flags.push(
+                  'MISSING_DRIVE_ATTACHMENT: Eligible attachment "' +
+                    attName +
+                    '" is missing from Drive folder "' +
+                    domain +
+                    '/' +
+                    subfolderName +
+                    '".'
+                )
+              } else if (typeof existingFiles.next === 'function') {
+                const driveFile = existingFiles.next()
+                const desc =
+                  typeof driveFile.getDescription === 'function'
+                    ? driveFile.getDescription()
+                    : ''
+                if (!desc || !desc.includes('[AI_INDEXED]')) {
+                  flags.push(
+                    'UNTAGGED_DRIVE_ATTACHMENT: Attachment "' +
+                      attName +
+                      '" exists in Drive but lacks [AI_INDEXED] metadata description.'
+                  )
+                }
+              }
+            } catch {
+              // Non-blocking folder check
+            }
+          }
+        })
+      })
+    }
+
+    // 5. Archived from Inbox Without Action Check
+    const isArchived =
+      (typeof thread.isInInbox === 'function' &&
+        thread.isInInbox() === false) ||
+      thread.isInInbox === false
+    if (isArchived && assignedCanonical.length > 0) {
+      const isStarred =
+        (typeof thread.isStarred === 'function' &&
+          thread.isStarred() === true) ||
+        thread.isStarred === true
+      const userEmail = (config && config.userAccountEmail) || ''
+      const isSentOrReplied =
+        typeof isThreadSentOrRepliedByUser === 'function'
+          ? isThreadSentOrRepliedByUser(thread, userEmail)
+          : false
+      const hasSecondaryCategory = hasSecondaryCategory_(
+        thread,
+        rawLabels,
+        services
+      )
+
+      if (!isStarred && !isSentOrReplied && !hasSecondaryCategory) {
+        flags.push(
+          'ARCHIVED_WITHOUT_ACTION: Thread tagged under ' +
+            assignedCanonical.join(', ') +
+            ' was archived from Inbox without user reply or star; candidate for secondary stream routing (Updates).'
+        )
+      }
+    }
+
+    if (flags.length > 0) {
+      findings.push({
+        threadId: id,
+        subject: subject,
+        sender: sender,
+        canonicalLabels: assignedCanonical,
+        allLabels: rawLabels,
+        flags: flags,
+      })
+    }
+  })
+
+  return {
+    scannedCount: threads.length,
+    flaggedCount: findings.length,
+    findings: findings,
+    summary:
+      'Audited ' +
+      threads.length +
+      ' thread(s); ' +
+      findings.length +
+      ' anomaly flag(s) identified.',
+  }
+}
+
+/**
+ * Formats an audit report into a human-readable email digest or log message.
+ *
+ * @param {Object} report - Result from auditClassifications
+ * @returns {string} Formatted digest text
+ */
+function formatAuditDigest(report) {
+  if (!report || report.flaggedCount === 0) {
+    return (
+      'Gmail AI Classifier Audit: All ' +
+      (report ? report.scannedCount : 0) +
+      ' analyzed threads are compliant. No anomalies detected.'
+    )
+  }
+
+  let text = '===================================================\n'
+  text += '   GMAIL AI CLASSIFICATION AUDIT REPORT\n'
+  text += '===================================================\n'
+  text += report.summary + '\n\n'
+
+  report.findings.forEach((finding, idx) => {
+    if (!finding) return
+    const labelsStr =
+      Array.isArray(finding.canonicalLabels) &&
+      finding.canonicalLabels.length > 0
+        ? finding.canonicalLabels.join(', ')
+        : '(none)'
+    const flagsList = Array.isArray(finding.flags) ? finding.flags : []
+
+    text +=
+      idx + 1 + '. Subject: "' + (finding.subject || '(no subject)') + '"\n'
+    text += '   Sender:  ' + (finding.sender || '(unknown)') + '\n'
+    text += '   Labels:  ' + labelsStr + '\n'
+    text += '   Flags:\n'
+    flagsList.forEach((f) => {
+      text += '     • ' + f + '\n'
+    })
+    text += '\n'
+  })
+
+  text += '---------------------------------------------------\n'
+  text +=
+    'Tuning Action: Update ScriptProperty CUSTOM_PROMPT_RULES to add calibrated sender rules.\n'
+  text += '===================================================\n'
+  return text
+}
+
+/**
+ * Daily audit sweep that examines recently classified threads (default: last 2 days),
+ * identifies classification anomalies, logs them, and sends an email digest.
+ *
+ * @param {Object} [customConfig] - Optional override configuration
+ * @param {Object} [customServices] - Optional injected services (GmailApp)
+ * @returns {Object} report - { scannedCount, flaggedCount, findings, summary }
+ */
+function auditEmailClassifications(customConfig, customServices) {
+  console.log(
+    '[auditEmailClassifications] Starting daily classification audit sweep...'
+  )
+  const services = customServices || {}
+  const config = resolveEffectiveConfig_(customConfig)
+  const gmail =
+    services.GmailApp || (typeof GmailApp !== 'undefined' ? GmailApp : null)
+  const lookback = config.auditLookbackDays || 2
+  const query =
+    'label:' +
+    (config.processedLabel || 'Processed') +
+    ' newer_than:' +
+    lookback +
+    'd'
+
+  const rawThreads =
+    gmail && typeof gmail.search === 'function'
+      ? gmail.search(query, 0, 50)
+      : []
+  const threads = sortThreadsByLastMessageDate_(rawThreads)
+  console.log(
+    '[auditEmailClassifications] Found ' +
+      threads.length +
+      ' processed thread(s) in last ' +
+      lookback +
+      ' day(s).'
+  )
+
+  const report = auditClassifications(threads, config, services)
+  console.log('[auditEmailClassifications] ' + report.summary)
+
+  if (report.flaggedCount > 0) {
+    const digest = formatAuditDigest(report)
+    console.warn('[auditEmailClassifications] Anomalies detected:\n' + digest)
+
+    if (
+      config.auditDigestEmail &&
+      gmail &&
+      typeof gmail.sendEmail === 'function'
+    ) {
+      try {
+        gmail.sendEmail(
+          config.auditDigestEmail,
+          '[Gmail AI Classifier] Daily Classification Audit: ' +
+            report.flaggedCount +
+            ' anomalies detected',
+          digest
+        )
+        console.log(
+          '[auditEmailClassifications] Audit digest email sent to ' +
+            config.auditDigestEmail
+        )
+      } catch (e) {
+        console.error(
+          '[auditEmailClassifications] Failed to send audit digest email:',
+          e.message
+        )
+      }
+    }
+  } else {
+    console.log(
+      '[auditEmailClassifications] All analyzed threads are compliant with taxonomy rules.'
+    )
+  }
+
+  return report
+}
+
+/**
+ * Sets up a weekly cloud trigger to run purgeExpiredEmailsByRetentionPolicy every Sunday at 1:00 AM.
+ */
+function setupWeeklyRetentionTrigger(services) {
+  const scriptApp =
+    services?.ScriptApp || (typeof ScriptApp !== 'undefined' ? ScriptApp : null)
+  if (!scriptApp) return
+  const triggers = scriptApp.getProjectTriggers() || []
+  for (let i = 0; i < triggers.length; i++) {
+    if (
+      triggers[i].getHandlerFunction() === 'purgeExpiredEmailsByRetentionPolicy'
+    ) {
+      scriptApp.deleteTrigger(triggers[i])
+    }
+  }
+
+  scriptApp
+    .newTrigger('purgeExpiredEmailsByRetentionPolicy')
+    .timeBased()
+    .onWeekDay(scriptApp.WeekDay ? scriptApp.WeekDay.SUNDAY : 1)
+    .atHour(1)
+    .create()
+
+  console.log(
+    '[setupWeeklyRetentionTrigger] Established weekly Sunday 1:00 AM retention cleanup trigger.'
+  )
+}
+
+/**
+ * Sets up a daily cloud trigger to run auditEmailClassifications every morning at 6:00 AM.
+ */
+function setupDailyAuditTrigger(services) {
+  const scriptApp =
+    services?.ScriptApp || (typeof ScriptApp !== 'undefined' ? ScriptApp : null)
+  if (!scriptApp) return
+  const triggers = scriptApp.getProjectTriggers() || []
+  for (let i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'auditEmailClassifications') {
+      scriptApp.deleteTrigger(triggers[i])
+    }
+  }
+
+  scriptApp
+    .newTrigger('auditEmailClassifications')
+    .timeBased()
+    .everyDays(1)
+    .atHour(6)
+    .create()
+
+  console.log(
+    '[setupDailyAuditTrigger] Established daily 6:00 AM classification audit trigger.'
+  )
+}
+
+/**
+ * Sets up a recurring cloud trigger to run auditEmailClassifications every 4 hours.
+ */
+function setupFourHourAuditTrigger(services) {
+  const scriptApp =
+    services?.ScriptApp || (typeof ScriptApp !== 'undefined' ? ScriptApp : null)
+  if (!scriptApp) return
+  const triggers = scriptApp.getProjectTriggers() || []
+  for (let i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'auditEmailClassifications') {
+      scriptApp.deleteTrigger(triggers[i])
+    }
+  }
+
+  scriptApp
+    .newTrigger('auditEmailClassifications')
+    .timeBased()
+    .everyHours(4)
+    .create()
+
+  console.log(
+    '[setupFourHourAuditTrigger] Established 4-hour classification audit trigger.'
+  )
+}
+
+/**
+ * Clears all active time-driven triggers for this script.
+ */
+function stopAllTriggers(services) {
+  const scriptApp =
+    services?.ScriptApp || (typeof ScriptApp !== 'undefined' ? ScriptApp : null)
+  if (!scriptApp) return
+  const triggers = scriptApp.getProjectTriggers() || []
+  for (let i = 0; i < triggers.length; i++) {
+    scriptApp.deleteTrigger(triggers[i])
+  }
+  console.log('[stopAllTriggers] All script triggers removed.')
+}
+
+/**
+ * Creates an automatic Cloud Trigger that runs email classification every 5 minutes 24/7.
+ */
+function setupFiveMinuteTrigger(services) {
+  const scriptApp =
+    services?.ScriptApp || (typeof ScriptApp !== 'undefined' ? ScriptApp : null)
+  if (!scriptApp) return
+  stopAllTriggers(services)
+  scriptApp
+    .newTrigger('processEmailsWithAiClassifier')
+    .timeBased()
+    .everyMinutes(5)
+    .create()
+  setupWeeklyRetentionTrigger(services)
+  setupDailyAuditTrigger(services)
+  console.log(
+    '[setupFiveMinuteTrigger] Successfully established 5-minute recurring cloud trigger, weekly retention trigger, and daily audit trigger.'
+  )
+}
+
+/**
+ * Decommissioned static filter creation helper (retained as no-op for backward compatibility).
+ */
+function createGmailFilterRule(_senderEmail, _targetLabelName) {
+  console.log(
+    '[createGmailFilterRule] Permanent filter auto-creation is permanently decommissioned. No-op.'
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Attachment Persistence to Google Drive along Taxonomy Path
 // ---------------------------------------------------------------------------
 
-var CANONICAL_TAXONOMY_SUBFOLDERS = {
+const CANONICAL_TAXONOMY_SUBFOLDERS = {
   '01_Household': [
     'Primary_House',
     'Shop_Build',
@@ -3800,7 +3829,7 @@ var CANONICAL_TAXONOMY_SUBFOLDERS = {
   '07_Community_NonProfit': ['Community_BOD', 'Projects_Telemetry'],
 }
 
-var DEFAULT_DOMAIN_SUBLABEL_MAP = {
+const DEFAULT_DOMAIN_SUBLABEL_MAP = {
   '01_Household': 'Household/General',
   '02_Finance_Legal': 'Finance/Banking',
   '03_Vehicles': 'Vehicles/General',
@@ -3823,7 +3852,7 @@ function isRootDomainLabel(name) {
   )
 }
 
-var SUBLABEL_TO_FOLDER_MAP = {
+const SUBLABEL_TO_FOLDER_MAP = {
   // 01_Household
   'household/general': 'Primary_House',
   'household/property': 'Primary_House',
@@ -3923,45 +3952,23 @@ var SUBLABEL_TO_FOLDER_MAP = {
 }
 
 /**
- * Computes MD5 hex digest for a GAS blob.
- */
-function getFileHash(blob) {
-  if (!blob) return ''
-  var bytes = null
-  if (typeof blob.getBytes === 'function') {
-    bytes = blob.getBytes()
-  } else if (blob.bytes) {
-    bytes = blob.bytes
-  } else if (
-    Array.isArray(blob) ||
-    (typeof Buffer !== 'undefined' && Buffer.isBuffer(blob))
-  ) {
-    bytes = blob
-  }
-  if (!bytes) return ''
-  var utils = typeof Utilities !== 'undefined' ? Utilities : null
-  if (!utils || typeof utils.computeDigest !== 'function') return ''
-  var digest = utils.computeDigest(utils.DigestAlgorithm.MD5, bytes)
-  return digest
-    .map(function (byte) {
-      return ('0' + (byte & 0xff).toString(16)).slice(-2)
-    })
-    .join('')
-}
-
-/**
  * Validates whether an email classification represents a canonical domain.
  * Non-canonical emails (promotions, newsletters, spam) return null/empty for canonicalDomain.
+ *
+ * @param {Object} classification - Gemini classification object
+ * @param {Object} [config] - Classifier configuration
+ * @returns {boolean} True if canonical domain, false if non-canonical or null
  */
 function isCanonicalClassification(classification, config) {
   if (!classification || typeof classification !== 'object') return false
-  var domain = classification.canonicalDomain || classification.canonical_label
+  const domain =
+    classification.canonicalDomain || classification.canonical_label
   if (!domain || typeof domain !== 'string') return false
-  var trimmed = domain.trim()
+  const trimmed = domain.trim()
   if (trimmed === '' || trimmed === 'null' || trimmed === 'undefined')
     return false
 
-  var allowedDomains = (config && config.canonicalDomains) || [
+  const allowedDomains = config?.canonicalDomains || [
     '01_Household',
     '02_Finance_Legal',
     '03_Vehicles',
@@ -3971,55 +3978,55 @@ function isCanonicalClassification(classification, config) {
     '07_Community_NonProfit',
   ]
 
-  return allowedDomains.some(function (d) {
-    return trimmed === d || trimmed.indexOf(d + '/') === 0
-  })
+  return allowedDomains.some(
+    (d) => trimmed === d || trimmed.startsWith(d + '/')
+  )
 }
 
 /**
  * Resolves the 2nd-level Google Drive taxonomy subfolder name given a canonical domain and sub-label.
+ *
+ * @param {string} canonicalDomain - e.g. "02_Finance_Legal"
+ * @param {string} [subLabel] - e.g. "Finance/Banking" or "Bills"
+ * @returns {string} Subfolder name
  */
 function resolveTaxonomySubfolderName(canonicalDomain, subLabel) {
   if (subLabel && typeof subLabel === 'string') {
-    var normalized = subLabel.trim().toLowerCase()
+    const normalized = subLabel.trim().toLowerCase()
     if (SUBLABEL_TO_FOLDER_MAP[normalized]) {
       return SUBLABEL_TO_FOLDER_MAP[normalized]
     }
 
     if (
-      normalized.indexOf('family/kids') === 0 ||
-      normalized.indexOf('family/school') === 0
+      normalized.startsWith('family/kids') ||
+      normalized.startsWith('family/school')
     ) {
-      if (
-        normalized.indexOf('health') !== -1 ||
-        normalized.indexOf('medical') !== -1
-      ) {
+      if (normalized.includes('health') || normalized.includes('medical')) {
         return 'Medical_Records'
       }
       return 'Students'
     }
     if (
-      normalized.indexOf('family/sisters') === 0 ||
-      normalized.indexOf('family/parents') === 0
+      normalized.startsWith('family/sisters') ||
+      normalized.startsWith('family/parents')
     ) {
       return 'Family_General'
     }
 
-    var parts = subLabel.split('/')
-    var subPart = (parts.length > 1 ? parts[1] : parts[0]).trim()
-    var sanitized = subPart.replace(/[-\s]+/g, '_')
+    const parts = subLabel.split('/')
+    const subPart = (parts.length > 1 ? parts[1] : parts[0]).trim()
+    const sanitized = subPart.replace(/[-\s]+/g, '_')
 
-    var knownSubfolders = CANONICAL_TAXONOMY_SUBFOLDERS[canonicalDomain] || []
-    for (var k = 0; k < knownSubfolders.length; k++) {
-      if (knownSubfolders[k].toLowerCase() === sanitized.toLowerCase()) {
-        return knownSubfolders[k]
-      }
-    }
+    const knownSubfolders = CANONICAL_TAXONOMY_SUBFOLDERS[canonicalDomain] || []
+    const match = knownSubfolders.find(
+      (sf) => sf.toLowerCase() === sanitized.toLowerCase()
+    )
+    if (match) return match
 
     if (sanitized.length > 0) return sanitized
   }
 
-  var defaults = {
+  const defaults = {
     '01_Household': 'Primary_House',
     '02_Finance_Legal': 'Banking',
     '03_Vehicles': 'Maintenance',
@@ -4040,16 +4047,17 @@ function resolveTaxonomySubfolderName(canonicalDomain, subLabel) {
  */
 function evaluateAttachmentEligibility(att) {
   if (!att) return { eligible: false, reason: 'NULL_OR_EMPTY' }
-  var name = typeof att.getName === 'function' ? att.getName() : att.name || ''
+  const name =
+    typeof att.getName === 'function' ? att.getName() : att.name || ''
   if (!name || typeof name !== 'string' || name.trim().length === 0) {
     return { eligible: false, reason: 'MISSING_NAME' }
   }
 
-  var size = 0
+  let size = 0
   if (typeof att.getSize === 'function') {
     size = att.getSize()
   } else if (typeof att.getBytes === 'function') {
-    var bytes = att.getBytes()
+    const bytes = att.getBytes()
     size = bytes ? bytes.length : 0
   } else if (att.bytes) {
     size = att.bytes.length
@@ -4065,92 +4073,84 @@ function evaluateAttachmentEligibility(att) {
     return { eligible: false, reason: 'EXCEEDS_GAS_SIZE_LIMIT (>25MB)' }
   }
 
-  var cleanName = name.trim()
-  var dotIndex = cleanName.lastIndexOf('.')
-  var ext = dotIndex > 0 ? cleanName.slice(dotIndex + 1).toLowerCase() : ''
-  var stem = (
+  const cleanName = name.trim()
+  const dotIndex = cleanName.lastIndexOf('.')
+  const ext = dotIndex > 0 ? cleanName.slice(dotIndex + 1).toLowerCase() : ''
+  const stem = (
     dotIndex > 0 ? cleanName.slice(0, dotIndex) : cleanName
   ).toLowerCase()
-  var mimeType = (
+  const mimeType = (
     typeof att.getContentType === 'function'
       ? att.getContentType()
       : att.contentType || ''
   ).toLowerCase()
 
   // 2. Unconditionally blocked non-document extensions
-  var BLOCKED_EXTENSIONS = {
-    ics: true,
-    ical: true,
-    ifb: true,
-    vcf: true,
-    vcard: true,
-    html: true,
-    htm: true,
-    css: true,
-    js: true,
-    mjs: true,
-    json: true,
-    xml: true,
-    rss: true,
-    p7s: true,
-    p7m: true,
-    p7c: true,
-    asc: true,
-    sig: true,
-    dat: true,
-    eml: true,
-    msg: true,
-    exe: true,
-    dmg: true,
-    pkg: true,
-    bin: true,
-    apk: true,
-    app: true,
-    sh: true,
-    bat: true,
-    cmd: true,
-    msi: true,
-    ttf: true,
-    woff: true,
-    woff2: true,
-    eot: true,
-    otf: true,
-    ico: true,
-    gif: true,
-  }
+  const BLOCKED_EXTENSIONS = new Set([
+    'ics',
+    'ical',
+    'ifb',
+    'vcf',
+    'vcard',
+    'html',
+    'htm',
+    'css',
+    'js',
+    'mjs',
+    'json',
+    'xml',
+    'rss',
+    'p7s',
+    'p7m',
+    'p7c',
+    'asc',
+    'sig',
+    'dat',
+    'eml',
+    'msg',
+    'exe',
+    'dmg',
+    'pkg',
+    'bin',
+    'apk',
+    'app',
+    'sh',
+    'bat',
+    'cmd',
+    'msi',
+    'ttf',
+    'woff',
+    'woff2',
+    'eot',
+    'otf',
+    'ico',
+    'gif',
+  ])
 
-  if (BLOCKED_EXTENSIONS[ext]) {
+  if (BLOCKED_EXTENSIONS.has(ext)) {
     return { eligible: false, reason: 'BLOCKED_EXTENSION:.' + ext }
   }
 
-  // 3. Block winmail.dat or mail artifacts without extension
-  if (
-    cleanName.toLowerCase() === 'winmail.dat' ||
-    cleanName.toLowerCase() === 'smime.p7s'
-  ) {
-    return { eligible: false, reason: 'BLOCKED_MAIL_ARTIFACT' }
-  }
-
   // 4. Canonical document types (Whitelisted)
-  var DOCUMENT_EXTENSIONS = {
-    pdf: true,
-    docx: true,
-    doc: true,
-    rtf: true,
-    odt: true,
-    pages: true,
-    xlsx: true,
-    xls: true,
-    csv: true,
-    tsv: true,
-    ods: true,
-    numbers: true,
-    pptx: true,
-    ppt: true,
-    key: true,
-  }
+  const DOCUMENT_EXTENSIONS = new Set([
+    'pdf',
+    'docx',
+    'doc',
+    'rtf',
+    'odt',
+    'pages',
+    'xlsx',
+    'xls',
+    'csv',
+    'tsv',
+    'ods',
+    'numbers',
+    'pptx',
+    'ppt',
+    'key',
+  ])
 
-  if (DOCUMENT_EXTENSIONS[ext]) {
+  if (DOCUMENT_EXTENSIONS.has(ext)) {
     return { eligible: true, reason: 'CANONICAL_DOCUMENT' }
   }
 
@@ -4168,17 +4168,17 @@ function evaluateAttachmentEligibility(att) {
   }
 
   // 7. Image files (.jpg, .jpeg, .png, .heic, .tiff, .tif, .webp)
-  var IMAGE_EXTENSIONS = {
-    jpg: true,
-    jpeg: true,
-    png: true,
-    heic: true,
-    tiff: true,
-    tif: true,
-    webp: true,
-  }
+  const IMAGE_EXTENSIONS = new Set([
+    'jpg',
+    'jpeg',
+    'png',
+    'heic',
+    'tiff',
+    'tif',
+    'webp',
+  ])
 
-  var isImage = IMAGE_EXTENSIONS[ext] || mimeType.indexOf('image/') === 0
+  const isImage = IMAGE_EXTENSIONS.has(ext) || mimeType.startsWith('image/')
 
   if (isImage) {
     // 7a. Stricter size threshold: genuine receipt/document photos are virtually always >= 35KB
@@ -4187,7 +4187,7 @@ function evaluateAttachmentEligibility(att) {
     }
 
     // 7b. Tracking, logo, signature stem blacklist
-    var SIGNATURE_STEM_PATTERNS = [
+    const SIGNATURE_STEM_PATTERNS = [
       /logo/i,
       /sig(nature)?/i,
       /banner/i,
@@ -4225,7 +4225,7 @@ function evaluateAttachmentEligibility(att) {
       /^attachment$/i,
     ]
 
-    for (var i = 0; i < SIGNATURE_STEM_PATTERNS.length; i++) {
+    for (let i = 0; i < SIGNATURE_STEM_PATTERNS.length; i++) {
       if (SIGNATURE_STEM_PATTERNS[i].test(stem)) {
         return {
           eligible: false,
@@ -4268,7 +4268,7 @@ function getMessageAttachments_(msg) {
           includeAttachments: true,
         }) || []
       )
-    } catch (e) {
+    } catch {
       return msg.getAttachments() || []
     }
   }
@@ -4330,61 +4330,168 @@ function enrichSnippetWithAttachments_(snippet, message) {
         ']'
       )
     }
-  } catch (e) {
+  } catch {
     // ignore attachment inspection errors
   }
   return baseSnippet
 }
 
-function getOrCreateChildFolder_(parentFolder, folderName) {
-  var folders = parentFolder.getFoldersByName(folderName)
-  if (folders && typeof folders.hasNext === 'function' && folders.hasNext()) {
-    return folders.next()
-  }
-  return parentFolder.createFolder(folderName)
+function getExistingChildFolder_(parentFolder, folderName) {
+  const folders =
+    parentFolder && typeof parentFolder.getFoldersByName === 'function'
+      ? parentFolder.getFoldersByName(folderName)
+      : null
+  return folders && typeof folders.hasNext === 'function' && folders.hasNext()
+    ? folders.next()
+    : null
 }
 
-/**
- * Idempotently traverses or creates the 2-level Drive taxonomy path (Domain / Subfolder).
- */
-function ensureDriveTaxonomyFolder(canonicalDomain, subfolderName, driveApp) {
-  var drive = driveApp || (typeof DriveApp !== 'undefined' ? DriveApp : null)
+function getOrCreateChildFolder_(parentFolder, folderName, lockService) {
+  const existing = getExistingChildFolder_(parentFolder, folderName)
+  if (existing) {
+    return existing
+  }
+  const lockSvc =
+    lockService || (typeof LockService !== 'undefined' ? LockService : null)
+  const lock =
+    lockSvc && typeof lockSvc.getScriptLock === 'function'
+      ? lockSvc.getScriptLock()
+      : null
+  let acquired = false
+  if (lock && typeof lock.tryLock === 'function') {
+    try {
+      acquired = lock.tryLock(5000)
+    } catch {}
+  }
+  try {
+    return (
+      getExistingChildFolder_(parentFolder, folderName) ||
+      parentFolder.createFolder(folderName)
+    )
+  } finally {
+    if (acquired && lock && typeof lock.releaseLock === 'function') {
+      try {
+        lock.releaseLock()
+      } catch {
+        // Ignore lock release errors
+      }
+    }
+  }
+}
+
+function resolveDriveRootContainer_(
+  driveApp,
+  rootFolderName,
+  createIfMissing,
+  lockService
+) {
+  const drive =
+    driveApp !== undefined
+      ? driveApp
+      : typeof DriveApp !== 'undefined'
+        ? DriveApp
+        : null
   if (!drive) {
     throw new Error('DriveApp service unavailable')
   }
 
-  var root =
+  let root =
     typeof drive.getRootFolder === 'function' ? drive.getRootFolder() : drive
 
   if (!root || typeof root.getFoldersByName !== 'function') {
     throw new Error('DriveApp service unavailable or invalid root folder')
   }
 
-  var domainFolder = getOrCreateChildFolder_(root, canonicalDomain)
+  const trimmedRootName =
+    typeof rootFolderName === 'string' ? rootFolderName.trim() : ''
+  if (trimmedRootName) {
+    root = createIfMissing
+      ? getOrCreateChildFolder_(root, trimmedRootName, lockService)
+      : getExistingChildFolder_(root, trimmedRootName)
+  }
+  return root
+}
+
+/**
+ * Idempotently traverses or creates the 2-level Drive taxonomy path (Domain / Subfolder),
+ * optionally nested under a configured root folder (`DRIVE_ROOT_FOLDER_NAME`).
+ *
+ * @param {string} canonicalDomain - e.g. "02_Finance_Legal"
+ * @param {string} subfolderName - e.g. "Banking"
+ * @param {Object} driveApp - GAS DriveApp service (injected)
+ * @param {string|Object} [rootFolderNameOrOptions] - Optional Drive container folder name or options ({ rootFolderName, lockService })
+ * @returns {Object} Target folder object
+ */
+function ensureDriveTaxonomyFolder(
+  canonicalDomain,
+  subfolderName,
+  driveApp,
+  rootFolderNameOrOptions
+) {
+  const rootFolderName =
+    typeof rootFolderNameOrOptions === 'string'
+      ? rootFolderNameOrOptions
+      : rootFolderNameOrOptions?.rootFolderName || ''
+  const lockService =
+    typeof rootFolderNameOrOptions === 'object' && rootFolderNameOrOptions
+      ? rootFolderNameOrOptions.lockService ||
+        rootFolderNameOrOptions.LockService
+      : null
+  const root = resolveDriveRootContainer_(
+    driveApp,
+    rootFolderName,
+    true,
+    lockService
+  )
+  const domainFolder = getOrCreateChildFolder_(
+    root,
+    canonicalDomain,
+    lockService
+  )
   if (!subfolderName) return domainFolder
 
-  return getOrCreateChildFolder_(domainFolder, subfolderName)
+  return getOrCreateChildFolder_(domainFolder, subfolderName, lockService)
+}
+
+/**
+ * Non-mutating lookup of an existing 2-level Drive taxonomy folder.
+ * Returns null instead of creating folders when any segment does not exist.
+ *
+ * @param {string} canonicalDomain - e.g. "02_Finance_Legal"
+ * @param {string} subfolderName - e.g. "Banking"
+ * @param {Object} driveApp - GAS DriveApp service (injected)
+ * @param {string} [rootFolderName] - Optional Drive container folder name
+ * @returns {Object|null} Existing target folder or null
+ */
+function findDriveTaxonomyFolder_(
+  canonicalDomain,
+  subfolderName,
+  driveApp,
+  rootFolderName
+) {
+  const root = resolveDriveRootContainer_(driveApp, rootFolderName, false)
+  if (!root) return null
+  const domainFolder = getExistingChildFolder_(root, canonicalDomain)
+  if (!domainFolder) return null
+  if (!subfolderName) return domainFolder
+  return getExistingChildFolder_(domainFolder, subfolderName)
 }
 
 function extractBlobBytes_(blob) {
-  if (!blob) return []
   try {
-    if (typeof blob.getBytes === 'function') {
-      return blob.getBytes()
+    if (typeof blob?.getBytes === 'function') {
+      return blob.getBytes() || Buffer.from('')
     }
-    if (blob && blob.bytes) {
+    if (blob?.bytes) {
       return blob.bytes
     }
-    if (
-      Array.isArray(blob) ||
-      (typeof Buffer !== 'undefined' && Buffer.isBuffer(blob))
-    ) {
+    if (Buffer.isBuffer(blob)) {
       return blob
     }
-  } catch (e) {
-    return []
+  } catch {
+    return Buffer.from('')
   }
-  return []
+  return Buffer.from('')
 }
 
 function extractFileSize_(file) {
@@ -4399,23 +4506,84 @@ function extractFileSize_(file) {
 }
 
 /**
- * Checks if an exact duplicate file already exists in target folder (size match + MD5 hash).
+ * Collects candidate existing Drive files for duplicate comparison, including both
+ * exact filename matches (`getFilesByName(fileName)`) and conflict-renamed variants
+ * (`stem_<timestamp>.ext`) when `folder.getFiles()` is available.
+ *
+ * @param {Object} folder - Drive folder
+ * @param {string} fileName - Original attachment filename
+ * @returns {{ hasNext: function(): boolean, next: function(): Object }} Iterator over candidate files
  */
-function isDuplicateAttachment(existingFiles, newFileBlob, helperFns) {
+function collectCandidateDriveFiles_(folder, fileName) {
+  const items = []
+  const seenRefs = new Set()
+
+  function addFromIterator(iter, filterFn) {
+    if (!iter || typeof iter.hasNext !== 'function') return
+    while (iter.hasNext()) {
+      const f = iter.next()
+      if (!f || seenRefs.has(f)) continue
+      if (filterFn && !filterFn(f)) continue
+      seenRefs.add(f)
+      items.push(f)
+    }
+  }
+
+  if (folder && typeof folder.getFilesByName === 'function') {
+    addFromIterator(folder.getFilesByName(fileName))
+  }
+
+  if (folder && typeof folder.getFiles === 'function' && fileName) {
+    const clean = String(fileName).trim()
+    const dotIdx = clean.lastIndexOf('.')
+    const stem = (dotIdx > 0 ? clean.slice(0, dotIdx) : clean).toLowerCase()
+    const ext = dotIdx > 0 ? clean.slice(dotIdx).toLowerCase() : ''
+
+    addFromIterator(folder.getFiles(), function (f) {
+      const fName = (
+        typeof f.getName === 'function' ? f.getName() : f.name || ''
+      ).toLowerCase()
+      if (!fName) return false
+      if (fName === clean.toLowerCase()) return true
+      return fName.startsWith(stem + '_') && (ext === '' || fName.endsWith(ext))
+    })
+  }
+
+  let idx = 0
+  return {
+    hasNext: function () {
+      return idx < items.length
+    },
+    next: function () {
+      return items[idx++]
+    },
+  }
+}
+
+/**
+ * Finds and returns the first existing file in `existingFiles` that matches
+ * `newFileBlob` by size and MD5 content hash, or null if none match.
+ *
+ * @param {Object} existingFiles - Iterator of Drive files
+ * @param {Object} newFileBlob - Blob of incoming file
+ * @param {Object} [helperFns] - Optional helper functions ({ getFileHash })
+ * @returns {Object|null} Matching Drive file or null
+ */
+function findMatchingDuplicateFile_(existingFiles, newFileBlob, helperFns) {
   if (
     !existingFiles ||
     typeof existingFiles.hasNext !== 'function' ||
     !newFileBlob
   ) {
-    return false
+    return null
   }
-  var hashFn = (helperFns && helperFns.getFileHash) || getFileHash
-  var newFileBytes = extractBlobBytes_(newFileBlob)
-  var newFileLength = newFileBytes.length
-  var newFileHash = null
+  const hashFn = helperFns?.getFileHash || getFileHash
+  const newFileBytes = extractBlobBytes_(newFileBlob)
+  const newFileLength = newFileBytes.length
+  let newFileHash = null
 
   while (existingFiles.hasNext()) {
-    var existingFile = existingFiles.next()
+    const existingFile = existingFiles.next()
     if (extractFileSize_(existingFile) !== newFileLength) {
       continue
     }
@@ -4423,28 +4591,48 @@ function isDuplicateAttachment(existingFiles, newFileBlob, helperFns) {
     if (newFileHash === null) {
       try {
         newFileHash = hashFn(newFileBlob)
-      } catch (e) {
-        return false
+      } catch {
+        return null
       }
     }
 
-    var existingBlob =
+    const existingBlob =
       typeof existingFile.getBlob === 'function'
         ? existingFile.getBlob()
         : existingFile
     if (hashFn(existingBlob) === newFileHash) {
-      return true
+      return existingFile
     }
   }
-  return false
+  return null
+}
+
+/**
+ * Checks if an exact duplicate file already exists in target folder (size match + MD5 hash).
+ *
+ * @param {Object} existingFiles - Iterator from folder.getFilesByName
+ * @param {Object} newFileBlob - Blob of incoming file
+ * @param {Object} [helperFns] - Optional helper functions ({ getFileHash })
+ * @returns {boolean}
+ */
+function isDuplicateAttachment(existingFiles, newFileBlob, helperFns) {
+  return Boolean(
+    findMatchingDuplicateFile_(existingFiles, newFileBlob, helperFns)
+  )
 }
 
 /**
  * Resolves naming conflicts for attachments. If a file of the same name exists
  * with different content, appends a timestamp before the extension.
+ *
+ * @param {Object} folder - Target Drive folder
+ * @param {string} fileName - Attachment filename
+ * @param {Object} newFileBlob - Blob being saved
+ * @param {Object} [options] - Injected GAS services ({ Utilities, Session })
+ * @returns {string} Safe filename
  */
 function resolveAttachmentName(folder, fileName, newFileBlob, options) {
-  var existingFiles =
+  const existingFiles =
     folder && typeof folder.getFilesByName === 'function'
       ? folder.getFilesByName(fileName)
       : null
@@ -4456,20 +4644,12 @@ function resolveAttachmentName(folder, fileName, newFileBlob, options) {
     return fileName
   }
 
-  var utils =
-    options && options.Utilities
-      ? options.Utilities
-      : typeof Utilities !== 'undefined'
-        ? Utilities
-        : null
-  var session =
-    options && options.Session
-      ? options.Session
-      : typeof Session !== 'undefined'
-        ? Session
-        : null
+  const utils =
+    options?.Utilities || (typeof Utilities !== 'undefined' ? Utilities : null)
+  const session =
+    options?.Session || (typeof Session !== 'undefined' ? Session : null)
 
-  var timeTag =
+  let timeTag =
     utils &&
     session &&
     typeof utils.formatDate === 'function' &&
@@ -4477,12 +4657,12 @@ function resolveAttachmentName(folder, fileName, newFileBlob, options) {
       ? utils.formatDate(new Date(), session.getScriptTimeZone(), '_HHmmssSSS')
       : '_' + Date.now()
 
-  if (typeof timeTag === 'string' && timeTag.indexOf('_') !== 0) {
+  if (typeof timeTag === 'string' && !timeTag.startsWith('_')) {
     timeTag = '_' + timeTag.replace(/[^a-zA-Z0-9]/g, '')
   }
 
-  var renamed = fileName.replace(/(\.[\w-]+)$/i, timeTag + '$1')
-  var finalName = renamed === fileName ? fileName + timeTag : renamed
+  const renamed = fileName.replace(/(\.[\w-]+)$/i, timeTag + '$1')
+  const finalName = renamed === fileName ? fileName + timeTag : renamed
 
   if (newFileBlob && typeof newFileBlob.setName === 'function') {
     newFileBlob.setName(finalName)
@@ -4507,16 +4687,12 @@ function extractZipArchiveToSubfolder(
   metadata
 ) {
   if (!targetFolder) return []
-  var utils =
-    services && services.Utilities
-      ? services.Utilities
-      : typeof Utilities !== 'undefined'
-        ? Utilities
-        : null
+  const utils =
+    services?.Utilities || (typeof Utilities !== 'undefined' ? Utilities : null)
   if (!utils || typeof utils.unzip !== 'function') return []
 
-  var zipBlob = zipBlobOrFile
-  var fileName = ''
+  let zipBlob = zipBlobOrFile
+  let fileName = ''
   if (zipBlobOrFile && typeof zipBlobOrFile.getBlob === 'function') {
     zipBlob = zipBlobOrFile.getBlob()
     fileName =
@@ -4524,38 +4700,51 @@ function extractZipArchiveToSubfolder(
   } else if (zipBlobOrFile && typeof zipBlobOrFile.getName === 'function') {
     fileName = zipBlobOrFile.getName()
   }
-  if (!fileName && metadata && metadata.sourceFileName) {
+  if (!fileName && metadata?.sourceFileName) {
     fileName = metadata.sourceFileName
   }
   if (!fileName) fileName = 'archive.zip'
 
-  var zipStem = fileName.replace(/\.zip$/i, '')
+  const zipStem = fileName.replace(/\.zip$/i, '')
   if (!zipStem) return []
 
-  var extractedSummaries = []
+  const extractedSummaries = []
   try {
-    var unzippedBlobs = utils.unzip(zipBlob)
+    const unzippedBlobs = utils.unzip(zipBlob)
     if (!unzippedBlobs || unzippedBlobs.length === 0) return []
 
-    var archiveFolder = getOrCreateChildFolder_(targetFolder, zipStem)
-    var extractLimit = Math.min(unzippedBlobs.length, 25)
-    var helperFns = {
-      getFileHash: (services && services.getFileHash) || getFileHash,
+    const maxEntries = 25
+    if (unzippedBlobs.length > maxEntries) {
+      console.warn(
+        '[extractZipArchiveToSubfolder] Archive "' +
+          fileName +
+          '" contains ' +
+          unzippedBlobs.length +
+          ' entries; truncating extraction to first ' +
+          maxEntries +
+          ' entries.'
+      )
     }
 
-    for (var z = 0; z < extractLimit; z++) {
-      var entryBlob = unzippedBlobs[z]
+    const archiveFolder = getOrCreateChildFolder_(targetFolder, zipStem)
+    const extractLimit = Math.min(unzippedBlobs.length, maxEntries)
+    const helperFns = {
+      getFileHash: services?.getFileHash || getFileHash,
+    }
+
+    for (let z = 0; z < extractLimit; z++) {
+      const entryBlob = unzippedBlobs[z]
       if (!entryBlob) continue
-      var entryName =
+      const entryName =
         typeof entryBlob.getName === 'function'
           ? entryBlob.getName()
           : 'unnamed'
 
-      var slashIdx = Math.max(
+      const slashIdx = Math.max(
         entryName.lastIndexOf('/'),
         entryName.lastIndexOf('\\')
       )
-      var baseEntryName =
+      const baseEntryName =
         slashIdx !== -1 ? entryName.substring(slashIdx + 1) : entryName
 
       if (
@@ -4578,14 +4767,14 @@ function extractZipArchiveToSubfolder(
         continue
       }
 
-      var existingExtracted =
-        typeof archiveFolder.getFilesByName === 'function'
-          ? archiveFolder.getFilesByName(baseEntryName)
-          : null
+      const existingCandidates = collectCandidateDriveFiles_(
+        archiveFolder,
+        baseEntryName
+      )
 
       if (
         typeof isDuplicateAttachment === 'function' &&
-        isDuplicateAttachment(existingExtracted, entryBlob, helperFns)
+        isDuplicateAttachment(existingCandidates, entryBlob, helperFns)
       ) {
         console.log(
           '[extractZipArchiveToSubfolder] Skipped exact duplicate inside zip: ' +
@@ -4594,28 +4783,35 @@ function extractZipArchiveToSubfolder(
         continue
       }
 
-      var extractedFile = archiveFolder.createFile(entryBlob)
-      var extractedId =
+      const safeEntryName = resolveAttachmentName(
+        archiveFolder,
+        baseEntryName,
+        entryBlob,
+        services
+      )
+      if (entryBlob && typeof entryBlob.setName === 'function') {
+        entryBlob.setName(safeEntryName)
+      }
+      const extractedFile = archiveFolder.createFile(entryBlob)
+      const extractedId =
         typeof extractedFile.getId === 'function' ? extractedFile.getId() : ''
-      var extractedUrl =
+      const extractedUrl =
         typeof extractedFile.getUrl === 'function'
           ? extractedFile.getUrl()
           : 'https://drive.google.com/file/d/' + extractedId
 
       if (typeof extractedFile.setDescription === 'function') {
         try {
-          var desc =
-            (metadata && metadata.tagBlock ? metadata.tagBlock + '\n' : '') +
+          const desc =
+            (metadata?.tagBlock ? metadata.tagBlock + '\n' : '') +
             'Extracted-From: ' +
             fileName
           extractedFile.setDescription(desc)
-        } catch (eDesc) {}
+        } catch {}
       }
 
-      var cDomain =
-        metadata && metadata.canonicalDomain ? metadata.canonicalDomain : ''
-      var sFolder =
-        metadata && metadata.subfolderName ? metadata.subfolderName : ''
+      const cDomain = metadata?.canonicalDomain || ''
+      const sFolder = metadata?.subfolderName || ''
 
       extractedSummaries.push({
         name:
@@ -4623,7 +4819,7 @@ function extractZipArchiveToSubfolder(
           '/' +
           (typeof extractedFile.getName === 'function'
             ? extractedFile.getName()
-            : baseEntryName),
+            : safeEntryName),
         url: extractedUrl,
         id: extractedId,
         domain: cDomain,
@@ -4636,7 +4832,7 @@ function extractZipArchiveToSubfolder(
           (sFolder ? sFolder + '/' : '') +
           zipStem +
           '/' +
-          baseEntryName
+          safeEntryName
       )
     }
   } catch (unzipErr) {
@@ -4660,9 +4856,8 @@ function extractZipArchiveToSubfolder(
  * @returns {Array} Array of extracted file summaries
  */
 function unzipExistingDriveArchive(fileIdOrName, targetFolder, services) {
-  var drive =
-    (services && services.DriveApp) ||
-    (typeof DriveApp !== 'undefined' ? DriveApp : null)
+  const drive =
+    services?.DriveApp || (typeof DriveApp !== 'undefined' ? DriveApp : null)
   if (!drive && !targetFolder) {
     console.error(
       '[unzipExistingDriveArchive] DriveApp or targetFolder required.'
@@ -4670,11 +4865,11 @@ function unzipExistingDriveArchive(fileIdOrName, targetFolder, services) {
     return []
   }
 
-  var zipFile = null
-  var parentFolder = targetFolder
+  let zipFile = null
+  let parentFolder = targetFolder
 
   if (targetFolder && typeof targetFolder.getFilesByName === 'function') {
-    var files = targetFolder.getFilesByName(fileIdOrName)
+    const files = targetFolder.getFilesByName(fileIdOrName)
     if (files && files.hasNext && files.hasNext()) {
       zipFile = files.next()
     }
@@ -4684,12 +4879,12 @@ function unzipExistingDriveArchive(fileIdOrName, targetFolder, services) {
     try {
       zipFile = drive.getFileById(fileIdOrName)
       if (!parentFolder && typeof zipFile.getParents === 'function') {
-        var parents = zipFile.getParents()
+        const parents = zipFile.getParents()
         if (parents && parents.hasNext && parents.hasNext()) {
           parentFolder = parents.next()
         }
       }
-    } catch (e) {}
+    } catch {}
   }
 
   if (!zipFile || !parentFolder) {
@@ -4707,6 +4902,12 @@ function unzipExistingDriveArchive(fileIdOrName, targetFolder, services) {
 /**
  * Persists attached documents from a canonical email thread to Google Drive along
  * the label's taxonomy path, skipping duplicates and strictly ignoring non-canonical emails.
+ *
+ * @param {Object} thread - Gmail thread object
+ * @param {Object} classification - AI classification result
+ * @param {Object} config - Classifier config
+ * @param {Object} services - Injected GAS services ({ DriveApp, Utilities, Session })
+ * @returns {Object[]} Array of saved file metadata ({ name, url, id, domain, subfolder })
  */
 function persistCanonicalAttachmentsToDrive(
   thread,
@@ -4722,12 +4923,10 @@ function persistCanonicalAttachmentsToDrive(
     return []
   }
 
-  var driveApp =
-    services && services.DriveApp
-      ? services.DriveApp
-      : typeof DriveApp !== 'undefined'
-        ? DriveApp
-        : null
+  let driveApp = services?.DriveApp
+  if (typeof driveApp === 'undefined') {
+    driveApp = typeof DriveApp !== 'undefined' ? DriveApp : null
+  }
   if (!driveApp) {
     console.error(
       '[persistCanonicalAttachmentsToDrive] DriveApp is unavailable; cannot persist attachments.'
@@ -4735,17 +4934,18 @@ function persistCanonicalAttachmentsToDrive(
     return []
   }
 
-  var canonicalDomain =
+  const canonicalDomain =
     classification.canonicalDomain || classification.canonical_label
-  var subLabel = classification.subLabel || ''
-  var subfolderName = resolveTaxonomySubfolderName(canonicalDomain, subLabel)
+  const subLabel = classification.subLabel || ''
+  const subfolderName = resolveTaxonomySubfolderName(canonicalDomain, subLabel)
 
-  var targetFolder
+  let targetFolder
   try {
     targetFolder = ensureDriveTaxonomyFolder(
       canonicalDomain,
       subfolderName,
-      driveApp
+      driveApp,
+      config?.driveRootFolderName
     )
   } catch (err) {
     console.error(
@@ -4759,21 +4959,21 @@ function persistCanonicalAttachmentsToDrive(
     return []
   }
 
-  var messages =
+  const messages =
     typeof thread.getMessages === 'function' ? thread.getMessages() : []
-  var savedFiles = []
-  var helperFns = {
-    getFileHash: (services && services.getFileHash) || getFileHash,
+  const savedFiles = []
+  const helperFns = {
+    getFileHash: services?.getFileHash || getFileHash,
   }
-  var subject =
-    (classification && classification.title) ||
+  const subject =
+    classification?.title ||
     (typeof thread.getFirstMessageSubject === 'function'
       ? thread.getFirstMessageSubject()
       : thread.subject || '')
 
-  messages.forEach(function (msg) {
-    var attachments = getMessageAttachments_(msg)
-    attachments.forEach(function (att) {
+  messages.forEach((msg) => {
+    const attachments = getMessageAttachments_(msg)
+    attachments.forEach((att) => {
       if (!isEligibleAttachment(att)) {
         console.log(
           '[persistCanonicalAttachmentsToDrive] Skipped ineligible attachment (signature/tracking pixel or empty): ' +
@@ -4782,14 +4982,11 @@ function persistCanonicalAttachmentsToDrive(
         return
       }
 
-      var fileName =
+      const fileName =
         typeof att.getName === 'function' ? att.getName() : att.name
-      var newFileBlob =
+      const newFileBlob =
         typeof att.copyBlob === 'function' ? att.copyBlob() : att
-      var existingFiles =
-        typeof targetFolder.getFilesByName === 'function'
-          ? targetFolder.getFilesByName(fileName)
-          : null
+      const existingFiles = collectCandidateDriveFiles_(targetFolder, fileName)
 
       if (isDuplicateAttachment(existingFiles, newFileBlob, helperFns)) {
         console.log(
@@ -4799,7 +4996,7 @@ function persistCanonicalAttachmentsToDrive(
         return
       }
 
-      var finalName = resolveAttachmentName(
+      const finalName = resolveAttachmentName(
         targetFolder,
         fileName,
         newFileBlob,
@@ -4815,40 +5012,40 @@ function persistCanonicalAttachmentsToDrive(
       )
 
       try {
-        var file = targetFolder.createFile(newFileBlob)
-        var fileId = typeof file.getId === 'function' ? file.getId() : ''
-        var fileUrl =
+        const file = targetFolder.createFile(newFileBlob)
+        const fileId = typeof file.getId === 'function' ? file.getId() : ''
+        const fileUrl =
           typeof file.getUrl === 'function'
             ? file.getUrl()
             : 'https://drive.google.com/file/d/' + fileId
 
+        const tagDate =
+          services?.Utilities &&
+          typeof services.Utilities.formatDate === 'function'
+            ? services.Utilities.formatDate(
+                new Date(),
+                'GMT',
+                "yyyy-MM-dd'T'HH:mm:ss'Z'"
+              )
+            : new Date().toISOString()
+        const tagBlock =
+          '[AI_INDEXED] ' +
+          tagDate +
+          '\nDomain: ' +
+          canonicalDomain +
+          '\nSub-label: ' +
+          (classification.subLabel || '') +
+          '\nSource: Gmail Attachment' +
+          '\nThread-ID: ' +
+          (typeof thread.getId === 'function'
+            ? thread.getId()
+            : thread.id || '') +
+          (subject ? '\nEmail-Subject: ' + subject : '')
+
         if (typeof file.setDescription === 'function') {
           try {
-            var tagDate =
-              services &&
-              services.Utilities &&
-              typeof services.Utilities.formatDate === 'function'
-                ? services.Utilities.formatDate(
-                    new Date(),
-                    'GMT',
-                    "yyyy-MM-dd'T'HH:mm:ss'Z'"
-                  )
-                : new Date().toISOString()
-            var tagBlock =
-              '[AI_INDEXED] ' +
-              tagDate +
-              '\nDomain: ' +
-              canonicalDomain +
-              '\nSub-label: ' +
-              (classification.subLabel || '') +
-              '\nSource: Gmail Attachment' +
-              '\nThread-ID: ' +
-              (typeof thread.getId === 'function'
-                ? thread.getId()
-                : thread.id || '') +
-              (subject ? '\nEmail-Subject: ' + subject : '')
             file.setDescription(tagBlock)
-          } catch (descErr) {
+          } catch {
             // Non-blocking metadata description tagging
           }
         }
@@ -4863,43 +5060,19 @@ function persistCanonicalAttachmentsToDrive(
 
         // Auto-Unzip Enhancement for .zip archives
         if (fileName.toLowerCase().endsWith('.zip')) {
-          var tagDateMeta =
-            services &&
-            services.Utilities &&
-            typeof services.Utilities.formatDate === 'function'
-              ? services.Utilities.formatDate(
-                  new Date(),
-                  'GMT',
-                  "yyyy-MM-dd'T'HH:mm:ss'Z'"
-                )
-              : new Date().toISOString()
-          var metaTag =
-            '[AI_INDEXED] ' +
-            tagDateMeta +
-            '\nDomain: ' +
-            canonicalDomain +
-            '\nSub-label: ' +
-            (classification.subLabel || '') +
-            '\nSource: Gmail Attachment' +
-            '\nThread-ID: ' +
-            (typeof thread.getId === 'function'
-              ? thread.getId()
-              : thread.id || '') +
-            (subject ? '\nEmail-Subject: ' + subject : '')
-
-          var extractedFiles = extractZipArchiveToSubfolder(
+          const extractedFiles = extractZipArchiveToSubfolder(
             targetFolder,
             newFileBlob,
             services,
             {
               canonicalDomain: canonicalDomain,
               subfolderName: subfolderName,
-              tagBlock: metaTag,
+              tagBlock: tagBlock,
               sourceFileName: fileName,
             }
           )
           if (extractedFiles && extractedFiles.length > 0) {
-            for (var ef = 0; ef < extractedFiles.length; ef++) {
+            for (let ef = 0; ef < extractedFiles.length; ef++) {
               savedFiles.push(extractedFiles[ef])
             }
           }
@@ -4928,7 +5101,7 @@ function persistCanonicalAttachmentsToDrive(
  */
 function resolveCanonicalDomainFromLabels(rawLabels, canonicalDomains) {
   if (!rawLabels || !Array.isArray(rawLabels)) return null
-  var allowed = canonicalDomains || [
+  const allowed = canonicalDomains || [
     '01_Household',
     '02_Finance_Legal',
     '03_Vehicles',
@@ -4938,22 +5111,22 @@ function resolveCanonicalDomainFromLabels(rawLabels, canonicalDomains) {
     '07_Community_NonProfit',
   ]
   // 1. Direct match on root domain codes (e.g. "01_Household")
-  for (var i = 0; i < rawLabels.length; i++) {
-    var l = rawLabels[i]
-    if (allowed.indexOf(l) !== -1 || /^0[1-7]_/.test(l)) {
+  for (let i = 0; i < rawLabels.length; i++) {
+    const l = rawLabels[i]
+    if (allowed.includes(l) || /^0[1-7]_/.test(l)) {
       return l
     }
   }
   // 2. Canonical sub-label prefix mapping
-  for (var j = 0; j < rawLabels.length; j++) {
-    var lName = (rawLabels[j] || '').toLowerCase()
-    if (lName.indexOf('household/') === 0) return '01_Household'
-    if (lName.indexOf('finance/') === 0) return '02_Finance_Legal'
-    if (lName.indexOf('vehicles/') === 0) return '03_Vehicles'
-    if (lName.indexOf('family/') === 0) return '04_Family_Health'
-    if (lName.indexOf('tech/') === 0) return '05_Tech_Infrastructure'
-    if (lName.indexOf('work/') === 0) return '06_Work_Career'
-    if (lName.indexOf('community/') === 0 || lName.indexOf('projects/') === 0)
+  for (let j = 0; j < rawLabels.length; j++) {
+    const lName = (rawLabels[j] || '').toLowerCase()
+    if (lName.startsWith('household/')) return '01_Household'
+    if (lName.startsWith('finance/')) return '02_Finance_Legal'
+    if (lName.startsWith('vehicles/')) return '03_Vehicles'
+    if (lName.startsWith('family/')) return '04_Family_Health'
+    if (lName.startsWith('tech/')) return '05_Tech_Infrastructure'
+    if (lName.startsWith('work/')) return '06_Work_Career'
+    if (lName.startsWith('community/') || lName.startsWith('projects/'))
       return '07_Community_NonProfit'
   }
   return null
@@ -4973,14 +5146,12 @@ function resolveCanonicalDomainFromLabels(rawLabels, canonicalDomains) {
  * @returns {Object} report
  */
 function auditAndBackfillCanonicalAttachments(options, config, services) {
-  var opts = options || {}
-  var isDryRun = opts.dryRun !== false
-  var maxThreads = opts.maxThreads || 50
+  const opts = options || {}
+  const isDryRun = opts.dryRun !== false
+  const maxThreads = opts.maxThreads || 50
 
-  var cfg =
-    config ||
-    (typeof getAiClassifierConfig === 'function' ? getAiClassifierConfig() : {})
-  var canonicalDomains = cfg.canonicalDomains || [
+  const cfg = resolveEffectiveConfig_(config)
+  const canonicalDomains = cfg.canonicalDomains || [
     '01_Household',
     '02_Finance_Legal',
     '03_Vehicles',
@@ -4990,15 +5161,12 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
     '07_Community_NonProfit',
   ]
 
-  var gmail =
-    (services && services.GmailApp) ||
-    (typeof GmailApp !== 'undefined' ? GmailApp : null)
-  var drive =
-    (services && services.DriveApp) ||
-    (typeof DriveApp !== 'undefined' ? DriveApp : null)
-  var utils =
-    (services && services.Utilities) ||
-    (typeof Utilities !== 'undefined' ? Utilities : null)
+  const gmail =
+    services?.GmailApp || (typeof GmailApp !== 'undefined' ? GmailApp : null)
+  const drive =
+    services?.DriveApp || (typeof DriveApp !== 'undefined' ? DriveApp : null)
+  const utils =
+    services?.Utilities || (typeof Utilities !== 'undefined' ? Utilities : null)
 
   if (!gmail || !drive) {
     throw new Error(
@@ -5006,16 +5174,18 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
     )
   }
 
-  var defaultCanonicalQuery =
+  const defaultCanonicalQuery =
     'has:attachment (label:01_Household OR label:02_Finance_Legal OR label:03_Vehicles OR label:04_Family_Health OR label:05_Tech_Infrastructure OR label:06_Work_Career OR label:07_Community_NonProfit OR label:Household OR label:Finance OR label:Vehicles OR label:Family OR label:Tech OR label:Work OR label:Community)'
-  var searchQuery = opts.query || defaultCanonicalQuery
+  const searchQuery = opts.query || defaultCanonicalQuery
 
-  var threads = []
+  let threads = []
   if (typeof gmail.search === 'function') {
-    threads = gmail.search(searchQuery, 0, maxThreads) || []
+    threads = sortThreadsByLastMessageDate_(
+      gmail.search(searchQuery, 0, maxThreads) || []
+    )
   }
 
-  var report = {
+  const report = {
     scannedThreads: threads.length,
     threadsWithEligibleAttachments: 0,
     totalAttachmentsInspected: 0,
@@ -5032,11 +5202,11 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
     items: [],
   }
 
-  var startTime = Date.now()
-  var timeBudgetMs = opts.timeBudgetMs || 270000
-  var folderCache = {}
+  const startTime = Date.now()
+  const timeBudgetMs = opts.timeBudgetMs || 270000
+  const folderCache = {}
 
-  for (var i = 0; i < threads.length; i++) {
+  for (let i = 0; i < threads.length; i++) {
     if (Date.now() - startTime > timeBudgetMs) {
       console.warn(
         '[auditAndBackfillCanonicalAttachments] Execution reached time budget safety ceiling; concluding batch cleanly.'
@@ -5045,50 +5215,83 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
       break
     }
 
-    var thread = threads[i]
+    const thread = threads[i]
     if (!thread) continue
-    var threadId =
+    const threadId =
       typeof thread.getId === 'function' ? thread.getId() : thread.id || ''
-    var subject =
+    const subject =
       typeof thread.getFirstMessageSubject === 'function'
         ? thread.getFirstMessageSubject()
         : thread.subject || ''
 
-    var rawLabels = []
+    let rawLabels = []
     if (typeof thread.getLabels === 'function') {
-      var labelObjs = thread.getLabels() || []
-      rawLabels = labelObjs.map(function (l) {
-        return typeof l.getName === 'function' ? l.getName() : String(l)
-      })
+      const labelObjs = thread.getLabels() || []
+      rawLabels = labelObjs.map((l) =>
+        typeof l.getName === 'function' ? l.getName() : String(l)
+      )
     } else if (Array.isArray(thread.labels)) {
       rawLabels = thread.labels
     }
 
-    var canonicalDomain = resolveCanonicalDomainFromLabels(
+    const canonicalDomain = resolveCanonicalDomainFromLabels(
       rawLabels,
       canonicalDomains
     )
     if (!canonicalDomain) continue
 
-    var subLabel =
-      rawLabels.find(function (l) {
-        return l.indexOf('/') !== -1 && l.indexOf(canonicalDomain) === -1
-      }) ||
-      rawLabels.find(function (l) {
-        return l.indexOf('/') !== -1
-      }) ||
+    const subLabel =
+      rawLabels.find((l) => l.includes('/') && !l.includes(canonicalDomain)) ||
+      rawLabels.find((l) => l.includes('/')) ||
       ''
-    var subfolderName = resolveTaxonomySubfolderName(canonicalDomain, subLabel)
+    const subfolderName = resolveTaxonomySubfolderName(
+      canonicalDomain,
+      subLabel
+    )
 
-    var folderKey = canonicalDomain + '::' + subfolderName
-    var targetFolder = folderCache[folderKey]
-    if (!targetFolder) {
+    const msgs =
+      typeof thread.getMessages === 'function'
+        ? thread.getMessages()
+        : thread.messages || []
+    const eligibleAtts = []
+
+    msgs.forEach((msg) => {
+      const atts = getMessageAttachments_(msg)
+      atts.forEach((att) => {
+        report.totalAttachmentsInspected++
+        const evalResult = evaluateAttachmentEligibility(att)
+        if (!evalResult.eligible) {
+          report.filteredGarbageCount++
+          const reasonKey = evalResult.reason.split(':')[0]
+          report.filteredByReason[reasonKey] =
+            (report.filteredByReason[reasonKey] || 0) + 1
+          return
+        }
+        eligibleAtts.push(att)
+      })
+    })
+
+    if (eligibleAtts.length === 0) {
+      continue
+    }
+
+    const folderKey = `${canonicalDomain}::${subfolderName}`
+    let targetFolder = folderCache[folderKey]
+    if (targetFolder === undefined) {
       try {
-        targetFolder = ensureDriveTaxonomyFolder(
-          canonicalDomain,
-          subfolderName,
-          drive
-        )
+        targetFolder = isDryRun
+          ? findDriveTaxonomyFolder_(
+              canonicalDomain,
+              subfolderName,
+              drive,
+              cfg.driveRootFolderName
+            )
+          : ensureDriveTaxonomyFolder(
+              canonicalDomain,
+              subfolderName,
+              drive,
+              cfg.driveRootFolderName
+            )
         folderCache[folderKey] = targetFolder
       } catch (err) {
         console.error(
@@ -5103,116 +5306,136 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
       }
     }
 
-    var msgs =
-      typeof thread.getMessages === 'function'
-        ? thread.getMessages()
-        : thread.messages || []
-    var threadHasEligible = false
+    report.threadsWithEligibleAttachments++
 
-    msgs.forEach(function (msg) {
-      var atts = getMessageAttachments_(msg)
-      atts.forEach(function (att) {
-        report.totalAttachmentsInspected++
-        var evalResult = evaluateAttachmentEligibility(att)
-        if (!evalResult.eligible) {
-          report.filteredGarbageCount++
-          var reasonKey = evalResult.reason.split(':')[0]
-          report.filteredByReason[reasonKey] =
-            (report.filteredByReason[reasonKey] || 0) + 1
-          return
-        }
+    eligibleAtts.forEach((att) => {
+      report.totalEligibleAttachments++
+      const fileName =
+        typeof att.getName === 'function'
+          ? att.getName()
+          : att.name || 'unnamed'
+      const cleanName = fileName.trim()
+      const dotIndex = cleanName.lastIndexOf('.')
+      const ext =
+        dotIndex > 0 ? cleanName.slice(dotIndex + 1).toLowerCase() : 'other'
+      report.eligibleByType[ext] = (report.eligibleByType[ext] || 0) + 1
 
-        threadHasEligible = true
-        report.totalEligibleAttachments++
-        var fileName =
-          typeof att.getName === 'function'
-            ? att.getName()
-            : att.name || 'unnamed'
-        var cleanName = fileName.trim()
-        var dotIndex = cleanName.lastIndexOf('.')
-        var ext =
-          dotIndex > 0 ? cleanName.slice(dotIndex + 1).toLowerCase() : 'other'
-        report.eligibleByType[ext] = (report.eligibleByType[ext] || 0) + 1
+      let fileSize = extractFileSize_(att)
+      if (!fileSize && typeof att.getBytes === 'function') {
+        const b = att.getBytes()
+        fileSize = b ? b.length : 0
+      }
+      const fileSizeKb = Math.round((fileSize / 1024) * 10) / 10
+      const mimeType =
+        typeof att.getContentType === 'function'
+          ? att.getContentType()
+          : att.contentType || ''
 
-        var fileSize = extractFileSize_(att)
-        if (!fileSize && typeof att.getBytes === 'function') {
-          var b = att.getBytes()
-          fileSize = b ? b.length : 0
-        }
-        var fileSizeKb = Math.round((fileSize / 1024) * 10) / 10
-        var mimeType =
-          typeof att.getContentType === 'function'
-            ? att.getContentType()
-            : att.contentType || ''
+      const newFileBlob =
+        typeof att.copyBlob === 'function' ? att.copyBlob() : att
 
-        var newFileBlob =
-          typeof att.copyBlob === 'function' ? att.copyBlob() : att
+      const existingFiles = targetFolder
+        ? collectCandidateDriveFiles_(targetFolder, fileName)
+        : null
+      const helperFns = {
+        getFileHash: getFileHash,
+        Utilities: utils,
+      }
 
-        var existingFiles = targetFolder.getFilesByName(fileName)
-        var helperFns = {
-          getFileHash: getFileHash,
-          Utilities: utils,
-        }
+      const foundFile = findMatchingDuplicateFile_(
+        existingFiles,
+        newFileBlob,
+        helperFns
+      )
 
-        var isDup = isDuplicateAttachment(existingFiles, newFileBlob, helperFns)
+      const tagDate =
+        utils && typeof utils.formatDate === 'function'
+          ? utils.formatDate(new Date(), 'GMT', "yyyy-MM-dd'T'HH:mm:ss'Z'")
+          : new Date().toISOString()
+      const tagBlock =
+        '[AI_INDEXED] ' +
+        tagDate +
+        '\nDomain: ' +
+        canonicalDomain +
+        '\nSub-label: ' +
+        subLabel +
+        '\nSource: Gmail Attachment Backfill' +
+        '\nThread-ID: ' +
+        threadId +
+        '\nEmail-Subject: ' +
+        subject
 
-        var tagDate =
-          utils && typeof utils.formatDate === 'function'
-            ? utils.formatDate(new Date(), 'GMT', "yyyy-MM-dd'T'HH:mm:ss'Z'")
-            : new Date().toISOString()
-        var tagBlock =
-          '[AI_INDEXED] ' +
-          tagDate +
-          '\nDomain: ' +
-          canonicalDomain +
-          '\nSub-label: ' +
-          subLabel +
-          '\nSource: Gmail Attachment Backfill' +
-          '\nThread-ID: ' +
-          threadId +
-          '\nEmail-Subject: ' +
-          subject
+      if (foundFile) {
+        const desc =
+          typeof foundFile.getDescription === 'function'
+            ? foundFile.getDescription()
+            : ''
 
-        if (isDup) {
-          var filesIterator = targetFolder.getFilesByName(fileName)
-          var foundFile =
-            filesIterator &&
-            typeof filesIterator.next === 'function' &&
-            filesIterator.hasNext()
-              ? filesIterator.next()
-              : null
-          var desc =
-            foundFile && typeof foundFile.getDescription === 'function'
-              ? foundFile.getDescription()
-              : ''
-
-          if (desc && desc.indexOf('[AI_INDEXED]') !== -1) {
-            report.alreadyStoredAndTagged++
-            report.items.push({
-              threadId: threadId,
-              subject: subject,
-              fileName: fileName,
-              fileSizeKb: fileSizeKb,
-              mimeType: mimeType,
-              extension: ext,
-              domain: canonicalDomain,
-              subfolder: subfolderName,
-              status: 'ALREADY_STORED_AND_TAGGED',
-            })
-          } else {
-            report.alreadyStoredUntagged++
-            if (
-              !isDryRun &&
-              foundFile &&
-              typeof foundFile.setDescription === 'function'
-            ) {
-              try {
-                foundFile.setDescription(tagBlock)
-                report.taggedCount++
-              } catch (descErr) {
-                // Non-blocking
-              }
+        if (desc && desc.includes('[AI_INDEXED]')) {
+          report.alreadyStoredAndTagged++
+          report.items.push({
+            threadId: threadId,
+            subject: subject,
+            fileName: fileName,
+            fileSizeKb: fileSizeKb,
+            mimeType: mimeType,
+            extension: ext,
+            domain: canonicalDomain,
+            subfolder: subfolderName,
+            status: 'ALREADY_STORED_AND_TAGGED',
+          })
+        } else {
+          report.alreadyStoredUntagged++
+          if (!isDryRun && typeof foundFile.setDescription === 'function') {
+            try {
+              foundFile.setDescription(tagBlock)
+              report.taggedCount++
+            } catch {
+              // Non-blocking
             }
+          }
+          report.items.push({
+            threadId: threadId,
+            subject: subject,
+            fileName: fileName,
+            fileSizeKb: fileSizeKb,
+            mimeType: mimeType,
+            extension: ext,
+            domain: canonicalDomain,
+            subfolder: subfolderName,
+            status: isDryRun ? 'STORED_BUT_UNTAGGED' : 'TAGGED_EXISTING',
+          })
+        }
+      } else {
+        report.missingFromDrive++
+        if (!isDryRun && targetFolder) {
+          try {
+            const finalName = resolveAttachmentName(
+              targetFolder,
+              fileName,
+              newFileBlob,
+              services
+            )
+            const createdFile = targetFolder.createFile(newFileBlob)
+            if (
+              createdFile &&
+              typeof createdFile.setDescription === 'function'
+            ) {
+              createdFile.setDescription(tagBlock)
+            }
+            report.backfilledCount++
+            report.items.push({
+              threadId: threadId,
+              subject: subject,
+              fileName: finalName,
+              fileSizeKb: fileSizeKb,
+              mimeType: mimeType,
+              extension: ext,
+              domain: canonicalDomain,
+              subfolder: subfolderName,
+              status: 'BACKFILLED_TO_DRIVE',
+            })
+          } catch (saveErr) {
             report.items.push({
               threadId: threadId,
               subject: subject,
@@ -5222,84 +5445,36 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
               extension: ext,
               domain: canonicalDomain,
               subfolder: subfolderName,
-              status: isDryRun ? 'STORED_BUT_UNTAGGED' : 'TAGGED_EXISTING',
+              status: 'BACKFILL_ERROR',
+              error: saveErr.message,
             })
           }
         } else {
-          report.missingFromDrive++
-          if (!isDryRun) {
-            try {
-              var finalName = resolveAttachmentName(
-                targetFolder,
-                fileName,
-                newFileBlob,
-                services
-              )
-              var createdFile = targetFolder.createFile(newFileBlob)
-              if (
-                createdFile &&
-                typeof createdFile.setDescription === 'function'
-              ) {
-                createdFile.setDescription(tagBlock)
-              }
-              report.backfilledCount++
-              report.items.push({
-                threadId: threadId,
-                subject: subject,
-                fileName: finalName,
-                fileSizeKb: fileSizeKb,
-                mimeType: mimeType,
-                extension: ext,
-                domain: canonicalDomain,
-                subfolder: subfolderName,
-                status: 'BACKFILLED_TO_DRIVE',
-              })
-            } catch (saveErr) {
-              report.items.push({
-                threadId: threadId,
-                subject: subject,
-                fileName: fileName,
-                fileSizeKb: fileSizeKb,
-                mimeType: mimeType,
-                extension: ext,
-                domain: canonicalDomain,
-                subfolder: subfolderName,
-                status: 'BACKFILL_ERROR',
-                error: saveErr.message,
-              })
-            }
-          } else {
-            report.items.push({
-              threadId: threadId,
-              subject: subject,
-              fileName: fileName,
-              fileSizeKb: fileSizeKb,
-              mimeType: mimeType,
-              extension: ext,
-              domain: canonicalDomain,
-              subfolder: subfolderName,
-              status: 'MISSING_FROM_DRIVE',
-            })
-          }
+          report.items.push({
+            threadId: threadId,
+            subject: subject,
+            fileName: fileName,
+            fileSizeKb: fileSizeKb,
+            mimeType: mimeType,
+            extension: ext,
+            domain: canonicalDomain,
+            subfolder: subfolderName,
+            status: 'MISSING_FROM_DRIVE',
+          })
         }
-      })
+      }
     })
-
-    if (threadHasEligible) {
-      report.threadsWithEligibleAttachments++
-    }
   }
 
   return report
 }
 
 /**
- * Zero-argument convenience runner for dry-run historical attachment audit.
- * Safe to execute directly from Apps Script IDE or scheduled triggers.
+ * Convenience runner for dry-run historical attachment audit.
  */
-function runDryRunAttachmentAudit(options) {
-  var opts = Object.assign({ dryRun: true, maxThreads: 50 }, options || {})
-  var report = auditAndBackfillCanonicalAttachments(opts)
+function runDryRunAttachmentAudit(options, config, services) {
+  const opts = Object.assign({ dryRun: true, maxThreads: 50 }, options || {})
+  const report = auditAndBackfillCanonicalAttachments(opts, config, services)
 
   console.log('===============================================================')
   console.log(' CANONICAL ATTACHMENT AUDIT MANIFEST (DRY RUN)')
@@ -5352,20 +5527,163 @@ function runDryRunAttachmentAudit(options) {
 }
 
 /**
- * Zero-argument convenience runner for live historical attachment backfill.
- * Backfills missing files to Drive taxonomy folders and sets [AI_INDEXED] description.
+ * Convenience runner for live historical attachment backfill.
  */
-function runLiveAttachmentBackfill(options) {
-  var opts = Object.assign({ dryRun: false, maxThreads: 50 }, options || {})
-  var report = auditAndBackfillCanonicalAttachments(opts)
-  console.log(
-    '[runLiveAttachmentBackfill] Completed backfill: ' +
-      report.backfilledCount +
-      ' uploaded, ' +
-      report.taggedCount +
-      ' tagged.'
+function runLiveAttachmentBackfill(options, config, services) {
+  const opts = Object.assign({ dryRun: false, maxThreads: 50 }, options || {})
+  return auditAndBackfillCanonicalAttachments(opts, config, services)
+}
+
+/**
+ * Detects whether a first argument passed to a trigger handler is a Google Apps Script
+ * time-driven event object rather than a classifier configuration object.
+ *
+ * @param {*} obj - Candidate argument
+ * @returns {boolean} True if obj is a GAS trigger event payload
+ */
+function isTriggerEventObject_(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+    return false
+  }
+  const hasClassifierConfigKey =
+    'geminiApiKey' in obj ||
+    'canonicalDomains' in obj ||
+    'unprocessedQuery' in obj ||
+    'processedLabel' in obj ||
+    'auditLookbackDays' in obj ||
+    'auditDigestEmail' in obj ||
+    'userAccountEmail' in obj ||
+    'driveApp' in obj
+  if (hasClassifierConfigKey) {
+    return false
+  }
+  return (
+    'triggerUid' in obj ||
+    'authMode' in obj ||
+    ('year' in obj && 'month' in obj && 'hour' in obj)
   )
-  return report
+}
+
+/**
+ * Resolves the effective classifier configuration, ignoring GAS time-driven
+ * trigger event objects when functions are invoked directly by ScriptApp triggers.
+ *
+ * @param {Object} [customConfig] - Optional custom config or trigger event object
+ * @returns {Object} Effective configuration
+ */
+function resolveEffectiveConfig_(customConfig) {
+  if (
+    customConfig &&
+    typeof customConfig === 'object' &&
+    !isTriggerEventObject_(customConfig)
+  ) {
+    return customConfig
+  }
+  return typeof getAiClassifierConfig === 'function'
+    ? getAiClassifierConfig()
+    : {}
+}
+
+/**
+ * Extracts a numeric timestamp (ms) from a Gmail thread for deterministic sorting.
+ *
+ * @param {Object} thread - GmailThread or mock object
+ * @returns {number} Epoch milliseconds or 0 if unavailable
+ */
+function getThreadLastMessageTimestamp_(thread) {
+  if (!thread || typeof thread !== 'object') return 0
+  try {
+    const d =
+      typeof thread.getLastMessageDate === 'function'
+        ? thread.getLastMessageDate()
+        : thread.lastMessageDate
+    if (d instanceof Date && !Number.isNaN(d.getTime())) return d.getTime()
+    if (typeof d === 'number' && Number.isFinite(d)) return d
+    if (typeof d === 'string') {
+      const parsed = Date.parse(d)
+      if (!Number.isNaN(parsed)) return parsed
+    }
+  } catch {
+    // Non-blocking fallback
+  }
+  return 0
+}
+
+/**
+ * Sorts an array of Gmail threads by last-message date (newest first),
+ * preserving original order when timestamps are equal or absent.
+ *
+ * @param {Array} threads - Array of GmailThread objects
+ * @returns {Array} Sorted shallow copy of threads
+ */
+function sortThreadsByLastMessageDate_(threads) {
+  if (!Array.isArray(threads) || threads.length <= 1) {
+    return Array.isArray(threads) ? threads.slice() : []
+  }
+  return threads
+    .map(function (thread, index) {
+      return {
+        thread: thread,
+        index: index,
+        ts: getThreadLastMessageTimestamp_(thread),
+      }
+    })
+    .sort(function (a, b) {
+      if (b.ts !== a.ts) {
+        return b.ts - a.ts
+      }
+      return a.index - b.index
+    })
+    .map(function (entry) {
+      return entry.thread
+    })
+}
+
+/**
+ * Verifies that a candidate Drive file in `oldFolder` actually belongs to the
+ * thread attachment being relocated (`Thread-ID` description match or size/hash match),
+ * preventing unrelated files that share a generic filename (e.g. `invoice.pdf`) from being moved.
+ *
+ * @param {Object} fileCandidate - Drive file object
+ * @param {Object} att - Gmail attachment object
+ * @param {string} threadId - Current Gmail thread ID
+ * @param {Object} [helperFns] - Optional helper functions ({ getFileHash })
+ * @returns {boolean} True if fileCandidate matches the thread attachment
+ */
+function doesDriveFileMatchThreadAttachment_(
+  fileCandidate,
+  att,
+  threadId,
+  helperFns
+) {
+  if (!fileCandidate || !att) return false
+  const desc =
+    typeof fileCandidate.getDescription === 'function'
+      ? fileCandidate.getDescription() || ''
+      : fileCandidate.description || ''
+  if (desc && desc.indexOf('Thread-ID:') !== -1) {
+    return Boolean(threadId) && desc.indexOf('Thread-ID: ' + threadId) !== -1
+  }
+
+  const candidateSize = extractFileSize_(fileCandidate)
+  const attSize = extractFileSize_(att) || extractBlobBytes_(att).length
+  if (candidateSize > 0 && attSize > 0 && candidateSize !== attSize) {
+    return false
+  }
+
+  const hashFn = (helperFns && helperFns.getFileHash) || getFileHash
+  const candidateBlob =
+    typeof fileCandidate.getBlob === 'function'
+      ? fileCandidate.getBlob()
+      : fileCandidate
+  const attBlob = typeof att.copyBlob === 'function' ? att.copyBlob() : att
+  const candidateHash = hashFn(candidateBlob)
+  const attHash = hashFn(attBlob)
+  if (candidateHash && attHash) {
+    return candidateHash === attHash
+  }
+
+  return true
 }
 
 /**
@@ -5379,23 +5697,19 @@ function runLiveAttachmentBackfill(options) {
  * @returns {Object} Report of reclassified threads
  */
 function reclassifyThreadsByQuery(searchQuery, options, config, services) {
-  var opts = Object.assign(
+  const opts = Object.assign(
     { maxThreads: 20, dryRun: false, timeBudgetMs: 240000 },
     options || {}
   )
-  var cfg =
-    config ||
-    (typeof getAiClassifierConfig === 'function' ? getAiClassifierConfig() : {})
-  var gmail =
+  const cfg = resolveEffectiveConfig_(config)
+  const gmail =
     (services && services.GmailApp) ||
     (typeof GmailApp !== 'undefined' ? GmailApp : null)
-  var classifyFn =
+  const classifyFn =
     (services && services.classifyFn) ||
-    (typeof classifyWithGemini === 'function'
-      ? function (s, sub, sn, cfg) {
-          return classifyWithGemini(s, sub, sn, cfg, services)
-        }
-      : null)
+    function (s, sub, sn, c) {
+      return classifyWithGemini(s, sub, sn, c, services)
+    }
 
   if (!gmail) {
     throw new Error('GmailApp service is required for reclassifying threads.')
@@ -5411,18 +5725,19 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
       ')'
   )
 
-  var threads = gmail.search(searchQuery, 0, opts.maxThreads)
+  const rawThreads = gmail.search(searchQuery, 0, opts.maxThreads) || []
+  const threads = sortThreadsByLastMessageDate_(rawThreads)
   console.log(
     '[reclassifyThreadsByQuery] Found ' +
       threads.length +
       ' thread(s) matching query.'
   )
 
-  var results = []
-  var startTime = Date.now()
-  var timeBudgetMs = opts.timeBudgetMs || 240000
+  const results = []
+  const startTime = Date.now()
+  const timeBudgetMs = opts.timeBudgetMs || 240000
 
-  for (var i = 0; i < threads.length; i++) {
+  for (let i = 0; i < threads.length; i++) {
     if (Date.now() - startTime > timeBudgetMs) {
       console.warn(
         '[reclassifyThreadsByQuery] Execution safety ceiling reached (' +
@@ -5432,67 +5747,59 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
       break
     }
 
-    var thread = threads[i]
-    var msgs =
+    const thread = threads[i]
+    const threadId =
+      typeof thread.getId === 'function'
+        ? thread.getId()
+        : thread.id || String(i)
+    const msgs =
       typeof thread.getMessages === 'function' ? thread.getMessages() : []
     if (!msgs || msgs.length === 0) continue
-    var firstMessage = msgs[0]
-    var sender =
+    const firstMessage = msgs[0]
+    const sender =
       typeof firstMessage.getFrom === 'function' ? firstMessage.getFrom() : ''
-    var subject =
+    const subject =
       typeof firstMessage.getSubject === 'function'
         ? firstMessage.getSubject()
         : ''
-    var snippet =
+    let snippet =
       typeof firstMessage.getPlainBody === 'function'
         ? firstMessage.getPlainBody().substring(0, 500)
         : ''
     snippet = enrichSnippetWithAttachments_(snippet, firstMessage)
 
-    var rawLabels = []
+    let rawLabels = []
     if (typeof thread.getLabels === 'function') {
-      var labelObjs = thread.getLabels() || []
+      const labelObjs = thread.getLabels() || []
       rawLabels = labelObjs.map(function (l) {
         return typeof l.getName === 'function' ? l.getName() : String(l)
       })
     }
 
-    var classification = null
+    let classification = null
     try {
-      if (typeof deterministicRuleClassify_ === 'function') {
-        classification = deterministicRuleClassify_(
-          sender,
-          subject,
-          snippet,
-          thread,
-          cfg
-        )
-      }
-      if (!classification && classifyFn) {
-        classification = classifyFn(sender, subject, snippet, cfg)
-      }
+      classification =
+        deterministicRuleClassify_(sender, subject, snippet, thread, cfg) ||
+        classifyFn(sender, subject, snippet, cfg)
     } catch (e) {
       console.warn(
         '[reclassifyThreadsByQuery] Classifier exception: ' + e.message
       )
     }
     if (!classification) continue
-    var oldDomain = null
-    if (typeof resolveCanonicalDomainFromLabels === 'function') {
-      oldDomain = resolveCanonicalDomainFromLabels(
-        rawLabels,
-        cfg.canonicalDomains
-      )
-    }
+    let oldDomain = resolveCanonicalDomainFromLabels(
+      rawLabels,
+      cfg.canonicalDomains
+    )
     if (!oldDomain) {
-      var oldCanonical = rawLabels.filter(function (l) {
+      const oldCanonical = rawLabels.filter(function (l) {
         return (
           (cfg.canonicalDomains || []).indexOf(l) !== -1 || /^0[1-7]_/.test(l)
         )
       })
       oldDomain = oldCanonical.length > 0 ? oldCanonical[0] : null
     }
-    var oldSubLabel =
+    const oldSubLabel =
       rawLabels.find(function (l) {
         return (
           l.indexOf('/') !== -1 &&
@@ -5502,41 +5809,32 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
         )
       }) || ''
 
-    var newDomain =
+    const newDomain =
       classification.canonicalDomain || classification.canonical_label
-    var newSubLabel = classification.subLabel || ''
-    var tldChanged = oldDomain && newDomain && oldDomain !== newDomain
+    const newSubLabel = classification.subLabel || ''
+    const tldChanged = oldDomain && newDomain && oldDomain !== newDomain
 
-    var attachmentsMoved = []
-    var attachmentsSaved = []
+    const attachmentsMoved = []
+    let attachmentsSaved = []
 
     if (!opts.dryRun) {
-      if (typeof cleanConflictingLabels === 'function') {
-        cleanConflictingLabels(
-          thread,
-          classification.canonicalDomain,
-          classification.subLabel,
-          cfg
-        )
-      }
-      var primaryTag = classification.subLabel
+      cleanConflictingLabels(
+        thread,
+        classification.canonicalDomain,
+        classification.subLabel,
+        cfg
+      )
+      let primaryTag = classification.subLabel
       if (!primaryTag || isRootDomainLabel(primaryTag)) {
-        var domainKey =
+        const domainKey =
           classification.canonicalDomain || classification.canonical_label
         primaryTag =
           (domainKey && DEFAULT_DOMAIN_SUBLABEL_MAP[domainKey]) ||
           domainKey ||
           null
-        if (primaryTag && isRootDomainLabel(primaryTag)) {
-          primaryTag = DEFAULT_DOMAIN_SUBLABEL_MAP[primaryTag] || null
-        }
       }
-      if (
-        primaryTag &&
-        typeof ensureUserLabel === 'function' &&
-        typeof thread.addLabel === 'function'
-      ) {
-        var targetLabel = ensureUserLabel(primaryTag, gmail)
+      if (primaryTag && typeof thread.addLabel === 'function') {
+        const targetLabel = ensureGmailLabel(primaryTag, gmail)
         thread.addLabel(targetLabel)
       }
       if (
@@ -5546,38 +5844,46 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
       ) {
         classification.action = 'archive'
       }
-      if (
-        classification.category &&
-        classification.action !== 'trash' &&
-        typeof setGmailCategoryTab === 'function'
-      ) {
+      if (classification.category && classification.action !== 'trash') {
         setGmailCategoryTab(thread, classification.category)
       }
-      if (
-        classification.action === 'archive' &&
-        typeof thread.moveToArchive === 'function' &&
-        !isThreadSentOrRepliedByUser(thread, cfg.userAccountEmail)
-      ) {
-        thread.moveToArchive()
+
+      const userSent = isThreadSentOrRepliedByUser(thread, cfg.userAccountEmail)
+      const requestedDestructive =
+        classification.action === 'archive' || classification.action === 'trash'
+      const destructiveOk = isDestructiveActionAllowed_(classification)
+
+      if (requestedDestructive && !userSent && destructiveOk) {
+        if (
+          classification.action === 'trash' &&
+          typeof thread.moveToTrash === 'function'
+        ) {
+          thread.moveToTrash()
+        } else if (
+          classification.action === 'archive' &&
+          typeof thread.moveToArchive === 'function'
+        ) {
+          thread.moveToArchive()
+        }
       }
-      if (
-        cfg.processedLabel &&
-        typeof ensureUserLabel === 'function' &&
-        typeof thread.addLabel === 'function'
-      ) {
-        var processedLabel = ensureUserLabel(cfg.processedLabel, gmail)
+
+      if (cfg.processedLabel && typeof thread.addLabel === 'function') {
+        const processedLabel = ensureGmailLabel(cfg.processedLabel, gmail)
         thread.addLabel(processedLabel)
       }
 
       // Drive attachment relocation & backfill
-      var drive =
+      const drive =
         (services && services.DriveApp) ||
         (typeof DriveApp !== 'undefined' ? DriveApp : null)
       if (drive && isCanonicalClassification(classification, cfg)) {
-        var oldSubfolder = oldDomain
+        const oldSubfolder = oldDomain
           ? resolveTaxonomySubfolderName(oldDomain, oldSubLabel)
           : null
-        var newSubfolder = resolveTaxonomySubfolderName(newDomain, newSubLabel)
+        const newSubfolder = resolveTaxonomySubfolderName(
+          newDomain,
+          newSubLabel
+        )
 
         // Relocate existing attachments if folder path changed
         if (
@@ -5586,33 +5892,56 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
           (oldDomain !== newDomain || oldSubfolder !== newSubfolder)
         ) {
           try {
-            var oldFolder = ensureDriveTaxonomyFolder(
-              oldDomain,
-              oldSubfolder,
-              drive
-            )
-            var newFolder = ensureDriveTaxonomyFolder(
+            const oldFolder =
+              findDriveTaxonomyFolder_(
+                oldDomain,
+                oldSubfolder,
+                drive,
+                cfg.driveRootFolderName
+              ) ||
+              ensureDriveTaxonomyFolder(
+                oldDomain,
+                oldSubfolder,
+                drive,
+                cfg.driveRootFolderName
+              )
+            const newFolder = ensureDriveTaxonomyFolder(
               newDomain,
               newSubfolder,
-              drive
+              drive,
+              cfg.driveRootFolderName
             )
+            const helperFns = {
+              getFileHash: services?.getFileHash || getFileHash,
+            }
 
             msgs.forEach(function (msg) {
-              var atts = getMessageAttachments_(msg)
+              const atts = getMessageAttachments_(msg)
               atts.forEach(function (att) {
                 if (!isEligibleAttachment(att)) return
-                var attName =
+                const attName =
                   typeof att.getName === 'function' ? att.getName() : ''
-                if (!attName) return
+                if (!attName || !oldFolder) return
 
-                var existingFiles = oldFolder.getFilesByName(attName)
-                if (
+                const existingFiles = collectCandidateDriveFiles_(
+                  oldFolder,
+                  attName
+                )
+                while (
                   existingFiles &&
                   typeof existingFiles.hasNext === 'function' &&
                   existingFiles.hasNext()
                 ) {
-                  var fileToMove = existingFiles.next()
-                  if (typeof fileToMove.moveTo === 'function') {
+                  const fileToMove = existingFiles.next()
+                  if (
+                    typeof fileToMove.moveTo === 'function' &&
+                    doesDriveFileMatchThreadAttachment_(
+                      fileToMove,
+                      att,
+                      threadId,
+                      helperFns
+                    )
+                  ) {
                     fileToMove.moveTo(newFolder)
                     attachmentsMoved.push({
                       name: attName,
@@ -5631,6 +5960,7 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
                         '/' +
                         newSubfolder
                     )
+                    break
                   }
                 }
               })
@@ -5644,7 +5974,7 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
         }
 
         // Persist any eligible attachments not yet preserved
-        var saved = persistCanonicalAttachmentsToDrive(
+        const saved = persistCanonicalAttachmentsToDrive(
           thread,
           classification,
           cfg,
@@ -5664,9 +5994,9 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
       }
     }
 
-    var labelChanged = oldDomain !== newDomain || oldSubLabel !== newSubLabel
-    var summary = {
-      threadId: typeof thread.getId === 'function' ? thread.getId() : String(i),
+    const labelChanged = oldDomain !== newDomain || oldSubLabel !== newSubLabel
+    const summary = {
+      threadId: threadId,
       subject: subject,
       sender: sender,
       oldDomain: oldDomain,
@@ -5748,34 +6078,36 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
  * Reverts 'Processed' and applies 'AI/Needs-Retry' to durably queue them for classification.
  */
 function revertAndQueueMissedCareerEmails(gmailApp, config) {
-  var gmail = gmailApp || (typeof GmailApp !== 'undefined' ? GmailApp : null)
+  const gmail = gmailApp || (typeof GmailApp !== 'undefined' ? GmailApp : null)
   if (!gmail || typeof gmail.search !== 'function') return []
 
-  var cfg =
-    config ||
-    (typeof getAiClassifierConfig === 'function' ? getAiClassifierConfig() : {})
-  var retryLabelName = cfg.retryLabel || 'AI/Needs-Retry'
-  var processedLabelName = cfg.processedLabel || 'Processed'
+  const cfg = resolveEffectiveConfig_(config)
+  const retryLabelName = cfg.retryLabel || 'AI/Needs-Retry'
+  const processedLabelName = cfg.processedLabel || 'Processed'
 
-  var retryLabel = ensureUserLabel(retryLabelName, gmail)
-  var processedLabel = ensureUserLabel(processedLabelName, gmail)
+  const retryLabel = ensureGmailLabel(retryLabelName, gmail)
+  const processedLabel = ensureGmailLabel(processedLabelName, gmail)
 
-  var recoverySearch =
+  const recoverySearch =
     'newer_than:14d (subject:"Employment Agreement" OR subject:"Employment Contract" OR subject:"Offer Letter" OR subject:"PwC" OR subject:"KPMG")'
 
-  var modifiedThreadIds = []
+  const modifiedThreadIds = []
   try {
-    var threads = gmail.search(recoverySearch, 0, 20)
-    for (var i = 0; i < threads.length; i++) {
-      var thread = threads[i]
-      var labels = []
+    const rawThreads = gmail.search(recoverySearch, 0, 20) || []
+    const threads = sortThreadsByLastMessageDate_(rawThreads)
+    for (let i = 0; i < threads.length; i++) {
+      const thread = threads[i]
+      if (isThreadSentOrRepliedByUser(thread, cfg.userAccountEmail)) {
+        continue
+      }
+      let labels = []
       if (typeof thread.getLabels === 'function') {
-        var lObjs = thread.getLabels() || []
+        const lObjs = thread.getLabels() || []
         labels = lObjs.map(function (l) {
           return typeof l.getName === 'function' ? l.getName() : String(l)
         })
       }
-      var hasCareerTag =
+      const hasCareerTag =
         labels.indexOf('06_Work_Career') !== -1 ||
         labels.indexOf('Work/Career') !== -1 ||
         labels.indexOf('Career/DJ') !== -1 ||
@@ -5783,21 +6115,21 @@ function revertAndQueueMissedCareerEmails(gmailApp, config) {
         labels.indexOf('Career_Interviews') !== -1
 
       if (!hasCareerTag) {
-        var changed = false
+        let changed = false
         if (processedLabel && labels.indexOf(processedLabelName) !== -1) {
           try {
             thread.removeLabel(processedLabel)
             changed = true
-          } catch (e) {}
+          } catch {}
         }
         if (retryLabel && labels.indexOf(retryLabelName) === -1) {
           try {
             thread.addLabel(retryLabel)
             changed = true
-          } catch (e) {}
+          } catch {}
         }
         if (changed) {
-          var tId =
+          const tId =
             typeof thread.getId === 'function' ? thread.getId() : String(i)
           modifiedThreadIds.push(tId)
           console.log(
@@ -5821,21 +6153,19 @@ function revertAndQueueMissedCareerEmails(gmailApp, config) {
  * or emails tagged with AI/Needs-Retry that may have been missed.
  */
 function runMissedEmailsSweep(config, services) {
-  var gmail =
+  const gmail =
     (services && services.GmailApp) ||
     (typeof GmailApp !== 'undefined' ? GmailApp : null)
-  var cfg =
-    config ||
-    (typeof getAiClassifierConfig === 'function' ? getAiClassifierConfig() : {})
+  const cfg = resolveEffectiveConfig_(config)
   if (typeof revertAndQueueMissedCareerEmails === 'function') {
     revertAndQueueMissedCareerEmails(gmail, cfg)
   }
 
   // 1. Direct Priority Recovery: First sweep and reclassify career & employment contract emails
-  var careerQuery =
+  const careerQuery =
     'newer_than:14d (subject:"Employment Agreement" OR subject:"Employment Contract" OR subject:"Offer Letter" OR subject:"PwC" OR subject:"KPMG")'
   console.log('[runMissedEmailsSweep] Priority career sweep: ' + careerQuery)
-  var careerResults = reclassifyThreadsByQuery(
+  reclassifyThreadsByQuery(
     careerQuery,
     { maxThreads: 20, dryRun: false },
     cfg,
@@ -5843,7 +6173,7 @@ function runMissedEmailsSweep(config, services) {
   )
 
   // 2. Secondary General Recovery: Sweep other unclassified threads
-  var query =
+  const query =
     'label:AI/Needs-Retry OR (newer_than:14d -label:Processed -label:AI/Manual-Review)'
   console.log('[runMissedEmailsSweep] Sweeping query: ' + query)
   return reclassifyThreadsByQuery(
@@ -5858,21 +6188,21 @@ function runMissedEmailsSweep(config, services) {
  * Convenience runner to audit historical threads matching a query in dry-run mode.
  */
 function runRealignmentAudit(query, options, config, services) {
-  var gmail =
+  const gmail =
     (services && services.GmailApp) ||
     (typeof GmailApp !== 'undefined' ? GmailApp : null)
-  var searchQuery = query
+  let searchQuery = query
 
   if (!searchQuery && gmail && typeof gmail.getUserLabels === 'function') {
     try {
-      var allLabels = gmail.getUserLabels() || []
-      var matchedLabels = allLabels
+      const allLabels = gmail.getUserLabels() || []
+      const matchedLabels = allLabels
         .filter(function (l) {
-          var name = typeof l.getName === 'function' ? l.getName() : String(l)
+          const name = typeof l.getName === 'function' ? l.getName() : String(l)
           return /sister/i.test(name)
         })
         .map(function (l) {
-          var name = typeof l.getName === 'function' ? l.getName() : String(l)
+          const name = typeof l.getName === 'function' ? l.getName() : String(l)
           return 'label:"' + name + '"'
         })
 
@@ -5881,7 +6211,7 @@ function runRealignmentAudit(query, options, config, services) {
           JSON.stringify(matchedLabels)
       )
 
-      var queryParts = matchedLabels.slice()
+      const queryParts = matchedLabels.slice()
       queryParts.push('"name change"')
       searchQuery = queryParts.join(' OR ')
     } catch (e) {
@@ -5913,7 +6243,7 @@ function runRealignmentAudit(query, options, config, services) {
  * @returns {Object} Realignment summary report
  */
 function sweepAllUnreadInboxEmails(options, customConfig, customServices) {
-  var opts = Object.assign({ maxThreads: 50, dryRun: false }, options || {})
+  const opts = Object.assign({ maxThreads: 50, dryRun: false }, options || {})
   return reclassifyThreadsByQuery(
     'in:inbox is:unread -is:starred -from:me',
     opts,
@@ -5922,66 +6252,714 @@ function sweepAllUnreadInboxEmails(options, customConfig, customServices) {
   )
 }
 
+/**
+ * Checks if a thread contains any messages sent or replied by the account owner.
+ */
+function isThreadSentOrRepliedByUser(thread, userEmail) {
+  try {
+    const primaryEmail = (userEmail || '').toLowerCase()
+    if (!primaryEmail || !thread || typeof thread.getMessages !== 'function') {
+      return false
+    }
+    const messages = thread.getMessages() || []
+    for (let m = 0; m < messages.length; m++) {
+      const msg = messages[m]
+      if (!msg || typeof msg.getFrom !== 'function') continue
+      const rawFrom = msg.getFrom()
+      const fromAddr = (
+        rawFrom && typeof rawFrom === 'string' ? rawFrom : ''
+      ).toLowerCase()
+      if (fromAddr.indexOf(primaryEmail) !== -1) {
+        return true
+      }
+    }
+  } catch (e) {
+    console.warn(
+      '[isThreadSentOrRepliedByUser] Error checking message senders:',
+      e.message
+    )
+  }
+  return false
+}
+
+/**
+ * Automatically purges emails older than their category retention policy (2 years for Promotions/Social/Forums).
+ * Core household domains (01_Household - 07_Community_NonProfit), Primary, Updates, Starred, and User Replied/Sent threads are 100% EXEMPT.
+ */
+function purgeExpiredEmailsByRetentionPolicy(customConfig, customServices) {
+  console.log(
+    '[purgeExpiredEmailsByRetentionPolicy] Starting weekly category retention cleanup...'
+  )
+  const services = customServices || {}
+  const config = resolveEffectiveConfig_(customConfig)
+
+  const gmail =
+    services.GmailApp || (typeof GmailApp !== 'undefined' ? GmailApp : null)
+  if (!gmail) {
+    console.error(
+      '[purgeExpiredEmailsByRetentionPolicy] GmailApp service is missing.'
+    )
+    return { trashedCount: 0, exemptedCount: 0 }
+  }
+
+  // Explicitly exclude threads sent by user or containing user replies
+  const retentionQuery =
+    '(category:promotions OR category:social OR category:forums) older_than:2y -is:starred -from:me'
+
+  const coreDomainLabels = config.canonicalDomains || [
+    '01_Household',
+    '02_Finance_Legal',
+    '03_Vehicles',
+    '04_Family_Health',
+    '05_Tech_Infrastructure',
+    '06_Work_Career',
+    '07_Community_NonProfit',
+  ]
+  const pageSize = 50
+  const maxPages = 5
+  let trashedCount = 0
+  let exemptedCount = 0
+  let totalFound = 0
+
+  for (let page = 0; page < maxPages; page++) {
+    const offset = page * pageSize
+    const rawPage = gmail.search(retentionQuery, offset, pageSize) || []
+    const threads = sortThreadsByLastMessageDate_(rawPage)
+    if (page === 0) {
+      console.log(
+        '[purgeExpiredEmailsByRetentionPolicy] Found ' +
+          threads.length +
+          ' expired thread(s) matching 2-year retention query.'
+      )
+      if (threads.length === 0) {
+        return { trashedCount: 0, exemptedCount: 0 }
+      }
+    } else if (threads.length === 0) {
+      break
+    }
+
+    totalFound += threads.length
+
+    for (let i = 0; i < threads.length; i++) {
+      try {
+        const thread = threads[i]
+        if (!thread) continue
+        const labels =
+          typeof thread.getLabels === 'function' ? thread.getLabels() || [] : []
+        let isExempt = false
+
+        // Safety Shield 1: Check if thread contains any Core Household Domain label
+        // OR any classifier sub-label.
+        for (let l = 0; l < labels.length; l++) {
+          const labelName =
+            typeof labels[l].getName === 'function'
+              ? labels[l].getName()
+              : String(labels[l])
+          for (let cd = 0; cd < coreDomainLabels.length; cd++) {
+            if (labelName.indexOf(coreDomainLabels[cd]) !== -1) {
+              isExempt = true
+              break
+            }
+          }
+          if (isExempt) break
+          if (
+            labelName.indexOf('/') !== -1 &&
+            labelName.indexOf('Retention/') !== 0
+          ) {
+            isExempt = true
+            break
+          }
+        }
+
+        // Safety Shield 2: Check if user sent a message or replied in this thread
+        if (!isExempt) {
+          if (isThreadSentOrRepliedByUser(thread, config.userAccountEmail)) {
+            isExempt = true
+          }
+        }
+
+        if (!isExempt) {
+          if (typeof thread.moveToTrash === 'function') {
+            thread.moveToTrash()
+          }
+          trashedCount++
+        } else {
+          exemptedCount++
+          const subj =
+            typeof thread.getFirstMessageSubject === 'function'
+              ? thread.getFirstMessageSubject()
+              : thread.getId()
+          console.log(
+            '[purgeExpiredEmailsByRetentionPolicy] Exempted thread from trash (contains core domain label or user reply): ' +
+              subj
+          )
+        }
+      } catch (err) {
+        console.warn(
+          '[purgeExpiredEmailsByRetentionPolicy] Error processing thread: ' +
+            err.message
+        )
+      }
+    }
+
+    if (rawPage.length < pageSize) {
+      break
+    }
+  }
+
+  console.log(
+    '[purgeExpiredEmailsByRetentionPolicy] Retention cleanup complete. Scanned ' +
+      totalFound +
+      ' thread(s); moved ' +
+      trashedCount +
+      ' expired thread(s) to Trash.'
+  )
+  return { trashedCount: trashedCount, exemptedCount: exemptedCount }
+}
+
+const DESTRUCTIVE_CONFIDENCE_MIN = 0.85
+
+function isDestructiveActionAllowed_(classification) {
+  if (!classification || typeof classification !== 'object') {
+    return false
+  }
+  if (
+    classification.action !== 'trash' &&
+    classification.action !== 'archive'
+  ) {
+    return false
+  }
+  const confidence = classification.confidence
+  if (!Number.isFinite(confidence)) {
+    return false
+  }
+  return confidence >= DESTRUCTIVE_CONFIDENCE_MIN
+}
+
+const GMAIL_AI_CLASSIFIER_VERSION = 'v1.8.0-drive-taxonomy-attachments'
+
+/**
+ * Main entry point for Gemini AI-Powered Semantic Email Classification and Auto-Filter Engine.
+ * Supports injected config and services for testing and headless execution.
+ *
+ * @param {Object} [customConfig] - Optional override config
+ * @param {Object} [customServices] - Optional injected services
+ */
+function processEmailsWithAiClassifier(customConfig, customServices) {
+  const services = customServices || {}
+  const lockService =
+    services.LockService ||
+    (typeof LockService !== 'undefined' ? LockService : null)
+  let lock = null
+  if (lockService && typeof lockService.getScriptLock === 'function') {
+    lock = lockService.getScriptLock()
+    let hasLock = false
+    try {
+      hasLock = lock.tryLock(10000)
+    } catch (e) {
+      console.warn(
+        '[processEmailsWithAiClassifier] Error attempting script lock:',
+        e.message
+      )
+    }
+    if (!hasLock) {
+      console.warn(
+        '[processEmailsWithAiClassifier] Could not obtain script lock after 10s. Another execution is in progress. Exiting.'
+      )
+      return
+    }
+  }
+
+  try {
+    console.log(
+      '[processEmailsWithAiClassifier] Engine Version: ' +
+        GMAIL_AI_CLASSIFIER_VERSION
+    )
+    console.log(
+      '[processEmailsWithAiClassifier] Starting AI semantic email processing...'
+    )
+    const hasExplicitCustomConfig = Boolean(
+      customConfig && !isTriggerEventObject_(customConfig)
+    )
+    const config = resolveEffectiveConfig_(customConfig)
+
+    if (!config.geminiApiKey) {
+      console.error(
+        '[processEmailsWithAiClassifier] GEMINI_API_KEY ScriptProperty is missing.'
+      )
+      return
+    }
+
+    const gmail =
+      services.GmailApp || (typeof GmailApp !== 'undefined' ? GmailApp : null)
+    if (!gmail) {
+      console.error(
+        '[processEmailsWithAiClassifier] GmailApp service is missing.'
+      )
+      return
+    }
+
+    if (!hasExplicitCustomConfig) {
+      revertAndQueueMissedCareerEmails(gmail, config)
+    }
+
+    const rawPrimaryThreads = gmail.search(config.unprocessedQuery, 0, 10) || []
+    let threads = sortThreadsByLastMessageDate_(rawPrimaryThreads)
+    console.log(
+      '[processEmailsWithAiClassifier] Found ' +
+        threads.length +
+        ' unprocessed thread(s).'
+    )
+
+    let isSecondarySweep = false
+    if (threads.length === 0) {
+      // Secondary sweep: Look for unread unstarred inbox threads to realign non-Primary items
+      const sweepQuery = 'in:inbox is:unread -is:starred -from:me'
+      const rawSweepThreads = gmail.search(sweepQuery, 0, 15) || []
+      threads = sortThreadsByLastMessageDate_(rawSweepThreads)
+      isSecondarySweep = true
+      console.log(
+        '[processEmailsWithAiClassifier] Secondary sweep found ' +
+          threads.length +
+          ' unread inbox thread(s) for realignment.'
+      )
+      if (threads.length === 0) {
+        return
+      }
+    }
+
+    const processedLabel = ensureGmailLabel(
+      config.processedLabel,
+      gmail,
+      services.Gmail
+    )
+    const retryLabelName = config.retryLabel || 'AI/Needs-Retry'
+    const manualReviewLabelName = config.manualReviewLabel || 'AI/Manual-Review'
+    const retryLabel = ensureGmailLabel(retryLabelName, gmail, services.Gmail)
+    const manualReviewLabel = ensureGmailLabel(
+      manualReviewLabelName,
+      gmail,
+      services.Gmail
+    )
+
+    const props =
+      (services.PropertiesService &&
+      typeof services.PropertiesService.getScriptProperties === 'function'
+        ? services.PropertiesService.getScriptProperties()
+        : null) ||
+      services.properties ||
+      (typeof PropertiesService !== 'undefined' &&
+      typeof PropertiesService.getScriptProperties === 'function'
+        ? PropertiesService.getScriptProperties()
+        : null)
+
+    const cache =
+      (services.CacheService &&
+      typeof services.CacheService.getScriptCache === 'function'
+        ? services.CacheService.getScriptCache()
+        : null) ||
+      services.cache ||
+      (typeof CacheService !== 'undefined' &&
+      typeof CacheService.getScriptCache === 'function'
+        ? CacheService.getScriptCache()
+        : null)
+
+    const startTime = Date.now()
+    let consecutiveRemoteFailures = 0
+    let remoteQuotaExhausted = false
+
+    if (isCircuitBreakerOpen(props)) {
+      const untilMs = Number.parseInt(
+        props.getProperty('GEMINI_BACKOFF_UNTIL'),
+        10
+      )
+      console.warn(
+        '[processEmailsWithAiClassifier] Circuit breaker is OPEN until ' +
+          (Number.isNaN(untilMs)
+            ? 'unknown'
+            : new Date(untilMs).toISOString()) +
+          '; skipping remote AI calls for this execution.'
+      )
+      remoteQuotaExhausted = true
+    }
+
+    for (let i = 0; i < threads.length; i++) {
+      if (Date.now() - startTime > 270000) {
+        console.warn(
+          '[processEmailsWithAiClassifier] Safety time budget reached (270s); stopping batch gracefully.'
+        )
+        break
+      }
+      const thread = threads[i]
+      const messages =
+        typeof thread.getMessages === 'function' ? thread.getMessages() : []
+      if (!messages || messages.length === 0) continue
+      const firstMessage = messages[0]
+      const sender =
+        typeof firstMessage.getFrom === 'function'
+          ? firstMessage.getFrom()
+          : firstMessage.from || ''
+      const subject =
+        typeof firstMessage.getSubject === 'function'
+          ? firstMessage.getSubject()
+          : firstMessage.subject || ''
+      let snippet =
+        typeof firstMessage.getPlainBody === 'function'
+          ? firstMessage.getPlainBody().substring(0, 500)
+          : firstMessage.snippet || ''
+      snippet = enrichSnippetWithAttachments_(snippet, firstMessage)
+
+      console.log(
+        '[processEmailsWithAiClassifier] Processing (' +
+          (i + 1) +
+          '/' +
+          threads.length +
+          '): ' +
+          subject +
+          ' from ' +
+          sender
+      )
+
+      let threadLabels = []
+      if (typeof thread.getLabels === 'function') {
+        try {
+          const lList = thread.getLabels() || []
+          threadLabels = lList.map(function (l) {
+            return typeof l.getName === 'function' ? l.getName() : String(l)
+          })
+        } catch {}
+      }
+      const isAlreadyProcessed =
+        config.processedLabel &&
+        threadLabels.indexOf(config.processedLabel) !== -1
+
+      let classification = deterministicRuleClassify_(
+        sender,
+        subject,
+        snippet,
+        thread,
+        config
+      )
+      let usedRemoteApi = false
+      if (
+        !classification &&
+        !remoteQuotaExhausted &&
+        (!isSecondarySweep || !isAlreadyProcessed)
+      ) {
+        const classifyFn =
+          services.classifyFn ||
+          function (s, sub, sn, cfg) {
+            return classifyWithGemini(s, sub, sn, cfg, services)
+          }
+        classification = classifyFn(sender, subject, snippet, config)
+        usedRemoteApi = true
+        if (!classification) {
+          consecutiveRemoteFailures++
+          recordCircuitBreakerFailure(props)
+          if (consecutiveRemoteFailures >= 2) {
+            console.warn(
+              '[processEmailsWithAiClassifier] Multiple consecutive remote API failures detected; disabling remote API for remainder of batch to preserve execution budget.'
+            )
+            remoteQuotaExhausted = true
+          }
+        } else {
+          consecutiveRemoteFailures = 0
+          recordCircuitBreakerSuccess(props)
+        }
+      }
+      if (classification) {
+        cleanConflictingLabels(
+          thread,
+          classification.canonicalDomain,
+          classification.subLabel,
+          config
+        )
+
+        let primaryTag = classification.subLabel
+        if (!primaryTag || isRootDomainLabel(primaryTag)) {
+          const domainKey =
+            classification.canonicalDomain || classification.canonical_label
+          primaryTag =
+            (domainKey && DEFAULT_DOMAIN_SUBLABEL_MAP[domainKey]) ||
+            domainKey ||
+            null
+        }
+        if (primaryTag) {
+          const targetLabel = ensureGmailLabel(
+            primaryTag,
+            gmail,
+            services.Gmail
+          )
+          if (targetLabel) {
+            thread.addLabel(targetLabel)
+          }
+
+          const savedAttachments = persistCanonicalAttachmentsToDrive(
+            thread,
+            classification,
+            config,
+            services
+          )
+
+          if (config.githubToken) {
+            try {
+              const notePath = getNotePathForDomain(
+                classification.canonicalDomain,
+                classification.subLabel
+              )
+              const utils =
+                services.Utilities ||
+                (typeof Utilities !== 'undefined' ? Utilities : null)
+              if (notePath && utils) {
+                const msgDate =
+                  typeof firstMessage.getDate === 'function'
+                    ? firstMessage.getDate()
+                    : new Date()
+                const dateStr = utils.formatDate(msgDate, 'GMT', 'yyyy-MM-dd')
+                const entryMd = formatProgressiveDisclosureEntry(
+                  dateStr,
+                  classification.title || subject,
+                  sender,
+                  subject,
+                  classification.summary,
+                  config.userAccountEmail,
+                  savedAttachments
+                )
+                assertNoAsciiReplacement_(
+                  (subject || '') + (classification.summary || ''),
+                  entryMd
+                )
+                assertClean_(entryMd, 'new entry for ' + notePath)
+                appendMarkdownEntryToGitHubRepo(
+                  notePath,
+                  entryMd,
+                  'feat(ingestion): ' + subject,
+                  services
+                )
+              }
+            } catch (ghErr) {
+              console.warn(
+                '[processEmailsWithAiClassifier] Non-blocking GitHub sync error for ' +
+                  subject +
+                  ': ' +
+                  ghErr.message
+              )
+            }
+          }
+        }
+
+        if (
+          classification.category &&
+          classification.category !== 'Primary' &&
+          classification.action !== 'trash'
+        ) {
+          classification.action = 'archive'
+        }
+
+        const userSent = isThreadSentOrRepliedByUser(
+          thread,
+          config.userAccountEmail
+        )
+        const requestedDestructive =
+          classification.action === 'trash' ||
+          classification.action === 'archive'
+        const destructiveOk = isDestructiveActionAllowed_(classification)
+        if (requestedDestructive && !userSent && !destructiveOk) {
+          console.warn(
+            '[processEmailsWithAiClassifier] Shield: Skipped destructive action "' +
+              classification.action +
+              '" (low/invalid confidence ' +
+              classification.confidence +
+              '); preserved thread in INBOX.'
+          )
+        } else if (requestedDestructive && !userSent) {
+          if (classification.action === 'trash') {
+            thread.moveToTrash()
+            console.log(
+              '[processEmailsWithAiClassifier] Action: Moved spam/unwanted thread to TRASH.'
+            )
+          } else {
+            thread.moveToArchive()
+            console.log(
+              '[processEmailsWithAiClassifier] Action: Archived thread out of INBOX.'
+            )
+          }
+        }
+
+        if (classification.action === 'mark_read' || classification.markRead) {
+          thread.markRead()
+          console.log(
+            '[processEmailsWithAiClassifier] Action: Marked thread as READ.'
+          )
+        }
+
+        if (classification.category && classification.action !== 'trash') {
+          setGmailCategoryTab(thread, classification.category, services.Gmail)
+        }
+
+        // Remove retryLabel if present
+        if (retryLabel && threadLabels.indexOf(retryLabelName) !== -1) {
+          try {
+            thread.removeLabel(retryLabel)
+            console.log(
+              '[processEmailsWithAiClassifier] Removed retry label from successfully classified thread.'
+            )
+          } catch (rErr) {
+            console.warn(
+              '[processEmailsWithAiClassifier] Failed to remove retry label:',
+              rErr.message
+            )
+          }
+        }
+        clearThreadRetryCount_(thread, cache)
+
+        if (processedLabel) {
+          thread.addLabel(processedLabel)
+        }
+      } else {
+        if (usedRemoteApi) {
+          const retryCount = incrementThreadRetryCount_(thread, cache)
+          if (retryCount >= 5) {
+            if (retryLabel && threadLabels.indexOf(retryLabelName) !== -1) {
+              try {
+                thread.removeLabel(retryLabel)
+              } catch {}
+            }
+            if (manualReviewLabel) {
+              thread.addLabel(manualReviewLabel)
+            }
+            console.warn(
+              '[processEmailsWithAiClassifier] Classification failed after ' +
+                retryCount +
+                ' attempts; escalated to ' +
+                manualReviewLabelName +
+                ' for manual review.'
+            )
+          } else {
+            if (retryLabel) {
+              thread.addLabel(retryLabel)
+            }
+            console.warn(
+              '[processEmailsWithAiClassifier] Classification failed or returned null; tagged with ' +
+                retryLabelName +
+                ' (attempt ' +
+                retryCount +
+                '/5) to ensure durable retry.'
+            )
+          }
+        } else {
+          console.warn(
+            '[processEmailsWithAiClassifier] Remote classification skipped for thread; preserving untouched for next execution.'
+          )
+        }
+      }
+
+      if (usedRemoteApi) {
+        const utilsService =
+          services.Utilities ||
+          (typeof Utilities !== 'undefined' ? Utilities : null)
+        if (utilsService && typeof utilsService.sleep === 'function') {
+          utilsService.sleep(2000)
+        }
+      }
+    }
+
+    console.log('[processEmailsWithAiClassifier] Batch processing complete.')
+  } finally {
+    if (lock) {
+      try {
+        lock.releaseLock()
+      } catch {
+        // ignore lock release error
+      }
+    }
+  }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    processEmailsWithAiClassifier: processEmailsWithAiClassifier,
-    sweepAllUnreadInboxEmails: sweepAllUnreadInboxEmails,
-    purgeExpiredEmailsByRetentionPolicy: purgeExpiredEmailsByRetentionPolicy,
-    isThreadSentOrRepliedByUser: isThreadSentOrRepliedByUser,
-    setupWeeklyRetentionTrigger: setupWeeklyRetentionTrigger,
-    setupFiveMinuteTrigger: setupFiveMinuteTrigger,
-    stopAllTriggers: stopAllTriggers,
-    classifyWithGemini: classifyWithGemini,
-    buildOntologicalPrompt: buildOntologicalPrompt,
-    ensureUserLabel: ensureUserLabel,
-    ensureGmailLabel: ensureGmailLabel,
-    createGmailFilterRule: createGmailFilterRule,
-    backfillOriginalEmailHeaders: backfillOriginalEmailHeaders,
-    getSearchDateRange_: getSearchDateRange_,
-    searchGmailForOriginalHeader_: searchGmailForOriginalHeader_,
-    cleanConflictingLabels: cleanConflictingLabels,
-    setGmailCategoryTab: setGmailCategoryTab,
-    isCanonicalClassification: isCanonicalClassification,
-    resolveTaxonomySubfolderName: resolveTaxonomySubfolderName,
-    evaluateAttachmentEligibility: evaluateAttachmentEligibility,
-    isEligibleAttachment: isEligibleAttachment,
-    getMessageAttachments_: getMessageAttachments_,
-    ensureDriveTaxonomyFolder: ensureDriveTaxonomyFolder,
-    isDuplicateAttachment: isDuplicateAttachment,
-    resolveAttachmentName: resolveAttachmentName,
-    extractZipArchiveToSubfolder: extractZipArchiveToSubfolder,
-    unzipExistingDriveArchive: unzipExistingDriveArchive,
-    persistCanonicalAttachmentsToDrive: persistCanonicalAttachmentsToDrive,
-    auditAndBackfillCanonicalAttachments: auditAndBackfillCanonicalAttachments,
-    runDryRunAttachmentAudit: runDryRunAttachmentAudit,
-    runLiveAttachmentBackfill: runLiveAttachmentBackfill,
-    reclassifyThreadsByQuery: reclassifyThreadsByQuery,
-    runRealignmentAudit: runRealignmentAudit,
-    runMissedEmailsSweep: runMissedEmailsSweep,
-    revertAndQueueMissedCareerEmails: revertAndQueueMissedCareerEmails,
-    getFileHash: getFileHash,
-    CANONICAL_TAXONOMY_SUBFOLDERS: CANONICAL_TAXONOMY_SUBFOLDERS,
-    SUBLABEL_TO_FOLDER_MAP: SUBLABEL_TO_FOLDER_MAP,
-    DEFAULT_DOMAIN_SUBLABEL_MAP: DEFAULT_DOMAIN_SUBLABEL_MAP,
-    isRootDomainLabel: isRootDomainLabel,
-    getNotePathForDomain: getNotePathForDomain,
-    resolveCanonicalDomainFromLabels: resolveCanonicalDomainFromLabels,
-    deterministicRuleClassify_: deterministicRuleClassify_,
-    enrichSnippetWithAttachments_: enrichSnippetWithAttachments_,
-    auditEmailClassifications: auditEmailClassifications,
-    auditClassifications: auditClassifications,
-    formatAuditDigest: formatAuditDigest,
-    setupDailyAuditTrigger: setupDailyAuditTrigger,
-    setupFourHourAuditTrigger: setupFourHourAuditTrigger,
-    computeStringHash: computeStringHash,
-    extractJsonSubstring: extractJsonSubstring,
-    parseRetryDelayMs: parseRetryDelayMs,
-    listAvailableGeminiModels: listAvailableGeminiModels,
-    isCircuitBreakerOpen: isCircuitBreakerOpen,
-    recordCircuitBreakerFailure: recordCircuitBreakerFailure,
-    recordCircuitBreakerSuccess: recordCircuitBreakerSuccess,
-    getThreadRetryCount_: getThreadRetryCount_,
-    incrementThreadRetryCount_: incrementThreadRetryCount_,
-    clearThreadRetryCount_: clearThreadRetryCount_,
+    getAiClassifierConfig:
+      typeof getAiClassifierConfig !== 'undefined'
+        ? getAiClassifierConfig
+        : undefined,
+    getClassifierConfig:
+      typeof getClassifierConfig !== 'undefined'
+        ? getClassifierConfig
+        : undefined,
+    processEmailsWithAiClassifier,
+    purgeExpiredEmailsByRetentionPolicy,
+    isThreadSentOrRepliedByUser,
+    isDestructiveActionAllowed_,
+    validateClassification,
+    validateOntologicalClassification,
+    classifyEmailWithGemini,
+    buildOntologicalPrompt,
+    ensureGmailLabel,
+    ensureUserLabel: ensureGmailLabel,
+    createPermanentGmailFilter,
+    createGmailFilterRule,
+    processThreadBatch,
+    RULE6_PATTERNS,
+    assertClean_,
+    assertNoAsciiReplacement_,
+    extractTopicTitleFromPath,
+    insertEntryIntoLogSection,
+    formatProgressiveDisclosureEntry,
+    getNotePathForDomain,
+    appendMarkdownEntryToGitHubRepo,
+    executeGitHubCommit,
+    getSearchDateRange_,
+    auditClassifications,
+    formatAuditDigest,
+    auditEmailClassifications,
+    setupWeeklyRetentionTrigger,
+    setupDailyAuditTrigger,
+    setupFourHourAuditTrigger,
+    setupFiveMinuteTrigger,
+    stopAllTriggers,
+    isCanonicalClassification,
+    resolveTaxonomySubfolderName,
+    evaluateAttachmentEligibility,
+    isEligibleAttachment,
+    getMessageAttachments_,
+    ensureDriveTaxonomyFolder,
+    findDriveTaxonomyFolder_,
+    isDuplicateAttachment,
+    resolveAttachmentName,
+    extractZipArchiveToSubfolder,
+    unzipExistingDriveArchive,
+    persistCanonicalAttachmentsToDrive,
+    auditAndBackfillCanonicalAttachments,
+    runDryRunAttachmentAudit,
+    runLiveAttachmentBackfill,
+    setGmailCategoryTab,
+    cleanConflictingLabels,
+    reclassifyThreadsByQuery,
+    runRealignmentAudit,
+    runMissedEmailsSweep,
+    revertAndQueueMissedCareerEmails,
+    sweepAllUnreadInboxEmails,
+    CANONICAL_TAXONOMY_SUBFOLDERS,
+    SUBLABEL_TO_FOLDER_MAP,
+    DEFAULT_DOMAIN_SUBLABEL_MAP,
+    isRootDomainLabel,
+    resolveCanonicalDomainFromLabels,
+    deterministicRuleClassify_,
+    enrichSnippetWithAttachments_,
+    getFileHash,
+    classifyWithGemini,
+    extractJsonSubstring,
+    parseRetryDelayMs,
+    computeStringHash,
+    listAvailableGeminiModels,
+    isCircuitBreakerOpen,
+    recordCircuitBreakerFailure,
+    recordCircuitBreakerSuccess,
+    getThreadRetryCount_,
+    incrementThreadRetryCount_,
+    clearThreadRetryCount_,
+    isTriggerEventObject_,
+    resolveEffectiveConfig_,
+    sortThreadsByLastMessageDate_,
   }
 }
