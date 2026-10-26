@@ -5678,6 +5678,26 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
                 'Please submit manual payment.'
               )
             ).toBeNull()
+            expect(
+              mod.deterministicRuleClassify_(
+                'support@bestbuy.com',
+                'Action required: verify your account',
+                'Please verify your Best Buy account.'
+              )
+            ).toBeNull()
+            expect(
+              mod.deterministicRuleClassify_(
+                'promotions@bestbuy.com',
+                'Weekend update from Best Buy',
+                'Check out what is new this week.'
+              )
+            ).toEqual(
+              expect.objectContaining({
+                category: 'Promotions',
+                action: 'archive',
+                reasoning: 'Retail Promo',
+              })
+            )
           })
         })
       })

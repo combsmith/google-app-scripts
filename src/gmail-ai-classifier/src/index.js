@@ -1528,12 +1528,14 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     )
 
   const isPromoSubject =
-    /\b(sale|\d+%\s*off|deal of the day|daily deals?|clearance|limited time offer|coupon|promo code|shop now|shop today|exclusive offer|special offer|flash sale|black friday|cyber monday|memorial day sale|labor day sale|presidents day sale|discount code|save \$\d+|save up to|free shipping|buy one get one|bogo|don't miss out|last chance to save|doorbusters?|rewards balance|earn bonus points|member exclusive)\b/i.test(
-      subject || ''
+    /\b(sale|\d+%\s*off|deal of the day|daily deals?|clearance|limited time offer|coupon|promo code|shop now|shop today|exclusive offer|special offer|flash sale|black friday|cyber monday|memorial day sale|labor day sale|presidents day sale|discount|save \$\d+|save up to|free shipping|buy one get one|bogo|don't miss out|last chance to save|doorbusters?|rewards balance|earn bonus points|member exclusive|weekly ad|new arrivals)\b/i.test(
+      (subject || '') + ' ' + (snippet || '')
     )
+  const isMarketingSender =
+    /\b(promotions|promo|deals|marketing|offers|newsletter|news)@/i.test(sLower)
   const isNonTransactional = !containsAny_(
     subLower,
-    'order|receipt|invoice|statement|autopay|tracking|shipped|delivered'
+    'order|receipt|invoice|statement|autopay|tracking|shipped|delivered|action required|verify|security|support|case|ticket|return|refund|appointment|recall|warranty'
   )
 
   const isRetailVendor =
@@ -1547,9 +1549,10 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     )
 
   if (
-    (isRetailVendor && isNonTransactional) ||
-    (isScarsella && !isScarsellaCurriculum) ||
-    (isPromoSubject && isNonTransactional)
+    isNonTransactional &&
+    (isPromoSubject ||
+      (isRetailVendor && isMarketingSender) ||
+      (isScarsella && !isScarsellaCurriculum))
   ) {
     return makeDeterministicResult_(
       null,
