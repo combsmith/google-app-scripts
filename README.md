@@ -1,5 +1,8 @@
 # Google Apps Script Productivity Suite
 
+[![Contributing](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](https://github.com/combsmith/.github/blob/main/CONTRIBUTING.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 ![googleappscripts](header.jpg)
 
 A collection of personal productivity scripts built on Google Apps Script. These tools are designed to automate repetitive tasks across Gmail, Google Drive, and Google Docs, helping you reclaim your time and keep your digital workspace organized.
@@ -75,9 +78,23 @@ If you fork this repository and want to use the browser-based deployment page or
 
 Note your **Project Number** from the GCP dashboard. You will enter this into the **Settings → "Google Cloud Platform (GCP) Project"** section of your Installer GAS project if you are using the GAS Installer web app.
 
+## 💼 Commercial Support & Custom Automation
+
+Need enterprise Google Workspace automation, custom Apps Script connectors, or tailored workflow integrations?
+
+Commercial services are offered through **[CombSmith LLC](https://combsmith.com)**:
+
+- **Standard SLA & Priority Support:** $199/month per organization for managed automations, bug triage, and maintenance.
+- **Custom Apps Script & Workspace Engineering:** $250/hour for bespoke connectors, Drive/Docs/Gmail automation, and security compliance.
+- **Consulting & Implementation:** Architectural guidance, migration to GCP cloud functions, and enterprise deployment.
+
+For commercial inquiries, email [support@combsmith.com](mailto:support@combsmith.com) or visit [combsmith.com](https://combsmith.com).
+
+---
+
 ## 🤝 Contributing
 
-Contributions are welcome! If you have ideas for improvements or new scripts to add to the suite:
+Contributions are welcome! Please review the org-wide [Contributing Guide](https://github.com/combsmith/.github/blob/main/CONTRIBUTING.md) and [Security Policy](https://github.com/combsmith/.github/blob/main/SECURITY.md).
 
 1.  Fork the repository.
 2.  Create a feature branch (`git checkout -b feature/AmazingScript`).

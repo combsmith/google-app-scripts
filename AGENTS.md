@@ -2,7 +2,7 @@
 
 This file follows the AGENTS.md conventions (see https://agents.md/) and provides short, agent-friendly instructions for working with this repository. It is intended to be machine- and human-readable so coding agents and contributors can discover how to build, test, and interact with this project.
 
-> **Organization standards:** This repo inherits shared standards from [petry-projects/.github/AGENTS.md](https://github.com/petry-projects/.github/blob/main/AGENTS.md). The sections below are project-specific.
+> **Organization standards:** This repo inherits shared standards from [combsmith/.github/AGENTS.md](https://github.com/combsmith/.github/blob/main/AGENTS.md). The sections below are project-specific.
 
 > **GitHub Copilot users:** `.github/copilot-instructions.md` points here as the entry point for this repository's instructions; organization-wide guidance lives in the shared AGENTS.md linked above.
 

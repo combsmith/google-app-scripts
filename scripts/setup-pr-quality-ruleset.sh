@@ -5,7 +5,7 @@
 # pull-request reviews and blocks force-pushes on the default branch.
 #
 # Standard reference:
-#   https://github.com/petry-projects/.github/blob/main/standards/github-settings.md#pr-quality--standard-ruleset-all-repositories
+#   https://github.com/combsmith/.github/blob/main/standards/github-settings.md#pr-quality--standard-ruleset-all-repositories
 #
 # What this script does:
 #   1. Checks whether the "pr-quality" ruleset already exists
@@ -47,6 +47,10 @@ gh auth status >/dev/null 2>&1 || { echo "Error: gh not authenticated" >&2; exit
 EXISTING_ID=$(gh api "repos/$REPO/rulesets?includes_parents=false" -q ".[] | select(.name == \"$RULESET_NAME\") | .id" 2>/dev/null || echo "")
 
 # ── Ruleset payload (used for both create and update) ─────────────────────────
+# Compliance-pinned parameters (do not relax — enforced by scripts/tests/
+# setup-pr-quality-ruleset.test.js and the weekly compliance audit):
+#   dismiss_stale_reviews_on_push: true   (issue #555)
+#   require_last_push_approval:    true   (issue #539)
 RULESET_PAYLOAD=$(cat <<'JSON'
 {
   "name": "pr-quality",

@@ -1,16 +1,29 @@
-name: PR Review Agent
-
-# Thin caller for the org PR Review agent (petry-projects/.github-private),
-# pinned to the known-good `pr-review/stable` channel. Adopted from the validated
-# `.github-private/pr-review-trigger.yml` template (#536 consumer fan-out).
+# ─────────────────────────────────────────────────────────────────────────────
+# SOURCE OF TRUTH: combsmith/.github/standards/workflows/pr-review.yml
+# Standard:        combsmith/.github/standards/ci-standards.md
+# Reusable:        combsmith/.github-private/.github/workflows/pr-review.yml
+#                  (the pr-review ENGINE — grandfathered name, not *-reusable.yml)
 #
-# - Version selection is the moving `pr-review/stable` tag — this file never
-#   changes on promotion; a release is rolled out by moving the tag centrally.
-# - `agent_ref: pr-review/stable` pins the agent's own scripts to the same
-#   channel (#506), so the review logic AND scripts run the known-good version.
-# - `secrets: inherit` forwards the org secrets, including
-#   `DON_PETRY_BOT_GH_PAT_CLASSIC` (classic PAT — required for approvals, since
-#   fine-grained PATs cannot `addPullRequestReview`).
+# AGENTS — READ BEFORE EDITING:
+#   • This file is a THIN CALLER STUB. All review logic lives in the engine
+#     above, including concurrency (per PR + head SHA, never cancelling an
+#     in-flight review), the check_suite-without-a-PR skip, and reading
+#     `client_payload.pr_url` from repository_dispatch.
+#   • You MUST NOT change: the `@pr-review/v1-stable` channel in the `uses:`
+#     line or the matching `agent_ref` — both are re-pinned in lockstep to this
+#     repo's canary-ring tier by the standards sweep. Nor the workflow `name:`,
+#     the job id `review` (check names depend on both), the trigger event types,
+#     the Dependabot skip guard, or the job-level `permissions:` block. Do not
+#     add a stub-level `concurrency:` block.
+#   • The standards sweep only REPLACES an existing caller with this file; it
+#     never adds it to a repo that has none, and never touches
+#     combsmith/.github-private (whose pr-review.yml is the engine).
+#   • If you need different behaviour, open a PR against the engine in
+#     combsmith/.github-private. It reaches every repo when the channel
+#     tag is promoted.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: PR Review Agent
 
 on:
   check_suite:
@@ -22,18 +35,18 @@ on:
   workflow_dispatch:
     inputs:
       pr_url:
-        description: 'Optional: review a single PR URL instead of enumerating'
+        description: "Optional: review a single PR URL instead of enumerating"
         required: false
         type: string
       dry_run:
-        description: 'If true, never submit reviews or comments'
+        description: "If true, never submit reviews or comments"
         required: false
-        default: 'false'
+        default: "false"
         type: string
       force_review:
-        description: 'If true, bypass idempotency and re-review at the same head SHA'
+        description: "If true, bypass idempotency and re-review at the same head SHA"
         required: false
-        default: 'false'
+        default: "false"
         type: string
   repository_dispatch:
     types: [pr-review-mention]
@@ -42,14 +55,15 @@ permissions: {}
 
 jobs:
   review:
-    uses: petry-projects/.github-private/.github/workflows/pr-review.yml@pr-review/stable # NOSONAR(githubactions:S7637) first-party channel ref
+    if: ${{ github.actor != 'dependabot[bot]' }}
     permissions:
       contents: read
       pull-requests: write
       checks: read
+    uses: combsmith/.github-private/.github/workflows/pr-review.yml@pr-review/v1-stable  # NOSONAR(githubactions:S7637) first-party channel ref
     with:
-      agent_ref: pr-review/stable
+      agent_ref: pr-review/v1-stable
       pr_url: ${{ inputs.pr_url || '' }}
       dry_run: ${{ inputs.dry_run || '' }}
       force_review: ${{ inputs.force_review || '' }}
-    secrets: inherit
+    secrets: inherit  # NOSONAR(githubactions:S7635) first-party trusted reusable

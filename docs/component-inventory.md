@@ -17,7 +17,7 @@
 | `rebuildDoc(config, ...)`                          | src/index.js           | Core           | Rebuilds single document with state tracking                                             |
 | `sortThreadsByLastMessageDate(threads)`            | src/index.js           | Utility        | Sorts threads by last message date ascending (oldest-first) for prepend-based processing |
 | `getCleanBody(text)`                               | gas-utils.js           | Shared Utility | Strips quoted replies, legal footers, normalizes whitespace                              |
-| `getFileHash(blob)`                                | gas-utils.js           | Shared Utility | MD5 hash for content-based attachment deduplication                                      |
+| `getFileHash(blob)`                                | gas-utils.js           | Shared Utility | SHA-256 hash for content-based attachment deduplication                                  |
 | `getProcessConfig()`                               | config.gs              | Config         | Returns array of label/doc/folder configuration objects                                  |
 
 ### calendar-to-sheets

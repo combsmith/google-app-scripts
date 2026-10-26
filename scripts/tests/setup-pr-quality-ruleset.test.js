@@ -3,7 +3,9 @@ const path = require('path')
 
 // Extracts the JSON payload from the heredoc in setup-pr-quality-ruleset.sh.
 // The script codifies the org-standard "pr-quality" ruleset; this test guards
-// against configuration drift of the ruleset parameters (see issue #520).
+// against configuration drift of the ruleset parameters. Compliance findings
+// this guard protects against: #520 (initial drift guard), #539
+// (require_last_push_approval), #555 (dismiss_stale_reviews_on_push).
 function loadRulesetPayload() {
   const scriptPath = path.join(__dirname, '..', 'setup-pr-quality-ruleset.sh')
   const script = fs.readFileSync(scriptPath, 'utf8')

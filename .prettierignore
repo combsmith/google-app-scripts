@@ -1,23 +1,42 @@
 # The dev-lead caller stub is a standards-owned artifact copied VERBATIM per
-# petry-projects/.github/standards/ci-standards.md#5-dev-lead-agent. Its exact bytes
+# combsmith/.github/standards/ci-standards.md#5-dev-lead-agent. Its exact bytes
 # (including the two-space gap before the `# NOSONAR` marker) are enforced by the
 # central byte-identity stub-drift guard. Prettier would collapse that gap and
 # re-introduce drift, so it must not reformat this file.
 .github/workflows/dev-lead.yml
 # initiative-driver is a standards-owned artifact copied verbatim from
-# petry-projects/.github/standards/workflows/initiative-driver.yml.
+# combsmith/.github/standards/workflows/initiative-driver.yml.
 # Prettier must not reformat it to avoid byte-drift on future syncs.
 .github/workflows/initiative-driver.yml
 # feature-ideation is a standards-owned caller stub whose centrally-owned
 # `on:`/`permissions:`/`concurrency:` surface is enforced byte-identical against
-# petry-projects/.github/standards/workflows/feature-ideation.yml by the stub-drift
+# combsmith/.github/standards/workflows/feature-ideation.yml by the stub-drift
 # guard. The canonical uses single-quoted YAML scalars; Prettier would rewrite them
 # to double quotes and re-introduce surface drift, so it must not reformat this file.
 .github/workflows/feature-ideation.yml
 # pr-auto-review is a standards-owned caller stub whose centrally-owned
 # `on:`/`permissions:` surface is enforced byte-identical against
-# petry-projects/.github/standards/workflows/pr-auto-review.yml by the stub-drift
+# combsmith/.github/standards/workflows/pr-auto-review.yml by the stub-drift
 # guard. The canonical uses double-quoted YAML scalars (e.g. `workflows: ["CI"]`);
 # Prettier (singleQuote) would rewrite them to single quotes and re-introduce
 # surface drift, so it must not reformat this file.
 .github/workflows/pr-auto-review.yml
+# agent-shield is a standards-owned caller stub copied VERBATIM from
+# combsmith/.github/standards/workflows/agent-shield.yml. Its exact bytes
+# (including the two-space gap before the `# NOSONAR` marker) are enforced by the
+# central byte-identity stub-drift guard. Prettier would collapse that gap and
+# re-introduce drift, so it must not reformat this file.
+.github/workflows/agent-shield.yml
+# persona-mention is a standards-owned caller stub copied VERBATIM from
+# combsmith/.github/standards/workflows/persona-mention.yml. Its exact bytes
+# (including the two-space gap before the `# NOSONAR` marker) are enforced by the
+# central byte-identity stub-drift guard. Prettier would collapse that gap and
+# reflow comments, re-introducing drift, so it must not reformat this file.
+.github/workflows/persona-mention.yml
+# pr-review is a standards-owned caller stub copied VERBATIM from
+# combsmith/.github/standards/workflows/pr-review.yml. The canonical uses
+# double-quoted YAML scalars and a two-space gap before the `# NOSONAR` markers;
+# Prettier would rewrite both, re-introducing drift, and the CI autofix job
+# cannot push workflow-file changes (no `workflows` permission), so it must not
+# reformat this file.
+.github/workflows/pr-review.yml

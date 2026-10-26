@@ -5,19 +5,21 @@
 
 function getDriveIngesterConfig() {
   var props = PropertiesService.getScriptProperties()
-  var userEmail = 'user@example.com'
+  var userEmail = null
   try {
     userEmail =
       Session.getEffectiveUser().getEmail() ||
       props.getProperty('USER_ACCOUNT_EMAIL') ||
-      'user@example.com'
+      null
   } catch (e) {
-    userEmail = props.getProperty('USER_ACCOUNT_EMAIL') || 'user@example.com'
+    userEmail = props.getProperty('USER_ACCOUNT_EMAIL') || null
   }
 
   return {
     geminiApiKey: props.getProperty('GEMINI_API_KEY') || '',
     githubToken: props.getProperty('GITHUB_PAT') || '',
+    githubRepoOwner: props.getProperty('GITHUB_REPO_OWNER') || '',
+    githubRepoName: props.getProperty('GITHUB_REPO_NAME') || '',
     userAccountEmail: userEmail,
 
     // 7 Canonical Domain Folders & Label Tree

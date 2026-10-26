@@ -1284,6 +1284,51 @@ test.describe('deploy index.html', () => {
     expect(html).not.toContain('<b>Quota</b>')
   })
 
+  test('Copy error copies the stack trace verbatim and never parses it as HTML (#595)', async ({
+    page,
+  }) => {
+    const stack =
+      'Error: bad <tag> at foo (<anonymous>)\n' +
+      '    at List<T>.get (<anonymous>)\n' +
+      '<script>window.__pwned=1</script>' +
+      '<img src=x onerror="window.__pwned=1">'
+
+    // Stub the clipboard so the test can read what was written.
+    await page.evaluate(() => {
+      window.__copied = []
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: (text) => {
+            window.__copied.push(text)
+            return Promise.resolve()
+          },
+        },
+      })
+    })
+
+    await page.evaluate((errStack) => {
+      const err = new Error('bad <tag>')
+      err.stack = errStack
+      showStatus('error', buildDeployErrorHtml(err))
+    }, stack)
+
+    await page.locator('.status-error details summary').click()
+    await page.locator('.status-error .copy-btn').click()
+    await expect.poll(() => page.evaluate(() => window.__copied.length)).toBe(1)
+
+    expect(await page.evaluate(() => window.__copied[0])).toBe(stack)
+
+    // Control: a detached <img> with this payload does fire onerror here, so a
+    // re-parse would have set __pwned before __control is set.
+    await page.evaluate(() => {
+      const d = document.createElement('div')
+      d.innerHTML = '<img src=x onerror="window.__control=1">'
+    })
+    await page.waitForFunction(() => window.__control === 1)
+    expect(await page.evaluate(() => window.__pwned)).toBeUndefined()
+  })
+
   // ── showStatus type classes ─────────────────────────────────────────────────
 
   test('error sign-in response shows status-error class', async ({ page }) => {

@@ -109,13 +109,13 @@ The Google Apps Script Productivity Suite is a collection of automation scripts 
 **Key mechanisms:**
 
 - **Thread deduplication:** Embeds the thread ID in the message separator line `------------------------------[THREAD:<id>]` and uses a separate thread separator line `==============================`. Before processing, checks for existing thread content identified by these markers and removes it (idempotent reprocessing).
-- **Attachment deduplication:** MD5 hash-based content dedup. If a file with the same hash exists in the target folder, skips upload. If same name but different content, renames with numeric suffix.
+- **Attachment deduplication:** SHA-256 hash-based content dedup. If a file with the same hash exists in the target folder, skips upload. If same name but different content, renames with numeric suffix.
 - **Prepend ordering:** Processes threads oldest-first with `insertParagraph(0, ...)` so newest content appears at the top of the document.
 - **Batch processing:** Configurable `batchSize` (default 250 threads) to handle GAS execution time limits.
 - **Label management:** Removes trigger label, adds processed label after archiving.
 - **Rebuild capability:** `rebuildDoc()` and `rebuildAllDocs()` can reconstruct documents from all processed threads.
 
-**Google APIs used:** GmailApp, DriveApp, DocumentApp, Utilities (MD5)
+**Google APIs used:** GmailApp, DriveApp, DocumentApp, Utilities (SHA-256)
 
 ### calendar-to-sheets
 

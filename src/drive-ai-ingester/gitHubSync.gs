@@ -53,9 +53,13 @@ function appendMarkdownEntryToGitHubRepo(
   commitMessage
 ) {
   var config = getDriveIngesterConfig()
-  if (!config.githubToken) {
+  if (
+    !config.githubToken ||
+    !config.githubRepoOwner ||
+    !config.githubRepoName
+  ) {
     console.warn(
-      '[gitHubSync] GITHUB_PAT missing in ScriptProperties. Skipping GitHub sync.'
+      '[gitHubSync] GitHub sync configuration incomplete (GITHUB_PAT, GITHUB_REPO_OWNER, or GITHUB_REPO_NAME missing). Skipping GitHub sync.'
     )
     return false
   }
@@ -99,8 +103,14 @@ function appendMarkdownEntryToGitHubRepo(
  * (including HTTP 409, which the caller retries with a refreshed SHA).
  */
 function executeGitHubCommit(filePath, entryContent, commitMessage, config) {
-  var repoOwner = 'don-petry'
-  var repoName = 'self-private'
+  var repoOwner = config.githubRepoOwner
+  var repoName = config.githubRepoName
+  if (!repoOwner || !repoName) {
+    console.error(
+      '[gitHubSync] Missing repository owner or repository name. Skipping commit.'
+    )
+    return false
+  }
   var url =
     'https://api.github.com/repos/' +
     repoOwner +
@@ -128,6 +138,13 @@ function executeGitHubCommit(filePath, entryContent, commitMessage, config) {
 
     if (statusCode === 200) {
       var fileData = JSON.parse(getResponse.getContentText())
+      if (fileData.encoding === 'none' || !fileData.content) {
+        console.error(
+          '[gitHubSync] File exceeds 1MB (encoding: none), skipping commit to prevent note truncation: ' +
+            filePath
+        )
+        return false
+      }
       sha = fileData.sha
       // GitHub returns Base64 wrapped in newlines every 60 chars; strip them
       // before decoding since some decoders reject embedded whitespace.

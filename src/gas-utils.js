@@ -42,7 +42,7 @@ function getCleanBody(text) {
 }
 
 /**
- * getFileHash - compute MD5 hex digest of a "blob" (Buffer or object with getBytes())
+ * getFileHash - compute SHA-256 hex digest of a "blob" (Buffer or object with getBytes())
  */
 function getFileHash(blob) {
   let bytes
@@ -56,7 +56,7 @@ function getFileHash(blob) {
     throw new TypeError('Unsupported blob type')
   }
 
-  const hash = crypto.createHash('md5').update(bytes).digest('hex')
+  const hash = crypto.createHash('sha256').update(bytes).digest('hex')
   return hash
 }
 
