@@ -1132,20 +1132,26 @@ function extractSenderHost_(sender) {
   return /^[a-z0-9.-]+\.[a-z]{2,}$/.test(raw) ? raw : ''
 }
 
+function toTermList_(items) {
+  if (!items) return []
+  return Array.isArray(items) ? items : String(items).split('|')
+}
+
 /**
  * Checks whether the sender's hostname exactly matches or is a subdomain of
  * any domain in the provided list. Prevents substring false positives (e.g.
  * 'x.com' matching 'netflix.com' or 'fedex.com').
  *
  * @param {string} sender - Raw sender header
- * @param {string[]} domains - Candidate root/sub domains
+ * @param {string[]|string} domains - Candidate root/sub domains (array or pipe-delimited)
  * @returns {boolean} True if sender host matches any domain
  */
 function matchesSenderDomain_(sender, domains) {
   const host = extractSenderHost_(sender)
-  if (!host || !Array.isArray(domains)) return false
-  for (let i = 0; i < domains.length; i++) {
-    const target = String(domains[i] || '')
+  const list = toTermList_(domains)
+  if (!host || list.length === 0) return false
+  for (let i = 0; i < list.length; i++) {
+    const target = String(list[i] || '')
       .trim()
       .toLowerCase()
     if (target && (host === target || host.endsWith('.' + target))) {
@@ -1159,14 +1165,15 @@ function matchesSenderDomain_(sender, domains) {
  * Checks whether the sender's email address exactly matches any address in the list.
  *
  * @param {string} sender - Raw sender header
- * @param {string[]} addresses - Candidate email addresses
+ * @param {string[]|string} addresses - Candidate email addresses (array or pipe-delimited)
  * @returns {boolean} True if sender address matches
  */
 function matchesSenderAddress_(sender, addresses) {
   const addr = extractSenderAddress_(sender)
-  if (!addr || !Array.isArray(addresses)) return false
-  for (let i = 0; i < addresses.length; i++) {
-    const target = String(addresses[i] || '')
+  const list = toTermList_(addresses)
+  if (!addr || list.length === 0) return false
+  for (let i = 0; i < list.length; i++) {
+    const target = String(list[i] || '')
       .trim()
       .toLowerCase()
     if (target && addr === target) return true
@@ -1178,13 +1185,14 @@ function matchesSenderAddress_(sender, addresses) {
  * Checks whether the lowercased text contains any of the given substrings.
  *
  * @param {string} textLower - Lowercased hay-stack string
- * @param {string[]} terms - Lowercase needle terms
+ * @param {string[]|string} terms - Lowercase needle terms (array or pipe-delimited)
  * @returns {boolean} True if any term is found
  */
 function containsAny_(textLower, terms) {
-  if (!textLower || !Array.isArray(terms)) return false
-  for (let i = 0; i < terms.length; i++) {
-    if (textLower.indexOf(terms[i]) !== -1) return true
+  const list = toTermList_(terms)
+  if (!textLower || list.length === 0) return false
+  for (let i = 0; i < list.length; i++) {
+    if (list[i] && textLower.indexOf(list[i]) !== -1) return true
   }
   return false
 }
@@ -1225,1104 +1233,168 @@ function makeDeterministicResult_(
   }
 }
 
-const SCHOOL_DOMAINS_ = [
-  'bcsk12.org',
-  'bcs-lions.org',
-  'briarwoodchristianschool.org',
-  'mcaabhm.org',
-  'jeffersonstate.edu',
+const SCHOOL_DOMAINS_ =
+  'bcsk12.org|bcs-lions.org|briarwoodchristianschool.org|mcaabhm.org|jeffersonstate.edu'
+
+const SCHOOL_BROADCAST_TERMS_ =
+  'weekly|newsletter|bulletin|school update|campus update|district update|bcs update|lions update|digest|progress is ready|lunch|menu|portraits|news|noteworthy|announcement|athletics|e learning|e-learning|report card update|trunk or treat|spirit week|pto|pta|open house|picture day|fall festival|spring festival|school announcement|tryouts|tryout|try-outs|try-out|auditions|audition|team tryouts|absent|attendance|tardy|tuition|billing statement|assignment posted|new assignment|grade updated|score published|family portal|parent portal'
+
+const CAREER_SUBJECT_TERMS_ =
+  'employment agreement|employment contract|offer letter|job offer|employment offer|terms of employment|independent contractor agreement|restrictive covenant|confidentiality agreement|interview confirmation|interview invitation|invitation to interview|interview with |schedule an interview|recruiter screen|phone screen'
+
+const CAREER_SNIPPET_TERMS_ =
+  'employment agreement|offer of employment|terms of employment|pleased to offer you the position|pleased to offer you|pleased to confirm our offer|congratulations on your offer|employment document|restrictive covenants agreement'
+
+const CUSTOM_RULE_MATCHERS_ = {
+  nonprofit: function (ctx) {
+    return (
+      matchesSenderDomain_(
+        ctx.sender,
+        'ignite-hope.org|helpingoneguy.com|charitywater.org|compassion.com|worldvision.org'
+      ) ||
+      containsAny_(ctx.subLower, 'ironmen|iron men') ||
+      (containsAny_(ctx.sLower, 'newsletter|update|impact') &&
+        containsAny_(
+          ctx.subLower,
+          'impact update|ministry update|community update'
+        ))
+    )
+  },
+  saasPlan: function (ctx) {
+    return (
+      containsAny_(
+        ctx.subLower,
+        'trial is ending|trial ending|trial will expire|trial expired|trial expiration|free trial is ending|free trial ends'
+      ) ||
+      (ctx.subLower.indexOf('aws') !== -1 &&
+        containsAny_(
+          ctx.subLower,
+          'upgraded to a paid plan|free plan is ready'
+        )) ||
+      ((matchesSenderDomain_(
+        ctx.sender,
+        'aws.com|amazonaws.com|digitalocean.com|cloudflare.com|openai.com|anthropic.com|supabase.com|neon.tech'
+      ) ||
+        ctx.sLower.indexOf('azure') !== -1) &&
+        containsAny_(
+          ctx.subLower,
+          'upgraded to a paid plan|free plan is ready|free tier|startup credits|account plan'
+        ))
+    )
+  },
+  schoolBroadcast: function (ctx) {
+    const isParentSquare = matchesSenderDomain_(ctx.sender, 'parentsquare.com')
+    return (
+      ctx.isBrightArrow ||
+      ((ctx.isSchoolDomain ||
+        isParentSquare ||
+        matchesSenderAddress_(ctx.sender, 'admissions@ua.edu')) &&
+        (ctx.isBroadcastSubject || isParentSquare))
+    )
+  },
+  schoolTravel: function (ctx) {
+    return (
+      matchesSenderDomain_(
+        ctx.sender,
+        'ef.com|eftours.com|worldstrides.com|explorica.com|acis.com'
+      ) ||
+      (containsAny_(ctx.subLower, 'trip to |school travel|educational tour') &&
+        containsAny_(
+          ctx.subLower,
+          'interest meeting|informational meeting|rsvp|enrollment discount'
+        ))
+    )
+  },
+  bankRate: function (ctx) {
+    return (
+      containsAny_(
+        ctx.subLower,
+        'higher apy|apy has increased|apy increased|earns a higher apy|rate increase|rate decrease|rate update|rates are changing|yield update|interest rate increase|savings rate increase|annual percentage yield'
+      ) ||
+      (ctx.subLower.indexOf('rate change') !== -1 &&
+        containsAny_(ctx.subLower, 'apy|cash|savings|interest'))
+    )
+  },
+}
+
+/**
+ * Declarative deterministic rule specifications.
+ * Format: mode::domains::addresses::senderTerms::subjectTerms::excludeSubject::domain::subLabel::category::action::confidence::reasoning::summary
+ */
+const DETERMINISTIC_RULE_SPECS_ = [
+  'any::::::::your day ahead::::01_Household::Household/Property::Updates::archive::0.99::Daily Digest::Automated daily agenda digest routed to Updates.',
+  'sender+sub::amazon.com|hp.com|brother.com|canon.com|epson.com::auto-reorder@amazon.com|dash@amazon.com::instantink::time to order the|time to reorder|smart reorder|auto-reorder|replenishment|low ink|ink alert|toner low|toner alert|toner for your|replacement filter|reorder your::::01_Household::Household/Supplies::Updates::archive::0.99::Smart Reorder::Automated smart reorder or consumable replenishment alert routed to Updates.',
+  'any::broodminder.com|mybroodminder.com::::broodminder|mybroodminder::hive alert|events in your apiaries|events in your apiary|event in your apiaries|event in your apiary|apiary alert|apiary event::::07_Community_NonProfit::Projects/Telemetry::Updates::archive::0.99::BroodMinder Telemetry::Automated hive and apiary telemetry alert routed to Projects/Telemetry.',
+  'any::qnap.com::::qts notification|notificationcenter::[qnap|qts notification|qvr pro|qulog::::05_Tech_Infrastructure::Tech/Alerts::Updates::archive::0.99::QNAP Telemetry::QNAP NAS system health, RAID, backup, or QVR surveillance telemetry alert routed to Tech/Alerts.',
+  'any::ui.com|ubnt.com::::::unifi::verification code|mfa|one-time|security code::05_Tech_Infrastructure::Tech/Alerts::Updates::archive::0.99::UniFi Telemetry::UniFi Dream Machine or network infrastructure alert routed to Tech/Alerts.',
+  'any::nabucasa.com|home-assistant.io::::::home assistant::::05_Tech_Infrastructure::Tech/Alerts::Updates::archive::0.99::Home Assistant Telemetry::Home Assistant or Nabu Casa cloud telemetry/subscription alert routed to Tech/Alerts.',
+  'custom:nonprofit::::::::::::07_Community_NonProfit::NonProfit/General::Updates::archive::0.98::NonProfit Impact Newsletter::Community non-profit organization newsletter, Bible study digest, or project impact update routed to Updates.',
+  'any::linear.app::::::::::05_Tech_Infrastructure::Tech/Alerts::Updates::archive::0.99::Linear Alert::Linear task and project notification digest routed to Tech/Alerts.',
+  'any::notifications.cubic.dev|cubic.dev::::cubic::::::05_Tech_Infrastructure::Tech/Alerts::Updates::archive::0.99::Cubic Code Review::Cubic AI automated code review notice routed to Tech/Alerts.',
+  'any::::notifications@github.com::::::::05_Tech_Infrastructure::Tech/Alerts::Updates::archive::0.99::GitHub Alert::GitHub CI/CD workflow run or notification routed to Tech/Alerts.',
+  'any::sonarcloud.io|sentry.io|vercel.com::noreply-apps-scripts-notifications@google.com::::::::05_Tech_Infrastructure::Tech/Alerts::Updates::archive::0.99::Developer Monitoring Alert::CI/CD code quality, error monitoring, or deployment alert routed to Tech/Alerts.',
+  'any::::googleaistudio-noreply@google.com::::::::05_Tech_Infrastructure::Tech/Alerts::Updates::archive::0.99::Google AI Studio Alert::Google AI Studio API quota, model deprecation, or project update routed to Tech/Alerts.',
+  'any::updates.codeant.ai|codeant.ai::::::::::::::Promotions::archive::0.98::DevTool Promo::Developer tooling promotional or product feature announcement routed to Promotions.',
+  'any::::calendar-notification@google.com::::::::01_Household::Household/Property::Updates::archive::0.99::Calendar Notification::Google Calendar event reminder notification routed to Updates.',
+  'custom:saasPlan::::::::::::05_Tech_Infrastructure::Tech/Alerts::Updates::archive::0.99::SaaS / Cloud Plan Alert::Cloud provider tier status, SaaS trial expiration, or account plan notification routed to Tech/Alerts.',
+  'any::pypi.org|npmjs.com|docker.com|crates.io::::::[pypi]|trusted publisher::::05_Tech_Infrastructure::Tech/Alerts::Updates::archive::0.99::Package Registry Alert::Package repository publishing, release, or trusted publisher notification routed to Tech/Alerts.',
+  'any::::::::you shared some google account data with|google account data with|granted access to your google account|third-party access|app access granted::::05_Tech_Infrastructure::Tech/Security::Primary::keep::1::Third-Party Authorization Shield::Third-party application account data sharing or authorization notice preserved in Primary Inbox as security warning.',
+  'any::::::::verification code|security code|one-time passcode|one-time password|your login code|new sign-in|signed in from a new|new device signed in|sign-in from new device|security alert for your|password changed|password reset confirmation::::05_Tech_Infrastructure::Tech/Security::Updates::archive::0.99::Authentication/Sign-in Ping::Automated authentication verification code or device sign-in alert routed to Tech/Security.',
+  'any::cvs.com|walgreens.com|questdiagnostics.com|labcorp.com|zocdoc.com|athenahealth.com::::mychart|cvshealth::appointment reminder|upcoming appointment|appointment confirmation|appointment is confirmed|prescription is ready|prescription ready|refill reminder|refill confirmation::::04_Family_Health::Family/Health-Medical::Updates::archive::0.99::Healthcare/Pharmacy Alert::Automated patient portal appointment reminder or pharmacy prescription status notice.',
+  'sender+sub::delta.com|southwest.com|aa.com|united.com|airbnb.com|vrbo.com|marriott.com|hilton.com|uber.com|lyft.com|waymo.com::::waymo::flight confirmation|flight status|boarding pass|check in for your flight|reservation confirmed|reservation confirmation|upcoming stay|trip with uber|ride with lyft|waymo ride|riding with waymo|receipt::::01_Household::Household/Travel::Updates::archive::0.99::Travel Confirmation::Travel itinerary reservation, flight check-in, or rideshare receipt.',
+  'any::::::::how was your experience|how did we do|rate your recent|rate your experience|rate your stay|tell us what you think|take our survey|take our quick survey|quick survey|feedback requested|review your purchase|leave a review|your opinion matters::::::::Promotions::archive::0.99::Customer Survey::Automated post-transaction customer satisfaction feedback or survey request.',
+  'any::ifttt.com|notify.mios.com::::::::::01_Household::Household/Property::Updates::archive::0.98::IFTTT / Weather Alert::Automated weather or IoT trigger notification routed to Household/Property.',
+  'custom:schoolBroadcast::::::::::::04_Family_Health::Family/School-Student::Updates::archive::0.98::School Broadcast::Routine school bulletin, newsletter, BrightArrow broadcast, or ParentSquare digest routed to Updates.',
+  'custom:schoolTravel::::::::::::04_Family_Health::Family/School-Student::Promotions::archive::0.99::School Travel Solicitation::Educational travel program solicitation or informational trip meeting announcement routed to Promotions.',
+  'any::hello.springhealth.com|springhealth.com::::::::::04_Family_Health::Family/Health-Medical::Updates::archive::0.98::Benefits Broadcast::Routine employer healthcare benefit announcement or wellness newsletter.',
+  'sender+sub::ebay.com::::::delivered|out for delivery|order confirmed|shipped::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Order Tracking::Online order confirmation or package delivery tracking notice.',
+  'sender+sub::ups.com|fedex.com|usps.com|usps.gov::::::delivered|out for delivery|tracking|scheduled delivery|package|shipment::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Carrier Tracking::Carrier parcel shipment or package delivery notification.',
+  'sender+sub::amazon.com::::::ordered:|shipped:|delivered:|refund issued|auto-reloaded::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Amazon Routine::Routine Amazon e-commerce order, shipping, or refund update.',
+  'sender+sub::chase.com|bankofamerica.com|spireenergy.com|alabamapower.com|bwwb.org|message.att-mail.com|att-mail.com|citi.com|americanexpress.com|apcocu.org|rocketmortgage.com|mycirclecard.target.com::::capitalone|spectrum|citicards::statement|autopay|payment processed|payment confirmation|payment scheduled|payment received|scheduled payment|bill is ready|bill is available|e-statement|estatement::::02_Finance_Legal::Finance/Bills::Updates::archive::0.98::Routine Billing::Routine billing statement, receipt, or AutoPay confirmation.',
+  'sender+sub::bcbsal.org|bcbs.com|uhc.com|aetna.com|cigna.com|humana.com::::bluecrosspayments|unitedhealthcare::explanation of benefits|claim|claims|eob::::02_Finance_Legal::Finance/Insurance::Updates::archive::0.99::Insurance Claim / EOB Notice::Health insurance claim processing notice or explanation of benefits (EOB) notification routed to Finance/Insurance.',
+  'sender+sub::bcbsal.org|bcbs.com|uhc.com|aetna.com|cigna.com|humana.com::::bluecrosspayments|unitedhealthcare::payment|payments|premium|statement|bill|processed|receipt::::02_Finance_Legal::Finance/Bills::Updates::archive::0.99::Insurance Payment Receipt::Health insurance premium payment or processing notification routed to Finance/Bills.',
+  'sender+sub::geico.com|progressive.com|statefarm.com::::::auto pay|autopay|payment|bill|statement|policy document|id card::claim|adjuster|settlement|complaint::02_Finance_Legal::Finance/Bills::Updates::archive::0.99::Auto Insurance Routine Billing::Routine auto insurance billing, AutoPay notice, or policy document routed to Finance/Bills.',
+  'sender+sub::chase.com|discover.com::::creditwise|creditkarma|experian|equifax|transunion|myfico|capitalone::credit score|score went up|score went down|creditwise|score changed|credit alert|credit monitoring|credit report|fico score|new credit inquiry::::02_Finance_Legal::Finance/Banking::Updates::archive::0.99::Credit Score Alert::Automated credit score update or credit monitoring notification routed to Updates.',
+  'custom:bankRate::::::::::::02_Finance_Legal::Finance/Banking::Updates::archive::0.99::Bank Rate Update::Automated bank account APY or interest rate change notification routed to Finance/Banking.',
+  'any::::::::terms of service|privacy policy|terms and conditions|terms of use|user agreement|privacy notice|policy update|updates to our terms|updates to our privacy|arbitration clause|arbitration terms|consumer privacy::::::::Updates::archive::0.99::Policy / Terms Update::Commercial platform terms of service, privacy policy revision, or user agreement update routed to Updates.',
+  'sender+sub::paypal.com::::::receipt|payment|transaction|you sent|you paid|you received|authorized|usd::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Payment Receipt::Electronic payment transaction receipt or transfer confirmation.',
+  'sender+sub::homedepot.com::::::order|receipt|picked up|ready for pickup::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Home Depot store receipt or order pickup confirmation.',
+  'sender+sub::target.com|costco.com|bestbuy.com|walmart.com::::::order|receipt|ready for pickup|picked up|shipped|delivered::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Retail store order confirmation, receipt, or pickup notice.',
+  'sender+sub::ereceiptshell.com|autozone.com|advanceautoparts.com|rockauto.com::::shell e-receipt::receipt|purchase|order|fuel::::03_Vehicles::Vehicles/Maintenance::Updates::archive::0.99::Vehicle Fuel/Maintenance Receipt::Automated vehicle fuel purchase receipt or parts order confirmation routed to Vehicles/Maintenance.',
+  'any::nytimes.com|nextdoor.com|substack.com|redditmail.com|daily.therundown.ai|therundown.ai|mail.instagram.com|instagram.com|facebookmail.com|linkedin.com|pinterest.com|quora.com|youtube.com|twitter.com|x.com::::dougforalabama|ossoff|the passion translation|aibreakfast::::::::::Social::archive::0.98::News/Newsletter/Social::Routine media newsletter, Substack digest, social media alert, or political appeal.',
 ]
 
-const SCHOOL_BROADCAST_TERMS_ = [
-  'weekly',
-  'newsletter',
-  'bulletin',
-  'school update',
-  'campus update',
-  'district update',
-  'bcs update',
-  'lions update',
-  'digest',
-  'progress is ready',
-  'lunch',
-  'menu',
-  'portraits',
-  'news',
-  'noteworthy',
-  'announcement',
-  'athletics',
-  'e learning',
-  'e-learning',
-  'report card update',
-  'trunk or treat',
-  'spirit week',
-  'pto',
-  'pta',
-  'open house',
-  'picture day',
-  'fall festival',
-  'spring festival',
-  'school announcement',
-  'tryouts',
-  'tryout',
-  'try-outs',
-  'try-out',
-  'auditions',
-  'audition',
-  'team tryouts',
-  'absent',
-  'attendance',
-  'tardy',
-  'tuition',
-  'billing statement',
-  'assignment posted',
-  'new assignment',
-  'grade updated',
-  'score published',
-  'family portal',
-  'parent portal',
-]
-
-const CAREER_SUBJECT_TERMS_ = [
-  'employment agreement',
-  'employment contract',
-  'offer letter',
-  'job offer',
-  'employment offer',
-  'terms of employment',
-  'independent contractor agreement',
-  'restrictive covenant',
-  'confidentiality agreement',
-  'interview confirmation',
-  'interview invitation',
-  'invitation to interview',
-  'interview with ',
-  'schedule an interview',
-  'recruiter screen',
-  'phone screen',
-]
-
-const CAREER_SNIPPET_TERMS_ = [
-  'employment agreement',
-  'offer of employment',
-  'terms of employment',
-  'pleased to offer you the position',
-  'pleased to offer you',
-  'pleased to confirm our offer',
-  'congratulations on your offer',
-  'employment document',
-  'restrictive covenants agreement',
-]
-
-const DETERMINISTIC_RULES_ = [
-  {
-    match: function (ctx) {
-      return ctx.subLower.indexOf('your day ahead') !== -1
-    },
-    domain: '01_Household',
-    subLabel: 'Household/Property',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary: 'Automated daily agenda digest routed to Updates.',
-    reasoning: 'Daily Digest',
-  },
-  {
-    match: function (ctx) {
-      return (
-        (matchesSenderDomain_(ctx.sender, [
-          'amazon.com',
-          'hp.com',
-          'brother.com',
-          'canon.com',
-          'epson.com',
-        ]) ||
-          matchesSenderAddress_(ctx.sender, [
-            'auto-reorder@amazon.com',
-            'dash@amazon.com',
-          ]) ||
-          ctx.sLower.indexOf('instantink') !== -1) &&
-        containsAny_(ctx.subLower, [
-          'time to order the',
-          'time to reorder',
-          'smart reorder',
-          'auto-reorder',
-          'replenishment',
-          'low ink',
-          'ink alert',
-          'toner low',
-          'toner alert',
-          'toner for your',
-          'replacement filter',
-          'reorder your',
-        ])
-      )
-    },
-    domain: '01_Household',
-    subLabel: 'Household/Supplies',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Automated smart reorder or consumable replenishment alert routed to Updates.',
-    reasoning: 'Smart Reorder',
-  },
-  {
-    match: function (ctx) {
-      return (
-        matchesSenderDomain_(ctx.sender, [
-          'broodminder.com',
-          'mybroodminder.com',
-        ]) ||
-        containsAny_(ctx.sLower, ['broodminder', 'mybroodminder']) ||
-        containsAny_(ctx.subLower, [
-          'hive alert',
-          'events in your apiaries',
-          'events in your apiary',
-          'event in your apiaries',
-          'event in your apiary',
-          'apiary alert',
-          'apiary event',
-        ])
-      )
-    },
-    domain: '07_Community_NonProfit',
-    subLabel: 'Projects/Telemetry',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Automated hive and apiary telemetry alert routed to Projects/Telemetry.',
-    reasoning: 'BroodMinder Telemetry',
-  },
-  {
-    match: function (ctx) {
-      return (
-        matchesSenderDomain_(ctx.sender, ['qnap.com']) ||
-        containsAny_(ctx.sLower, ['qts notification', 'notificationcenter']) ||
-        containsAny_(ctx.subLower, [
-          '[qnap',
-          'qts notification',
-          'qvr pro',
-          'qulog',
-        ])
-      )
-    },
-    domain: '05_Tech_Infrastructure',
-    subLabel: 'Tech/Alerts',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'QNAP NAS system health, RAID, backup, or QVR surveillance telemetry alert routed to Tech/Alerts.',
-    reasoning: 'QNAP Telemetry',
-  },
-  {
-    match: function (ctx) {
-      return (
-        (matchesSenderDomain_(ctx.sender, ['ui.com', 'ubnt.com']) ||
-          ctx.subLower.indexOf('unifi') !== -1) &&
-        !containsAny_(ctx.subLower, [
-          'verification code',
-          'mfa',
-          'one-time',
-          'security code',
-        ])
-      )
-    },
-    domain: '05_Tech_Infrastructure',
-    subLabel: 'Tech/Alerts',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'UniFi Dream Machine or network infrastructure alert routed to Tech/Alerts.',
-    reasoning: 'UniFi Telemetry',
-  },
-  {
-    match: function (ctx) {
-      return (
-        matchesSenderDomain_(ctx.sender, [
-          'nabucasa.com',
-          'home-assistant.io',
-        ]) || ctx.subLower.indexOf('home assistant') !== -1
-      )
-    },
-    domain: '05_Tech_Infrastructure',
-    subLabel: 'Tech/Alerts',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Home Assistant or Nabu Casa cloud telemetry/subscription alert routed to Tech/Alerts.',
-    reasoning: 'Home Assistant Telemetry',
-  },
-  {
-    match: function (ctx) {
-      return (
-        matchesSenderDomain_(ctx.sender, [
-          'ignite-hope.org',
-          'helpingoneguy.com',
-          'charitywater.org',
-          'compassion.com',
-          'worldvision.org',
-        ]) ||
-        containsAny_(ctx.subLower, ['ironmen', 'iron men']) ||
-        (containsAny_(ctx.sLower, ['newsletter', 'update', 'impact']) &&
-          containsAny_(ctx.subLower, [
-            'impact update',
-            'ministry update',
-            'community update',
-          ]))
-      )
-    },
-    domain: '07_Community_NonProfit',
-    subLabel: 'NonProfit/General',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.98,
-    summary:
-      'Community non-profit organization newsletter, Bible study digest, or project impact update routed to Updates.',
-    reasoning: 'NonProfit Impact Newsletter',
-  },
-  {
-    match: function (ctx) {
-      return matchesSenderDomain_(ctx.sender, ['linear.app'])
-    },
-    domain: '05_Tech_Infrastructure',
-    subLabel: 'Tech/Alerts',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Linear task and project notification digest routed to Tech/Alerts.',
-    reasoning: 'Linear Alert',
-  },
-  {
-    match: function (ctx) {
-      return (
-        matchesSenderDomain_(ctx.sender, [
-          'notifications.cubic.dev',
-          'cubic.dev',
-        ]) || ctx.sLower.indexOf('cubic') !== -1
-      )
-    },
-    domain: '05_Tech_Infrastructure',
-    subLabel: 'Tech/Alerts',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary: 'Cubic AI automated code review notice routed to Tech/Alerts.',
-    reasoning: 'Cubic Code Review',
-  },
-  {
-    match: function (ctx) {
-      return matchesSenderAddress_(ctx.sender, ['notifications@github.com'])
-    },
-    domain: '05_Tech_Infrastructure',
-    subLabel: 'Tech/Alerts',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary: 'GitHub CI/CD workflow run or notification routed to Tech/Alerts.',
-    reasoning: 'GitHub Alert',
-  },
-  {
-    match: function (ctx) {
-      return (
-        matchesSenderDomain_(ctx.sender, [
-          'sonarcloud.io',
-          'sentry.io',
-          'vercel.com',
-        ]) ||
-        matchesSenderAddress_(ctx.sender, [
-          'noreply-apps-scripts-notifications@google.com',
-        ])
-      )
-    },
-    domain: '05_Tech_Infrastructure',
-    subLabel: 'Tech/Alerts',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'CI/CD code quality, error monitoring, or deployment alert routed to Tech/Alerts.',
-    reasoning: 'Developer Monitoring Alert',
-  },
-  {
-    match: function (ctx) {
-      return matchesSenderAddress_(ctx.sender, [
-        'googleaistudio-noreply@google.com',
-      ])
-    },
-    domain: '05_Tech_Infrastructure',
-    subLabel: 'Tech/Alerts',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Google AI Studio API quota, model deprecation, or project update routed to Tech/Alerts.',
-    reasoning: 'Google AI Studio Alert',
-  },
-  {
-    match: function (ctx) {
-      return matchesSenderDomain_(ctx.sender, [
-        'updates.codeant.ai',
-        'codeant.ai',
-      ])
-    },
-    domain: null,
-    subLabel: null,
-    category: 'Promotions',
-    action: 'archive',
-    confidence: 0.98,
-    summary:
-      'Developer tooling promotional or product feature announcement routed to Promotions.',
-    reasoning: 'DevTool Promo',
-  },
-  {
-    match: function (ctx) {
-      return matchesSenderAddress_(ctx.sender, [
-        'calendar-notification@google.com',
-      ])
-    },
-    domain: '01_Household',
-    subLabel: 'Household/Property',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary: 'Google Calendar event reminder notification routed to Updates.',
-    reasoning: 'Calendar Notification',
-  },
-  {
-    match: function (ctx) {
-      return (
-        containsAny_(ctx.subLower, [
-          'trial is ending',
-          'trial ending',
-          'trial will expire',
-          'trial expired',
-          'trial expiration',
-          'free trial is ending',
-          'free trial ends',
-        ]) ||
-        (ctx.subLower.indexOf('aws') !== -1 &&
-          containsAny_(ctx.subLower, [
-            'upgraded to a paid plan',
-            'free plan is ready',
-          ])) ||
-        ((matchesSenderDomain_(ctx.sender, [
-          'aws.com',
-          'amazonaws.com',
-          'digitalocean.com',
-          'cloudflare.com',
-          'openai.com',
-          'anthropic.com',
-          'supabase.com',
-          'neon.tech',
-        ]) ||
-          ctx.sLower.indexOf('azure') !== -1) &&
-          containsAny_(ctx.subLower, [
-            'upgraded to a paid plan',
-            'free plan is ready',
-            'free tier',
-            'startup credits',
-            'account plan',
-          ]))
-      )
-    },
-    domain: '05_Tech_Infrastructure',
-    subLabel: 'Tech/Alerts',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Cloud provider tier status, SaaS trial expiration, or account plan notification routed to Tech/Alerts.',
-    reasoning: 'SaaS / Cloud Plan Alert',
-  },
-  {
-    match: function (ctx) {
-      return (
-        matchesSenderDomain_(ctx.sender, [
-          'pypi.org',
-          'npmjs.com',
-          'docker.com',
-          'crates.io',
-        ]) || containsAny_(ctx.subLower, ['[pypi]', 'trusted publisher'])
-      )
-    },
-    domain: '05_Tech_Infrastructure',
-    subLabel: 'Tech/Alerts',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Package repository publishing, release, or trusted publisher notification routed to Tech/Alerts.',
-    reasoning: 'Package Registry Alert',
-  },
-  {
-    match: function (ctx) {
-      return containsAny_(ctx.subLower, [
-        'you shared some google account data with',
-        'google account data with',
-        'granted access to your google account',
-        'third-party access',
-        'app access granted',
-      ])
-    },
-    domain: '05_Tech_Infrastructure',
-    subLabel: 'Tech/Security',
-    category: 'Primary',
-    action: 'keep',
-    confidence: 1.0,
-    summary:
-      'Third-party application account data sharing or authorization notice preserved in Primary Inbox as security warning.',
-    reasoning: 'Third-Party Authorization Shield',
-  },
-  {
-    match: function (ctx) {
-      return containsAny_(ctx.subLower, [
-        'verification code',
-        'security code',
-        'one-time passcode',
-        'one-time password',
-        'your login code',
-        'new sign-in',
-        'signed in from a new',
-        'new device signed in',
-        'sign-in from new device',
-        'security alert for your',
-        'password changed',
-        'password reset confirmation',
-      ])
-    },
-    domain: '05_Tech_Infrastructure',
-    subLabel: 'Tech/Security',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Automated authentication verification code or device sign-in alert routed to Tech/Security.',
-    reasoning: 'Authentication/Sign-in Ping',
-  },
-  {
-    match: function (ctx) {
-      return (
-        matchesSenderDomain_(ctx.sender, [
-          'cvs.com',
-          'walgreens.com',
-          'questdiagnostics.com',
-          'labcorp.com',
-          'zocdoc.com',
-          'athenahealth.com',
-        ]) ||
-        containsAny_(ctx.sLower, ['mychart', 'cvshealth']) ||
-        containsAny_(ctx.subLower, [
-          'appointment reminder',
-          'upcoming appointment',
-          'appointment confirmation',
-          'appointment is confirmed',
-          'prescription is ready',
-          'prescription ready',
-          'refill reminder',
-          'refill confirmation',
-        ])
-      )
-    },
-    domain: '04_Family_Health',
-    subLabel: 'Family/Health-Medical',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Automated patient portal appointment reminder or pharmacy prescription status notice.',
-    reasoning: 'Healthcare/Pharmacy Alert',
-  },
-  {
-    match: function (ctx) {
-      return (
-        (matchesSenderDomain_(ctx.sender, [
-          'delta.com',
-          'southwest.com',
-          'aa.com',
-          'united.com',
-          'airbnb.com',
-          'vrbo.com',
-          'marriott.com',
-          'hilton.com',
-          'uber.com',
-          'lyft.com',
-          'waymo.com',
-        ]) ||
-          ctx.sLower.indexOf('waymo') !== -1) &&
-        containsAny_(ctx.subLower, [
-          'flight confirmation',
-          'flight status',
-          'boarding pass',
-          'check in for your flight',
-          'reservation confirmed',
-          'reservation confirmation',
-          'upcoming stay',
-          'trip with uber',
-          'ride with lyft',
-          'waymo ride',
-          'riding with waymo',
-          'receipt',
-        ])
-      )
-    },
-    domain: '01_Household',
-    subLabel: 'Household/Travel',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Travel itinerary reservation, flight check-in, or rideshare receipt.',
-    reasoning: 'Travel Confirmation',
-  },
-  {
-    match: function (ctx) {
-      return containsAny_(ctx.subLower, [
-        'how was your experience',
-        'how did we do',
-        'rate your recent',
-        'rate your experience',
-        'rate your stay',
-        'tell us what you think',
-        'take our survey',
-        'take our quick survey',
-        'quick survey',
-        'feedback requested',
-        'review your purchase',
-        'leave a review',
-        'your opinion matters',
-      ])
-    },
-    domain: null,
-    subLabel: null,
-    category: 'Promotions',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Automated post-transaction customer satisfaction feedback or survey request.',
-    reasoning: 'Customer Survey',
-  },
-  {
-    match: function (ctx) {
-      return matchesSenderDomain_(ctx.sender, ['ifttt.com', 'notify.mios.com'])
-    },
-    domain: '01_Household',
-    subLabel: 'Household/Property',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.98,
-    summary:
-      'Automated weather or IoT trigger notification routed to Household/Property.',
-    reasoning: 'IFTTT / Weather Alert',
-  },
-  {
-    match: function (ctx) {
-      const isParentSquare = matchesSenderDomain_(ctx.sender, [
-        'parentsquare.com',
-      ])
-      return (
-        ctx.isBrightArrow ||
-        ((ctx.isSchoolDomain ||
-          isParentSquare ||
-          matchesSenderAddress_(ctx.sender, ['admissions@ua.edu'])) &&
-          (ctx.isBroadcastSubject || isParentSquare))
-      )
-    },
-    domain: '04_Family_Health',
-    subLabel: 'Family/School-Student',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.98,
-    summary:
-      'Routine school bulletin, newsletter, BrightArrow broadcast, or ParentSquare digest routed to Updates.',
-    reasoning: 'School Broadcast',
-  },
-  {
-    match: function (ctx) {
-      return (
-        matchesSenderDomain_(ctx.sender, [
-          'ef.com',
-          'eftours.com',
-          'worldstrides.com',
-          'explorica.com',
-          'acis.com',
-        ]) ||
-        (containsAny_(ctx.subLower, [
-          'trip to ',
-          'school travel',
-          'educational tour',
-        ]) &&
-          containsAny_(ctx.subLower, [
-            'interest meeting',
-            'informational meeting',
-            'rsvp',
-            'enrollment discount',
-          ]))
-      )
-    },
-    domain: '04_Family_Health',
-    subLabel: 'Family/School-Student',
-    category: 'Promotions',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Educational travel program solicitation or informational trip meeting announcement routed to Promotions.',
-    reasoning: 'School Travel Solicitation',
-  },
-  {
-    match: function (ctx) {
-      return matchesSenderDomain_(ctx.sender, [
-        'hello.springhealth.com',
-        'springhealth.com',
-      ])
-    },
-    domain: '04_Family_Health',
-    subLabel: 'Family/Health-Medical',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.98,
-    summary:
-      'Routine employer healthcare benefit announcement or wellness newsletter.',
-    reasoning: 'Benefits Broadcast',
-  },
-  {
-    match: function (ctx) {
-      return (
-        matchesSenderDomain_(ctx.sender, ['ebay.com']) &&
-        containsAny_(ctx.subLower, [
-          'delivered',
-          'out for delivery',
-          'order confirmed',
-          'shipped',
-        ])
-      )
-    },
-    domain: '02_Finance_Legal',
-    subLabel: 'Finance/Purchases',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.98,
-    summary: 'Online order confirmation or package delivery tracking notice.',
-    reasoning: 'Order Tracking',
-  },
-  {
-    match: function (ctx) {
-      return (
-        matchesSenderDomain_(ctx.sender, [
-          'ups.com',
-          'fedex.com',
-          'usps.com',
-          'usps.gov',
-        ]) &&
-        containsAny_(ctx.subLower, [
-          'delivered',
-          'out for delivery',
-          'tracking',
-          'scheduled delivery',
-          'package',
-          'shipment',
-        ])
-      )
-    },
-    domain: '02_Finance_Legal',
-    subLabel: 'Finance/Purchases',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.98,
-    summary: 'Carrier parcel shipment or package delivery notification.',
-    reasoning: 'Carrier Tracking',
-  },
-  {
-    match: function (ctx) {
-      return (
-        matchesSenderDomain_(ctx.sender, ['amazon.com']) &&
-        containsAny_(ctx.subLower, [
-          'ordered:',
-          'shipped:',
-          'delivered:',
-          'refund issued',
-          'auto-reloaded',
-        ])
-      )
-    },
-    domain: '02_Finance_Legal',
-    subLabel: 'Finance/Purchases',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.98,
-    summary: 'Routine Amazon e-commerce order, shipping, or refund update.',
-    reasoning: 'Amazon Routine',
-  },
-  {
-    match: function (ctx) {
-      return (
-        (matchesSenderDomain_(ctx.sender, [
-          'chase.com',
-          'bankofamerica.com',
-          'spireenergy.com',
-          'alabamapower.com',
-          'bwwb.org',
-          'message.att-mail.com',
-          'att-mail.com',
-          'citi.com',
-          'americanexpress.com',
-          'apcocu.org',
-          'rocketmortgage.com',
-          'mycirclecard.target.com',
-        ]) ||
-          containsAny_(ctx.sLower, ['capitalone', 'spectrum', 'citicards'])) &&
-        containsAny_(ctx.subLower, [
-          'statement',
-          'autopay',
-          'payment processed',
-          'payment confirmation',
-          'payment scheduled',
-          'payment received',
-          'scheduled payment',
-          'bill is ready',
-          'bill is available',
-          'e-statement',
-          'estatement',
-        ])
-      )
-    },
-    domain: '02_Finance_Legal',
-    subLabel: 'Finance/Bills',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.98,
-    summary: 'Routine billing statement, receipt, or AutoPay confirmation.',
-    reasoning: 'Routine Billing',
-  },
-  {
-    match: function (ctx) {
-      return (
-        (matchesSenderDomain_(ctx.sender, [
-          'bcbsal.org',
-          'bcbs.com',
-          'uhc.com',
-          'aetna.com',
-          'cigna.com',
-          'humana.com',
-        ]) ||
-          containsAny_(ctx.sLower, [
-            'bluecrosspayments',
-            'unitedhealthcare',
-          ])) &&
-        containsAny_(ctx.subLower, [
-          'explanation of benefits',
-          'claim',
-          'claims',
-          'eob',
-        ])
-      )
-    },
-    domain: '02_Finance_Legal',
-    subLabel: 'Finance/Insurance',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Health insurance claim processing notice or explanation of benefits (EOB) notification routed to Finance/Insurance.',
-    reasoning: 'Insurance Claim / EOB Notice',
-  },
-  {
-    match: function (ctx) {
-      return (
-        (matchesSenderDomain_(ctx.sender, [
-          'bcbsal.org',
-          'bcbs.com',
-          'uhc.com',
-          'aetna.com',
-          'cigna.com',
-          'humana.com',
-        ]) ||
-          containsAny_(ctx.sLower, [
-            'bluecrosspayments',
-            'unitedhealthcare',
-          ])) &&
-        containsAny_(ctx.subLower, [
-          'payment',
-          'payments',
-          'premium',
-          'statement',
-          'bill',
-          'processed',
-          'receipt',
-        ])
-      )
-    },
-    domain: '02_Finance_Legal',
-    subLabel: 'Finance/Bills',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Health insurance premium payment or processing notification routed to Finance/Bills.',
-    reasoning: 'Insurance Payment Receipt',
-  },
-  {
-    match: function (ctx) {
-      return (
-        matchesSenderDomain_(ctx.sender, [
-          'geico.com',
-          'progressive.com',
-          'statefarm.com',
-        ]) &&
-        !containsAny_(ctx.subLower, [
-          'claim',
-          'adjuster',
-          'settlement',
-          'complaint',
-        ]) &&
-        containsAny_(ctx.subLower, [
-          'auto pay',
-          'autopay',
-          'payment',
-          'bill',
-          'statement',
-          'policy document',
-          'id card',
-        ])
-      )
-    },
-    domain: '02_Finance_Legal',
-    subLabel: 'Finance/Bills',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Routine auto insurance billing, AutoPay notice, or policy document routed to Finance/Bills.',
-    reasoning: 'Auto Insurance Routine Billing',
-  },
-  {
-    match: function (ctx) {
-      return (
-        (matchesSenderDomain_(ctx.sender, ['chase.com', 'discover.com']) ||
-          containsAny_(ctx.sLower, [
-            'creditwise',
-            'creditkarma',
-            'experian',
-            'equifax',
-            'transunion',
-            'myfico',
-            'capitalone',
-          ])) &&
-        containsAny_(ctx.subLower, [
-          'credit score',
-          'score went up',
-          'score went down',
-          'creditwise',
-          'score changed',
-          'credit alert',
-          'credit monitoring',
-          'credit report',
-          'fico score',
-          'new credit inquiry',
-        ])
-      )
-    },
-    domain: '02_Finance_Legal',
-    subLabel: 'Finance/Banking',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Automated credit score update or credit monitoring notification routed to Updates.',
-    reasoning: 'Credit Score Alert',
-  },
-  {
-    match: function (ctx) {
-      return (
-        containsAny_(ctx.subLower, [
-          'higher apy',
-          'apy has increased',
-          'apy increased',
-          'earns a higher apy',
-          'rate increase',
-          'rate decrease',
-          'rate update',
-          'rates are changing',
-          'yield update',
-          'interest rate increase',
-          'savings rate increase',
-          'annual percentage yield',
-        ]) ||
-        (ctx.subLower.indexOf('rate change') !== -1 &&
-          containsAny_(ctx.subLower, ['apy', 'cash', 'savings', 'interest']))
-      )
-    },
-    domain: '02_Finance_Legal',
-    subLabel: 'Finance/Banking',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Automated bank account APY or interest rate change notification routed to Finance/Banking.',
-    reasoning: 'Bank Rate Update',
-  },
-  {
-    match: function (ctx) {
-      return containsAny_(ctx.subLower, [
-        'terms of service',
-        'privacy policy',
-        'terms and conditions',
-        'terms of use',
-        'user agreement',
-        'privacy notice',
-        'policy update',
-        'updates to our terms',
-        'updates to our privacy',
-        'arbitration clause',
-        'arbitration terms',
-        'consumer privacy',
-      ])
-    },
-    domain: null,
-    subLabel: null,
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Commercial platform terms of service, privacy policy revision, or user agreement update routed to Updates.',
-    reasoning: 'Policy / Terms Update',
-  },
-  {
-    match: function (ctx) {
-      return (
-        matchesSenderDomain_(ctx.sender, ['paypal.com']) &&
-        containsAny_(ctx.subLower, [
-          'receipt',
-          'payment',
-          'transaction',
-          'you sent',
-          'you paid',
-          'you received',
-          'authorized',
-          'usd',
-        ])
-      )
-    },
-    domain: '02_Finance_Legal',
-    subLabel: 'Finance/Purchases',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.98,
-    summary: 'Electronic payment transaction receipt or transfer confirmation.',
-    reasoning: 'Payment Receipt',
-  },
-  {
-    match: function (ctx) {
-      return (
-        matchesSenderDomain_(ctx.sender, ['homedepot.com']) &&
-        containsAny_(ctx.subLower, [
-          'order',
-          'receipt',
-          'picked up',
-          'ready for pickup',
-        ])
-      )
-    },
-    domain: '02_Finance_Legal',
-    subLabel: 'Finance/Purchases',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.98,
-    summary: 'Home Depot store receipt or order pickup confirmation.',
-    reasoning: 'Retail Order / Receipt',
-  },
-  {
-    match: function (ctx) {
-      return (
-        matchesSenderDomain_(ctx.sender, [
-          'target.com',
-          'costco.com',
-          'bestbuy.com',
-          'walmart.com',
-        ]) &&
-        containsAny_(ctx.subLower, [
-          'order',
-          'receipt',
-          'ready for pickup',
-          'picked up',
-          'shipped',
-          'delivered',
-        ])
-      )
-    },
-    domain: '02_Finance_Legal',
-    subLabel: 'Finance/Purchases',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.98,
-    summary: 'Retail store order confirmation, receipt, or pickup notice.',
-    reasoning: 'Retail Order / Receipt',
-  },
-  {
-    match: function (ctx) {
-      return (
-        (matchesSenderDomain_(ctx.sender, [
-          'ereceiptshell.com',
-          'autozone.com',
-          'advanceautoparts.com',
-          'rockauto.com',
-        ]) ||
-          ctx.sLower.indexOf('shell e-receipt') !== -1) &&
-        containsAny_(ctx.subLower, ['receipt', 'purchase', 'order', 'fuel'])
-      )
-    },
-    domain: '03_Vehicles',
-    subLabel: 'Vehicles/Maintenance',
-    category: 'Updates',
-    action: 'archive',
-    confidence: 0.99,
-    summary:
-      'Automated vehicle fuel purchase receipt or parts order confirmation routed to Vehicles/Maintenance.',
-    reasoning: 'Vehicle Fuel/Maintenance Receipt',
-  },
-  {
-    match: function (ctx) {
-      return (
-        matchesSenderDomain_(ctx.sender, [
-          'nytimes.com',
-          'nextdoor.com',
-          'substack.com',
-          'redditmail.com',
-          'daily.therundown.ai',
-          'therundown.ai',
-          'mail.instagram.com',
-          'instagram.com',
-          'facebookmail.com',
-          'linkedin.com',
-          'pinterest.com',
-          'quora.com',
-          'youtube.com',
-          'twitter.com',
-          'x.com',
-        ]) ||
-        containsAny_(ctx.sLower, [
-          'dougforalabama',
-          'ossoff',
-          'the passion translation',
-          'aibreakfast',
-        ])
-      )
-    },
-    domain: null,
-    subLabel: null,
-    category: 'Social',
-    action: 'archive',
-    confidence: 0.98,
-    summary:
-      'Routine media newsletter, Substack digest, social media alert, or political appeal.',
-    reasoning: 'News/Newsletter/Social',
-  },
-]
+function evaluateDeterministicRuleSpec_(specStr, ctx, subject) {
+  const parts = specStr.split('::')
+  const mode = parts[0]
+  const excludeSubject = parts[5]
+  if (excludeSubject && containsAny_(ctx.subLower, excludeSubject)) {
+    return null
+  }
+  let matched = false
+  if (mode.indexOf('custom:') === 0) {
+    matched = CUSTOM_RULE_MATCHERS_[mode.slice(7)](ctx)
+  } else {
+    const senderHit =
+      matchesSenderDomain_(ctx.sender, parts[1]) ||
+      matchesSenderAddress_(ctx.sender, parts[2]) ||
+      containsAny_(ctx.sLower, parts[3])
+    const subjectHit = containsAny_(ctx.subLower, parts[4])
+    matched =
+      mode === 'sender+sub' ? senderHit && subjectHit : senderHit || subjectHit
+  }
+  if (!matched) return null
+  return makeDeterministicResult_(
+    parts[6] || null,
+    parts[7] || null,
+    parts[8],
+    parts[9],
+    Number.parseFloat(parts[10]),
+    subject,
+    parts[12],
+    parts[11]
+  )
+}
 
 /**
  * Fast-path deterministic rule-based classifier.
@@ -2443,20 +1515,13 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     isBrightArrow: isBrightArrow,
     isBroadcastSubject: isBroadcastSubject,
   }
-  for (let r = 0; r < DETERMINISTIC_RULES_.length; r++) {
-    const rule = DETERMINISTIC_RULES_[r]
-    if (rule.match(ruleContext)) {
-      return makeDeterministicResult_(
-        rule.domain,
-        rule.subLabel,
-        rule.category,
-        rule.action,
-        rule.confidence,
-        subject,
-        rule.summary,
-        rule.reasoning
-      )
-    }
+  for (let r = 0; r < DETERMINISTIC_RULE_SPECS_.length; r++) {
+    const ruleHit = evaluateDeterministicRuleSpec_(
+      DETERMINISTIC_RULE_SPECS_[r],
+      ruleContext,
+      subject
+    )
+    if (ruleHit) return ruleHit
   }
 
   // Retail & E-Commerce Marketing Blasts
@@ -2471,41 +1536,20 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     /\b(sale|\d+%\s*off|deal of the day|daily deals?|clearance|limited time offer|coupon|promo code|shop now|shop today|exclusive offer|special offer|flash sale|black friday|cyber monday|memorial day sale|labor day sale|presidents day sale|discount code|save \$\d+|save up to|free shipping|buy one get one|bogo|don't miss out|last chance to save|doorbusters?|rewards balance|earn bonus points|member exclusive)\b/i.test(
       subject || ''
     )
-  const isNonTransactional = !containsAny_(subLower, [
-    'order',
-    'receipt',
-    'invoice',
-    'statement',
-    'autopay',
-    'tracking',
-    'shipped',
-    'delivered',
-  ])
+  const isNonTransactional = !containsAny_(
+    subLower,
+    'order|receipt|invoice|statement|autopay|tracking|shipped|delivered'
+  )
 
   const isRetailVendor =
-    matchesSenderDomain_(sender, [
-      'target.com',
-      'costco.com',
-      'bestbuy.com',
-      'walmart.com',
-      'doordash.com',
-      'kohls.com',
-      'samsclub.com',
-      'em1.cloudflare.com',
-    ]) ||
-    containsAny_(sLower, [
-      'lowes',
-      'mannlake',
-      'urotuning',
-      'ray-ban',
-      'americanmeadows',
-      'foxhound',
-      'bhphotovideo',
-      'starbucks',
-      'birminghamhomebuyers',
-      'trailerparts',
-      'hillco',
-    ])
+    matchesSenderDomain_(
+      sender,
+      'target.com|costco.com|bestbuy.com|walmart.com|doordash.com|kohls.com|samsclub.com|em1.cloudflare.com'
+    ) ||
+    containsAny_(
+      sLower,
+      'lowes|mannlake|urotuning|ray-ban|americanmeadows|foxhound|bhphotovideo|starbucks|birminghamhomebuyers|trailerparts|hillco'
+    )
 
   if (
     (isRetailVendor && isNonTransactional) ||
@@ -3942,6 +2986,7 @@ const SUBLABEL_TO_FOLDER_MAP = {
 
   // 07_Community_NonProfit
   'community/nonprofit': 'Community_BOD',
+  'nonprofit/general': 'Community_BOD',
   'projects/charity': 'Community_BOD',
   'community/bod': 'Community_BOD',
   'projects/telemetry': 'Projects_Telemetry',
@@ -5084,6 +4129,11 @@ function persistCanonicalAttachmentsToDrive(
             ': ' +
             saveErr.message
         )
+        Object.defineProperty(savedFiles, 'hadErrors', {
+          value: true,
+          enumerable: false,
+          configurable: true,
+        })
       }
     })
   })
@@ -5126,7 +4176,11 @@ function resolveCanonicalDomainFromLabels(rawLabels, canonicalDomains) {
     if (lName.startsWith('family/')) return '04_Family_Health'
     if (lName.startsWith('tech/')) return '05_Tech_Infrastructure'
     if (lName.startsWith('work/')) return '06_Work_Career'
-    if (lName.startsWith('community/') || lName.startsWith('projects/'))
+    if (
+      lName.startsWith('community/') ||
+      lName.startsWith('projects/') ||
+      lName.startsWith('nonprofit/')
+    )
       return '07_Community_NonProfit'
   }
   return null
@@ -5175,7 +4229,7 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
   }
 
   const defaultCanonicalQuery =
-    'has:attachment (label:01_Household OR label:02_Finance_Legal OR label:03_Vehicles OR label:04_Family_Health OR label:05_Tech_Infrastructure OR label:06_Work_Career OR label:07_Community_NonProfit OR label:Household OR label:Finance OR label:Vehicles OR label:Family OR label:Tech OR label:Work OR label:Community)'
+    'has:attachment (label:01_Household OR label:02_Finance_Legal OR label:03_Vehicles OR label:04_Family_Health OR label:05_Tech_Infrastructure OR label:06_Work_Career OR label:07_Community_NonProfit OR label:Household OR label:Finance OR label:Vehicles OR label:Family OR label:Tech OR label:Work OR label:Community OR label:Projects OR label:NonProfit)'
   const searchQuery = opts.query || defaultCanonicalQuery
 
   let threads = []
@@ -6511,10 +5565,15 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
         ' unprocessed thread(s).'
     )
 
+    const retryLabelName = config.retryLabel || 'AI/Needs-Retry'
+    const manualReviewLabelName = config.manualReviewLabel || 'AI/Manual-Review'
+
     let isSecondarySweep = false
     if (threads.length === 0) {
       // Secondary sweep: Look for unread unstarred inbox threads to realign non-Primary items
-      const sweepQuery = 'in:inbox is:unread -is:starred -from:me'
+      const sweepQuery =
+        'in:inbox is:unread -is:starred -from:me -label:' +
+        manualReviewLabelName
       const rawSweepThreads = gmail.search(sweepQuery, 0, 15) || []
       threads = sortThreadsByLastMessageDate_(rawSweepThreads)
       isSecondarySweep = true
@@ -6533,8 +5592,6 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
       gmail,
       services.Gmail
     )
-    const retryLabelName = config.retryLabel || 'AI/Needs-Retry'
-    const manualReviewLabelName = config.manualReviewLabel || 'AI/Manual-Review'
     const retryLabel = ensureGmailLabel(retryLabelName, gmail, services.Gmail)
     const manualReviewLabel = ensureGmailLabel(
       manualReviewLabelName,
@@ -6632,6 +5689,7 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
       const isAlreadyProcessed =
         config.processedLabel &&
         threadLabels.indexOf(config.processedLabel) !== -1
+      const isManualReview = threadLabels.indexOf(manualReviewLabelName) !== -1
 
       let classification = deterministicRuleClassify_(
         sender,
@@ -6644,6 +5702,7 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
       if (
         !classification &&
         !remoteQuotaExhausted &&
+        !isManualReview &&
         (!isSecondarySweep || !isAlreadyProcessed)
       ) {
         const classifyFn =
@@ -6700,6 +5759,18 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
             config,
             services
           )
+          if (savedAttachments && savedAttachments.hadErrors) {
+            const attRetryCount = incrementThreadRetryCount_(thread, cache)
+            if (attRetryCount >= 5 && manualReviewLabel) {
+              thread.addLabel(manualReviewLabel)
+            } else if (retryLabel) {
+              thread.addLabel(retryLabel)
+            }
+            console.warn(
+              '[processEmailsWithAiClassifier] Attachment persistence failed; queued thread for retry without marking Processed.'
+            )
+            continue
+          }
 
           if (config.githubToken) {
             try {

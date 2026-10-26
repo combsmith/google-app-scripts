@@ -3517,7 +3517,9 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             'in:inbox -label:Processed'
           )
           const sweepQuery = mockGmail.search.mock.calls[1][0]
-          expect(sweepQuery).toBe('in:inbox is:unread -is:starred -from:me')
+          expect(sweepQuery).toBe(
+            'in:inbox is:unread -is:starred -from:me -label:AI/Manual-Review'
+          )
         })
 
         test('gracefully skips empty threads without throwing TypeError', () => {
@@ -5585,6 +5587,89 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             expect(threads[0].moveToTrash).not.toHaveBeenCalled()
             expect(trashed).toEqual(['th-high-trash'])
             expect(markedRead).toEqual(['th-high-trash'])
+
+            // NonProfit/General resolution and attachment persistence failure retry queuing
+            expect(
+              mod.resolveCanonicalDomainFromLabels(['NonProfit/General'])
+            ).toBe('07_Community_NonProfit')
+            expect(
+              mod.resolveTaxonomySubfolderName(
+                '07_Community_NonProfit',
+                'NonProfit/General'
+              )
+            ).toBe('Community_BOD')
+
+            const attFailLabels1 = []
+            const attFailLabels2 = []
+            const failingDriveApp = {
+              getRootFolder: () => ({
+                getFoldersByName: () => ({
+                  hasNext: () => true,
+                  next: () => ({
+                    getFoldersByName: () => ({
+                      hasNext: () => true,
+                      next: () => ({
+                        getFilesByName: () => ({ hasNext: () => false }),
+                        createFile: () => {
+                          throw new Error('Drive quota exceeded')
+                        },
+                      }),
+                    }),
+                  }),
+                }),
+              }),
+            }
+            const makeAttThread = (id, sink) => ({
+              getId: () => id,
+              getLabels: () => [],
+              getMessages: () => [
+                {
+                  getFrom: () => 'billing@charitywater.org',
+                  getSubject: () => 'Annual Receipt',
+                  getPlainBody: () => 'Body',
+                  getAttachments: () => [
+                    {
+                      getName: () => 'receipt.pdf',
+                      getContentType: () => 'application/pdf',
+                      getSize: () => 2048,
+                      getBytes: () => [1, 2, 3, 4],
+                    },
+                  ],
+                },
+              ],
+              addLabel: (l) => sink.push(l.getName()),
+              moveToArchive: jest.fn(),
+            })
+            const retryCounts = { 'retry_count_th-att-fail-5': '4' }
+            mod.processEmailsWithAiClassifier(
+              {
+                geminiApiKey: 'test-key',
+                userAccountEmail: 'me@example.com',
+                processedLabel: 'Processed',
+                retryLabel: 'AI/Needs-Retry',
+                manualReviewLabel: 'AI/Manual-Review',
+              },
+              {
+                GmailApp: {
+                  search: () => [
+                    makeAttThread('th-att-fail-1', attFailLabels1),
+                    makeAttThread('th-att-fail-5', attFailLabels2),
+                  ],
+                  getUserLabelByName: (n) => ({ getName: () => n }),
+                },
+                DriveApp: failingDriveApp,
+                cache: {
+                  get: (k) => retryCounts[k] || null,
+                  put: (k, v) => {
+                    retryCounts[k] = v
+                  },
+                },
+              }
+            )
+            expect(attFailLabels1).toContain('AI/Needs-Retry')
+            expect(attFailLabels1).not.toContain('Processed')
+            expect(attFailLabels2).toContain('AI/Manual-Review')
+            expect(attFailLabels2).not.toContain('Processed')
           })
         })
       })
