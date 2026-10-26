@@ -742,6 +742,75 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     }
   }
 
+  // Machine & Hardware Telemetry (QNAP NAS, UniFi / Ubiquiti, Home Assistant / Nabu Casa)
+  if (
+    sLower.indexOf('qnap.com') !== -1 ||
+    sLower.indexOf('qts notification') !== -1 ||
+    sLower.indexOf('notificationcenter') !== -1 ||
+    subLower.indexOf('[qnap') !== -1 ||
+    subLower.indexOf('qts notification') !== -1 ||
+    subLower.indexOf('qvr pro') !== -1 ||
+    subLower.indexOf('qulog') !== -1
+  ) {
+    return {
+      canonicalDomain: '05_Tech_Infrastructure',
+      canonical_label: '05_Tech_Infrastructure',
+      subLabel: 'Tech/Alerts',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary:
+        'QNAP NAS system health, RAID, backup, or QVR surveillance telemetry alert routed to Tech/Alerts.',
+      reasoning: 'QNAP Telemetry',
+    }
+  }
+
+  if (
+    sLower.indexOf('ui.com') !== -1 ||
+    sLower.indexOf('ubnt.com') !== -1 ||
+    subLower.indexOf('unifi') !== -1
+  ) {
+    var isMfa =
+      subLower.indexOf('verification code') !== -1 ||
+      subLower.indexOf('mfa') !== -1 ||
+      subLower.indexOf('one-time') !== -1 ||
+      subLower.indexOf('security code') !== -1
+    if (!isMfa) {
+      return {
+        canonicalDomain: '05_Tech_Infrastructure',
+        canonical_label: '05_Tech_Infrastructure',
+        subLabel: 'Tech/Alerts',
+        category: 'Updates',
+        action: 'archive',
+        confidence: 0.99,
+        title: subject,
+        summary:
+          'UniFi Dream Machine or network infrastructure alert routed to Tech/Alerts.',
+        reasoning: 'UniFi Telemetry',
+      }
+    }
+  }
+
+  if (
+    sLower.indexOf('nabucasa.com') !== -1 ||
+    sLower.indexOf('home-assistant.io') !== -1 ||
+    subLower.indexOf('home assistant') !== -1
+  ) {
+    return {
+      canonicalDomain: '05_Tech_Infrastructure',
+      canonical_label: '05_Tech_Infrastructure',
+      subLabel: 'Tech/Alerts',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary:
+        'Home Assistant or Nabu Casa cloud telemetry/subscription alert routed to Tech/Alerts.',
+      reasoning: 'Home Assistant Telemetry',
+    }
+  }
+
   // Non-Profit & Charity Community Newsletters & Impact Updates
   if (
     sLower.indexOf('ignite-hope.org') !== -1 ||
@@ -837,6 +906,52 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       summary:
         'CI/CD code quality, error monitoring, or deployment alert routed to Tech/Alerts.',
       reasoning: 'Developer Monitoring Alert',
+    }
+  }
+
+  // Developer & Cloud AI Platform Updates & Developer Tooling Promos
+  if (sLower.indexOf('googleaistudio-noreply@google.com') !== -1) {
+    return {
+      canonicalDomain: '05_Tech_Infrastructure',
+      canonical_label: '05_Tech_Infrastructure',
+      subLabel: 'Tech/Alerts',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary:
+        'Google AI Studio API quota, model deprecation, or project update routed to Tech/Alerts.',
+      reasoning: 'Google AI Studio Alert',
+    }
+  }
+  if (
+    sLower.indexOf('updates.codeant.ai') !== -1 ||
+    sLower.indexOf('codeant.ai') !== -1
+  ) {
+    return {
+      canonicalDomain: null,
+      canonical_label: null,
+      subLabel: null,
+      category: 'Promotions',
+      action: 'archive',
+      confidence: 0.98,
+      title: subject,
+      summary:
+        'Developer tooling promotional or product feature announcement routed to Promotions.',
+      reasoning: 'DevTool Promo',
+    }
+  }
+  if (sLower.indexOf('calendar-notification@google.com') !== -1) {
+    return {
+      canonicalDomain: '01_Household',
+      canonical_label: '01_Household',
+      subLabel: 'Household/Property',
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary: 'Google Calendar event reminder notification routed to Updates.',
+      reasoning: 'Calendar Notification',
     }
   }
 
@@ -999,7 +1114,9 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     sLower.indexOf('marriott.com') !== -1 ||
     sLower.indexOf('hilton.com') !== -1 ||
     sLower.indexOf('uber.com') !== -1 ||
-    sLower.indexOf('lyft.com') !== -1
+    sLower.indexOf('lyft.com') !== -1 ||
+    sLower.indexOf('waymo.com') !== -1 ||
+    sLower.indexOf('waymo') !== -1
   ) {
     if (
       subLower.indexOf('flight confirmation') !== -1 ||
@@ -1011,6 +1128,8 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       subLower.indexOf('upcoming stay') !== -1 ||
       subLower.indexOf('trip with uber') !== -1 ||
       subLower.indexOf('ride with lyft') !== -1 ||
+      subLower.indexOf('waymo ride') !== -1 ||
+      subLower.indexOf('riding with waymo') !== -1 ||
       subLower.indexOf('receipt') !== -1
     ) {
       return {
@@ -1267,6 +1386,26 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     sLower.indexOf('humana.com') !== -1
   ) {
     if (
+      subLower.indexOf('explanation of benefits') !== -1 ||
+      subLower.indexOf('claim') !== -1 ||
+      subLower.indexOf('claims') !== -1 ||
+      subLower.indexOf('eob') !== -1
+    ) {
+      return {
+        canonicalDomain: '02_Finance_Legal',
+        canonical_label: '02_Finance_Legal',
+        subLabel: 'Finance/Insurance',
+        category: 'Updates',
+        action: 'archive',
+        confidence: 0.99,
+        title: subject,
+        summary:
+          'Health insurance claim processing notice or explanation of benefits (EOB) notification routed to Finance/Insurance.',
+        reasoning: 'Insurance Claim / EOB Notice',
+      }
+    }
+
+    if (
       subLower.indexOf('payment') !== -1 ||
       subLower.indexOf('payments') !== -1 ||
       subLower.indexOf('premium') !== -1 ||
@@ -1286,6 +1425,43 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
         summary:
           'Health insurance premium payment or processing notification routed to Finance/Bills.',
         reasoning: 'Insurance Payment Receipt',
+      }
+    }
+  }
+
+  // Auto Insurance Routine Billing (GEICO, Progressive, State Farm) with Claim Shield
+  if (
+    sLower.indexOf('geico.com') !== -1 ||
+    sLower.indexOf('progressive.com') !== -1 ||
+    sLower.indexOf('statefarm.com') !== -1
+  ) {
+    var isInsuranceClaim =
+      subLower.indexOf('claim') !== -1 ||
+      subLower.indexOf('adjuster') !== -1 ||
+      subLower.indexOf('settlement') !== -1 ||
+      subLower.indexOf('complaint') !== -1
+    if (!isInsuranceClaim) {
+      if (
+        subLower.indexOf('auto pay') !== -1 ||
+        subLower.indexOf('autopay') !== -1 ||
+        subLower.indexOf('payment') !== -1 ||
+        subLower.indexOf('bill') !== -1 ||
+        subLower.indexOf('statement') !== -1 ||
+        subLower.indexOf('policy document') !== -1 ||
+        subLower.indexOf('id card') !== -1
+      ) {
+        return {
+          canonicalDomain: '02_Finance_Legal',
+          canonical_label: '02_Finance_Legal',
+          subLabel: 'Finance/Bills',
+          category: 'Updates',
+          action: 'archive',
+          confidence: 0.99,
+          title: subject,
+          summary:
+            'Routine auto insurance billing, AutoPay notice, or policy document routed to Finance/Bills.',
+          reasoning: 'Auto Insurance Routine Billing',
+        }
       }
     }
   }
@@ -1336,6 +1512,10 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     subLower.indexOf('apy increased') !== -1 ||
     subLower.indexOf('earns a higher apy') !== -1 ||
     subLower.indexOf('rate increase') !== -1 ||
+    subLower.indexOf('rate decrease') !== -1 ||
+    subLower.indexOf('rate update') !== -1 ||
+    subLower.indexOf('rates are changing') !== -1 ||
+    subLower.indexOf('yield update') !== -1 ||
     subLower.indexOf('interest rate increase') !== -1 ||
     subLower.indexOf('savings rate increase') !== -1 ||
     subLower.indexOf('annual percentage yield') !== -1 ||
@@ -1356,6 +1536,35 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       summary:
         'Automated bank account APY or interest rate change notification routed to Finance/Banking.',
       reasoning: 'Bank Rate Update',
+    }
+  }
+
+  // Commercial Terms of Service, Privacy Policy & User Agreement Updates
+  if (
+    subLower.indexOf('terms of service') !== -1 ||
+    subLower.indexOf('privacy policy') !== -1 ||
+    subLower.indexOf('terms and conditions') !== -1 ||
+    subLower.indexOf('terms of use') !== -1 ||
+    subLower.indexOf('user agreement') !== -1 ||
+    subLower.indexOf('privacy notice') !== -1 ||
+    subLower.indexOf('policy update') !== -1 ||
+    subLower.indexOf('updates to our terms') !== -1 ||
+    subLower.indexOf('updates to our privacy') !== -1 ||
+    subLower.indexOf('arbitration clause') !== -1 ||
+    subLower.indexOf('arbitration terms') !== -1 ||
+    subLower.indexOf('consumer privacy') !== -1
+  ) {
+    return {
+      canonicalDomain: null,
+      canonical_label: null,
+      subLabel: null,
+      category: 'Updates',
+      action: 'archive',
+      confidence: 0.99,
+      title: subject,
+      summary:
+        'Commercial platform terms of service, privacy policy revision, or user agreement update routed to Updates.',
+      reasoning: 'Policy / Terms Update',
     }
   }
 
@@ -1427,6 +1636,35 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       title: subject,
       summary: 'Retail store order confirmation, receipt, or pickup notice.',
       reasoning: 'Retail Order / Receipt',
+    }
+  }
+
+  // Vehicle Maintenance, Fuel & Parts Receipts (Shell, AutoZone, Advance Auto, RockAuto)
+  if (
+    sLower.indexOf('ereceiptshell.com') !== -1 ||
+    sLower.indexOf('shell e-receipt') !== -1 ||
+    sLower.indexOf('autozone.com') !== -1 ||
+    sLower.indexOf('advanceautoparts.com') !== -1 ||
+    sLower.indexOf('rockauto.com') !== -1
+  ) {
+    if (
+      subLower.indexOf('receipt') !== -1 ||
+      subLower.indexOf('purchase') !== -1 ||
+      subLower.indexOf('order') !== -1 ||
+      subLower.indexOf('fuel') !== -1
+    ) {
+      return {
+        canonicalDomain: '03_Vehicles',
+        canonical_label: '03_Vehicles',
+        subLabel: 'Vehicles/Maintenance',
+        category: 'Updates',
+        action: 'archive',
+        confidence: 0.99,
+        title: subject,
+        summary:
+          'Automated vehicle fuel purchase receipt or parts order confirmation routed to Vehicles/Maintenance.',
+        reasoning: 'Vehicle Fuel/Maintenance Receipt',
+      }
     }
   }
 

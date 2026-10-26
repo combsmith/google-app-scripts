@@ -2787,6 +2787,179 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(pypiRes.reasoning).toBe('Package Registry Alert')
         })
 
+        test('classifies hardware and IoT telemetry (QNAP NAS, UniFi, Home Assistant) into Tech/Alerts archive', () => {
+          const qnapRes = fn(
+            'NotificationCenter@qnap.com',
+            '[QNAP NAS] RAID volume scrubbing finished',
+            'Storage pool volume check completed with zero errors.',
+            null,
+            {}
+          )
+          expect(qnapRes).not.toBeNull()
+          expect(qnapRes.canonicalDomain).toBe('05_Tech_Infrastructure')
+          expect(qnapRes.subLabel).toBe('Tech/Alerts')
+          expect(qnapRes.category).toBe('Updates')
+          expect(qnapRes.action).toBe('archive')
+          expect(qnapRes.reasoning).toBe('QNAP Telemetry')
+
+          const unifiRes = fn(
+            'notifications@ui.com',
+            'UniFi Network: Gateway connection restored',
+            'Your network gateway device reconnected.',
+            null,
+            {}
+          )
+          expect(unifiRes).not.toBeNull()
+          expect(unifiRes.canonicalDomain).toBe('05_Tech_Infrastructure')
+          expect(unifiRes.subLabel).toBe('Tech/Alerts')
+          expect(unifiRes.category).toBe('Updates')
+          expect(unifiRes.action).toBe('archive')
+          expect(unifiRes.reasoning).toBe('UniFi Telemetry')
+
+          const haRes = fn(
+            'no-reply@nabucasa.com',
+            'Your Home Assistant Cloud subscription will renew soon',
+            'Your cloud connection subscription is set to renew automatically.',
+            null,
+            {}
+          )
+          expect(haRes).not.toBeNull()
+          expect(haRes.canonicalDomain).toBe('05_Tech_Infrastructure')
+          expect(haRes.subLabel).toBe('Tech/Alerts')
+          expect(haRes.category).toBe('Updates')
+          expect(haRes.action).toBe('archive')
+          expect(haRes.reasoning).toBe('Home Assistant Telemetry')
+        })
+
+        test('classifies rideshare and travel receipts (Waymo) into Household/Travel archive', () => {
+          const waymoRes = fn(
+            'noreply@waymo.com',
+            'Thanks for riding with Waymo',
+            'Here is your receipt for your completed Waymo ride.',
+            null,
+            {}
+          )
+          expect(waymoRes).not.toBeNull()
+          expect(waymoRes.canonicalDomain).toBe('01_Household')
+          expect(waymoRes.subLabel).toBe('Household/Travel')
+          expect(waymoRes.category).toBe('Updates')
+          expect(waymoRes.action).toBe('archive')
+          expect(waymoRes.reasoning).toBe('Travel Confirmation')
+        })
+
+        test('classifies vehicle fuel e-receipts (Shell) into Vehicles/Maintenance archive', () => {
+          const shellRes = fn(
+            'donotreply@mail.ereceiptshell.com',
+            'Thanks for your Purchase! Your e-Receipt Inside!',
+            'Electronic receipt for your recent fuel purchase transaction.',
+            null,
+            {}
+          )
+          expect(shellRes).not.toBeNull()
+          expect(shellRes.canonicalDomain).toBe('03_Vehicles')
+          expect(shellRes.subLabel).toBe('Vehicles/Maintenance')
+          expect(shellRes.category).toBe('Updates')
+          expect(shellRes.action).toBe('archive')
+          expect(shellRes.reasoning).toBe('Vehicle Fuel/Maintenance Receipt')
+        })
+
+        test('classifies healthcare claim notices and EOBs into Finance/Insurance archive', () => {
+          const eobRes = fn(
+            'ClaimNotifications@bcbsal.org',
+            'Blue Cross and Blue Shield Explanation of Benefits',
+            'One or more healthcare claims have been processed. View your online statement.',
+            null,
+            {}
+          )
+          expect(eobRes).not.toBeNull()
+          expect(eobRes.canonicalDomain).toBe('02_Finance_Legal')
+          expect(eobRes.subLabel).toBe('Finance/Insurance')
+          expect(eobRes.category).toBe('Updates')
+          expect(eobRes.action).toBe('archive')
+          expect(eobRes.reasoning).toBe('Insurance Claim / EOB Notice')
+        })
+
+        test('classifies routine auto insurance billing into Finance/Bills while shielding claims in Primary', () => {
+          const autoPayRes = fn(
+            'geico@et.geico.com',
+            'Your Auto Pay payment will be processed soon',
+            'Automatic monthly insurance premium payment scheduled.',
+            null,
+            {}
+          )
+          expect(autoPayRes).not.toBeNull()
+          expect(autoPayRes.canonicalDomain).toBe('02_Finance_Legal')
+          expect(autoPayRes.subLabel).toBe('Finance/Bills')
+          expect(autoPayRes.category).toBe('Updates')
+          expect(autoPayRes.action).toBe('archive')
+          expect(autoPayRes.reasoning).toBe('Auto Insurance Routine Billing')
+
+          // Claims, adjuster, or dispute communications must NOT match routine billing rule
+          const claimNotice = fn(
+            'adjuster@geico.com',
+            'Update on Claim #99887766 - Settlement Offer',
+            'The insurance claim adjuster has completed inspection and prepared settlement details.',
+            null,
+            {}
+          )
+          expect(claimNotice).toBeNull()
+        })
+
+        test('classifies commercial terms of service and privacy policy updates into non-canonical Updates archive', () => {
+          const tosRes = fn(
+            'no-reply@platform.example.com',
+            'Updates to our Terms of Service and Privacy Policy',
+            'We are updating our user agreement and arbitration terms.',
+            null,
+            {}
+          )
+          expect(tosRes).not.toBeNull()
+          expect(tosRes.canonicalDomain).toBeNull()
+          expect(tosRes.category).toBe('Updates')
+          expect(tosRes.action).toBe('archive')
+          expect(tosRes.reasoning).toBe('Policy / Terms Update')
+        })
+
+        test('classifies developer platform notifications (Google AI Studio, CodeAnt AI, Calendar) appropriately', () => {
+          const aiStudioRes = fn(
+            'googleaistudio-noreply@google.com',
+            'Gemini Developer API Quota Update',
+            'Important changes to rate limits and API model quotas.',
+            null,
+            {}
+          )
+          expect(aiStudioRes).not.toBeNull()
+          expect(aiStudioRes.canonicalDomain).toBe('05_Tech_Infrastructure')
+          expect(aiStudioRes.subLabel).toBe('Tech/Alerts')
+          expect(aiStudioRes.category).toBe('Updates')
+          expect(aiStudioRes.action).toBe('archive')
+
+          const codeAntRes = fn(
+            'features@updates.codeant.ai',
+            'New AI Code Review Feature Available',
+            'Try out automated code reviews with 30% discount this month.',
+            null,
+            {}
+          )
+          expect(codeAntRes).not.toBeNull()
+          expect(codeAntRes.canonicalDomain).toBeNull()
+          expect(codeAntRes.category).toBe('Promotions')
+          expect(codeAntRes.action).toBe('archive')
+
+          const calRes = fn(
+            'calendar-notification@google.com',
+            'Notification: Project Review @ Tue Oct 27',
+            'Upcoming calendar event reminder.',
+            null,
+            {}
+          )
+          expect(calRes).not.toBeNull()
+          expect(calRes.canonicalDomain).toBe('01_Household')
+          expect(calRes.subLabel).toBe('Household/Property')
+          expect(calRes.category).toBe('Updates')
+          expect(calRes.action).toBe('archive')
+        })
+
         test('classifies non-profit charity impact newsletters (Ignite Hope) into Community_NonProfit Updates archive', () => {
           const charityRes = fn(
             'info@ignite-hope.org',
