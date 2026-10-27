@@ -273,10 +273,13 @@ function readTargetFileContent(relPath, isStagedOnly) {
       return execFileSync('git', ['show', `:${posixRelPath}`], {
         cwd: REPO_ROOT,
         encoding: 'utf8',
-        maxBuffer: 64 * 1024 * 1024,
+        maxBuffer: 256 * 1024 * 1024,
       })
     } catch (err) {
-      console.error(`Error reading staged blob for ${relPath}: ${err.message}`)
+      console.error(
+        `Error reading staged blob for ${relPath}: ${err.message}\n` +
+          'Blob may exceed buffer limit or access may be denied. Failing PII check.'
+      )
       process.exit(1)
     }
   }
@@ -288,14 +291,50 @@ function readTargetFileContent(relPath, isStagedOnly) {
 
 function scanFile(relPath, { isStagedOnly = false } = {}) {
   if (isIgnoredPath(relPath)) return []
-  const content = readTargetFileContent(relPath, isStagedOnly)
+  let content = readTargetFileContent(relPath, isStagedOnly)
   if (!content) return []
 
   if (content.includes('\0')) {
-    console.error(
-      `Error: ${relPath} contains binary/NUL bytes; cannot scan for PII`
-    )
-    process.exit(1)
+    if (!isStagedOnly) {
+      const fullPath = path.resolve(REPO_ROOT, relPath)
+      try {
+        const buffer = fs.readFileSync(fullPath)
+        if (buffer.length >= 2) {
+          if (
+            (buffer[0] === 0xff && buffer[1] === 0xfe) ||
+            (buffer[0] === 0xfe && buffer[1] === 0xff)
+          ) {
+            content = buffer.toString('utf16le')
+            if (content.includes('\0')) {
+              console.error(
+                `Error: ${relPath} contains binary/NUL bytes even after UTF-16 decode; cannot scan for PII`
+              )
+              process.exit(1)
+            }
+          } else {
+            console.error(
+              `Error: ${relPath} contains binary/NUL bytes; cannot scan for PII`
+            )
+            process.exit(1)
+          }
+        } else {
+          console.error(
+            `Error: ${relPath} contains binary/NUL bytes; cannot scan for PII`
+          )
+          process.exit(1)
+        }
+      } catch (err) {
+        console.error(
+          `Error: ${relPath} cannot be decoded as text; cannot scan for PII`
+        )
+        process.exit(1)
+      }
+    } else {
+      console.error(
+        `Error: ${relPath} contains binary/NUL bytes in staged blob; cannot scan for PII`
+      )
+      process.exit(1)
+    }
   }
 
   const lines = content.split('\n')

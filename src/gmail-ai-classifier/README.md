@@ -24,7 +24,13 @@ Share the 7 Canonical Domain folders in Google Drive (`01_Household` through `07
      cp <path-to-repo>/src/gmail-ai-classifier/{code.gs,config.gs,gitHubSync.gs,appsscript.json} .
      npx @google/clasp push
      ```
-   - Existing project: `mkdir -p ~/my-gas-project && cd ~/my-gas-project && npx @google/clasp clone <YOUR_SCRIPT_ID> && cp <path-to-repo>/src/gmail-ai-classifier/{code.gs,config.gs,gitHubSync.gs,appsscript.json} . && npx @google/clasp push`
+   - Existing project: Create a separate directory and clone, then:
+     ```
+     mkdir -p ~/my-gas-project && cd ~/my-gas-project
+     npx @google/clasp clone <YOUR_SCRIPT_ID>
+     cp <path-to-repo>/src/gmail-ai-classifier/{code.gs,config.gs,gitHubSync.gs,appsscript.json} .
+     npx @google/clasp push
+     ```
 3. Open **Project Settings (gear icon)** $\rightarrow$ **Script Properties**.
 4. Add the following keys:
    - `GEMINI_API_KEY`: Your Google AI Studio API key.

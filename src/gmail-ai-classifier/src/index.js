@@ -1242,9 +1242,7 @@ function makeDeterministicResult_(
  * @returns {string} Pipe-delimited lowercase terms
  */
 function normalizeConfigTermList_(value) {
-  const items = Array.isArray(value)
-    ? value
-    : String(value || '').split(/[,|\s]+/)
+  const items = Array.isArray(value) ? value : String(value || '').split(/[,|]/)
   return items
     .map((v) =>
       String(v || '')
