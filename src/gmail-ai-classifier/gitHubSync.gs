@@ -394,8 +394,16 @@ function insertEntryIntoLogSection(fullContent, newEntry) {
   if (!fullContent) return String(newEntry)
   if (!newEntry) return String(fullContent)
 
+  var section3Marker = '## 3. Ingested Activity'
+  var section3Index = fullContent.indexOf(section3Marker)
   var detailsMarker = '</details>'
-  var detailsIndex = fullContent.indexOf(detailsMarker)
+  // Scope the </details> search to the Activity Log section so earlier
+  // collapsible blocks (Layer 1/2 summaries) are never targeted. Fall back to
+  // the first </details> only when the note has no Section 3 marker.
+  var detailsIndex =
+    section3Index !== -1
+      ? fullContent.indexOf(detailsMarker, section3Index)
+      : fullContent.indexOf(detailsMarker)
 
   if (detailsIndex !== -1) {
     return (
@@ -405,9 +413,6 @@ function insertEntryIntoLogSection(fullContent, newEntry) {
       fullContent.substring(detailsIndex)
     )
   }
-
-  var section3Marker = '## 3. Ingested Activity'
-  var section3Index = fullContent.indexOf(section3Marker)
 
   if (section3Index !== -1) {
     var lineBreakIndex = fullContent.indexOf('\n', section3Index)

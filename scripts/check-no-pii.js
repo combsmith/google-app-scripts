@@ -10,8 +10,20 @@
  *   - `PII_CUSTOM_RULES_JSON` environment variable (JSON array of { name, pattern, flags?, description, whitelist? })
  *   - `.pii-rules.json` in the repository root (gitignored)
  *
+ * Coverage:
+ *   - Scans ALL text files (any extension, including extensionless, `.txt`, `.sh`,
+ *     `.py`, `.csv`, `.env*`) using a binary-extension denylist plus NUL-byte
+ *     detection, so fixtures and scripts are not blind spots.
+ *   - Full mode scans git-tracked files (`git ls-files`), mirroring what CI sees.
+ *
+ * CI limitation:
+ *   CI only enforces the generic BASE_PROHIBITED_RULES below. Household-specific
+ *   rules (first names, addresses, local businesses) live in the gitignored
+ *   `.pii-rules.json` or the `PII_CUSTOM_RULES_JSON` env var, so they are enforced
+ *   locally (pre-commit) and in CI only when that secret/env var is configured.
+ *
  * Usage:
- *   node scripts/check-no-pii.js           # Scans repository files from repo root
+ *   node scripts/check-no-pii.js           # Scans git-tracked repository files
  *   node scripts/check-no-pii.js --staged  # Scans only git-staged index blobs
  */
 
@@ -30,6 +42,7 @@ const BASE_PROHIBITED_RULES = [
       'Household surname found outside of allowed open-source organizational context.',
     whitelist: [
       /petry-projects/i,
+      /dependabot-automerge-petry/i, // org-level GitHub App name (infrastructure, not personal data)
       /github\.com\/don-petry/i,
       /github\.com\/petry-projects/i,
       /Copyright \(c\) \d{4} Don Petry/i,
@@ -100,17 +113,39 @@ function loadCustomRules() {
 
 const PROHIBITED_RULES = [...BASE_PROHIBITED_RULES, ...loadCustomRules()]
 
-// Extensions and directories to scan
-const SCANNABLE_EXTENSIONS = new Set([
-  '.js',
-  '.ts',
-  '.gs',
-  '.json',
-  '.md',
-  '.yml',
-  '.yaml',
-  '.html',
+// Binary extensions that are never scanned; every other file is treated as text
+// (and additionally skipped at read time if it contains NUL bytes).
+const BINARY_EXTENSIONS = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.bmp',
+  '.ico',
+  '.webp',
+  '.heic',
+  '.tif',
+  '.tiff',
+  '.pdf',
+  '.zip',
+  '.gz',
+  '.tgz',
+  '.7z',
+  '.jar',
+  '.woff',
+  '.woff2',
+  '.ttf',
+  '.otf',
+  '.eot',
+  '.mp3',
+  '.mp4',
+  '.mov',
+  '.wasm',
 ])
+
+function isScannablePath(relPath) {
+  return !BINARY_EXTENSIONS.has(path.extname(relPath).toLowerCase())
+}
 
 const IGNORED_DIRS = new Set([
   'node_modules',
@@ -162,6 +197,22 @@ function getStagedFiles() {
   }
 }
 
+function getTrackedRepoFiles() {
+  try {
+    const output = execFileSync('git', ['ls-files', '-z'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    })
+    return output
+      .split('\0')
+      .filter(Boolean)
+      .filter((f) => !isIgnoredPath(f) && isScannablePath(f))
+  } catch {
+    return null
+  }
+}
+
 function getAllRepoFiles(dir = REPO_ROOT, base = '') {
   let results = []
   const entries = fs.readdirSync(dir, { withFileTypes: true })
@@ -173,8 +224,7 @@ function getAllRepoFiles(dir = REPO_ROOT, base = '') {
     if (entry.isDirectory()) {
       results = results.concat(getAllRepoFiles(fullPath, relPath))
     } else if (entry.isFile()) {
-      const ext = path.extname(entry.name).toLowerCase()
-      if (SCANNABLE_EXTENSIONS.has(ext)) {
+      if (isScannablePath(relPath)) {
         results.push(relPath)
       }
     }
@@ -226,7 +276,7 @@ function readTargetFileContent(relPath, isStagedOnly) {
 function scanFile(relPath, { isStagedOnly = false } = {}) {
   if (isIgnoredPath(relPath)) return []
   const content = readTargetFileContent(relPath, isStagedOnly)
-  if (!content) return []
+  if (!content || content.includes('\0')) return []
 
   const lines = content.split('\n')
   const violations = []
@@ -263,11 +313,8 @@ function scanFile(relPath, { isStagedOnly = false } = {}) {
 function main() {
   const isStagedOnly = process.argv.includes('--staged')
   const filesToScan = isStagedOnly
-    ? getStagedFiles().filter((f) => {
-        const ext = path.extname(f).toLowerCase()
-        return SCANNABLE_EXTENSIONS.has(ext) && !isIgnoredPath(f)
-      })
-    : getAllRepoFiles()
+    ? getStagedFiles().filter((f) => isScannablePath(f) && !isIgnoredPath(f))
+    : getTrackedRepoFiles() || getAllRepoFiles()
 
   if (filesToScan.length === 0) {
     console.log('✅ No scannable files found. PII check passed.')

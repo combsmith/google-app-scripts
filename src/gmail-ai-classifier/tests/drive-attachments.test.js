@@ -226,12 +226,12 @@ describe('Drive Attachment Persistence along Taxonomy Path', () => {
       expect(
         resolveTaxonomySubfolderName('06_Work_Career', 'Work/Career')
       ).toBe('Career_Interviews')
-      expect(resolveTaxonomySubfolderName('06_Work_Career', 'Career/DJ')).toBe(
-        'Career_DJ'
+      expect(resolveTaxonomySubfolderName('06_Work_Career', 'Career/Pat')).toBe(
+        'Career_Pat'
       )
       expect(
-        resolveTaxonomySubfolderName('06_Work_Career', 'Career/Rachel')
-      ).toBe('Career_Rachel')
+        resolveTaxonomySubfolderName('06_Work_Career', 'Career/Morgan')
+      ).toBe('Career_Morgan')
       expect(
         resolveTaxonomySubfolderName('06_Work_Career', 'Career/Employer')
       ).toBe('Employer')
@@ -272,16 +272,13 @@ describe('Drive Attachment Persistence along Taxonomy Path', () => {
 
     test('resolves school student sublabels to Students directory', () => {
       expect(
-        resolveTaxonomySubfolderName(
-          '04_Family_Health',
-          'Family/School-Charley'
-        )
+        resolveTaxonomySubfolderName('04_Family_Health', 'Family/School-Casey')
       ).toBe('Students')
       expect(
-        resolveTaxonomySubfolderName('04_Family_Health', 'Family/School-Toby')
+        resolveTaxonomySubfolderName('04_Family_Health', 'Family/School-Sam')
       ).toBe('Students')
       expect(
-        resolveTaxonomySubfolderName('04_Family_Health', 'Family/School-Tide')
+        resolveTaxonomySubfolderName('04_Family_Health', 'Family/School-Alex')
       ).toBe('Students')
     })
 

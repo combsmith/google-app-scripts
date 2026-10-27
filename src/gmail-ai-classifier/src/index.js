@@ -144,7 +144,7 @@ function buildOntologicalPrompt(config, sender, subject, snippet) {
     "• '01_Household': Physical residence, real estate property, maintenance, home repairs, contractor invoices, home utilities, household inventory, and travel/lodging reservations. Valid sub-labels: 'Household/Property', 'Household/Maintenance', 'Household/Travel'.\n" +
     "• '02_Finance_Legal': Personal banking, checking/savings, credit cards, investments, mortgages, personal tax filings (W-2, 1098, 1099, returns), utility payment accounts/funding, purchase invoices/receipts, health/auto/property insurance policies and explanations of benefits (EOB), actual personal legal proceedings, court orders, attorney correspondence, dispute filings, and executed personal contracts (leases, deeds, wills, trusts, powers of attorney). (Excludes commercial terms of service updates, which are non-canonical broadcast notices). Valid sub-labels: 'Finance/Banking', 'Finance/Bills', 'Finance/Purchases', 'Finance/Insurance', 'Finance/Taxes', 'Finance/Donations', 'Finance/Charitable-Donations', 'Finance/Legal'.\n" +
     "• '03_Vehicles': Personal automobile titles, registrations, vehicle insurance, automotive maintenance, repairs, parts, and car rental reservations. Valid sub-labels: 'Vehicles/Maintenance', 'Vehicles/Purchases', 'Vehicles/Rental-Cars'.\n" +
-    "• '04_Family_Health': Family correspondence, healthcare records, doctor appointments, patient portals, prescriptions, elder care, and student education/coursework/school portals. Valid sub-labels: 'Family/Kids/Tide', 'Family/Kids/Toby', 'Family/Kids/David', 'Family/School-Student', 'Family/Medical', 'Family/Legal', 'Family/Correspondence', 'Family/Parents', 'Family/Sisters'.\n" +
+    "• '04_Family_Health': Family correspondence, healthcare records, doctor appointments, patient portals, prescriptions, elder care, and student education/coursework/school portals. Valid sub-labels: 'Family/Kids/<ChildName>' (per-child labels configured via CUSTOM_PROMPT_RULES), 'Family/School-Student', 'Family/Medical', 'Family/Legal', 'Family/Correspondence', 'Family/Parents', 'Family/Sisters'.\n" +
     "• '05_Tech_Infrastructure': Cloud hosting, server infrastructure, domains/DNS, network hardware, security alerts, system telemetry, and developer platform quota/outage alerts. Valid sub-labels: 'Tech/Cloud', 'Tech/Security', 'Tech/Alerts'.\n" +
     "• '06_Work_Career': Professional employment, career advancement, job applications, recruiter correspondence, interview schedules, employer benefits, and consulting. Valid sub-labels: 'Work/Career', 'Work/Employer'.\n" +
     "• '07_Community_NonProfit': Official 501(c)(3) charities, non-profit boards of directors, volunteer shift schedules, civic records, community/apiary telemetry, and non-profit initiatives. Valid sub-labels: 'Projects/Charity', 'Community/BOD', 'Projects/Telemetry', 'Projects/Beekeeping', 'Projects/HOG'.\n\n" +
@@ -167,8 +167,8 @@ function buildOntologicalPrompt(config, sender, subject, snippet) {
     '• Community/beehive telemetry (BroodMinder monitors, "Events in your apiaries", hive alerts) -> "07_Community_NonProfit", sub-label "Projects/Telemetry" or "Projects/Beekeeping".\n' +
     '• Tech infrastructure/server telemetry (device pings, server metrics, cron logs) -> "05_Tech_Infrastructure", sub-label "Tech/Alerts".\n' +
     '• MANDATORY ROUTING: Always route machine telemetry to category "Updates" with action "archive". Keep telemetry completely archived out of the Inbox.\n\n' +
-    'SCHOOL & STUDENT ANNOUNCEMENTS VS DIRECT CORRESPONDENCE (MCAA, Briarwood, FACTS, PowerSchool, ParentSquare, Canvas, Google Classroom, Colleges):\n' +
-    '• Routine school announcements, district/ParentSquare broadcasts, headmaster/principal letters, athletics/arts/club notices (e.g. "Noteworthy News", "Athletics Newsletter", "Lion Guard Update"), lunch menus, school calendars, college/admissions parent newsletters (e.g. "Parent and Family Newsletter"), Google Classroom summaries, FACTS bulletins, PowerSchool broadcasts, and weekly school newsletters -> "04_Family_Health", sub-label "Family/School-Student", category: "Updates", action: "archive". Ingest and log them to notes, but keep them archived out of the Inbox (Updates tab).\n' +
+    'SCHOOL & STUDENT ANNOUNCEMENTS VS DIRECT CORRESPONDENCE (FACTS, PowerSchool, ParentSquare, Canvas, Google Classroom, Colleges):\n' +
+    '• Routine school announcements, district/ParentSquare broadcasts, headmaster/principal letters, athletics/arts/club notices (e.g. "Noteworthy News", "Athletics Newsletter", "Spirit Week Update"), lunch menus, school calendars, college/admissions parent newsletters (e.g. "Parent and Family Newsletter"), Google Classroom summaries, FACTS bulletins, PowerSchool broadcasts, and weekly school newsletters -> "04_Family_Health", sub-label "Family/School-Student", category: "Updates", action: "archive". Ingest and log them to notes, but keep them archived out of the Inbox (Updates tab).\n' +
     '• Direct 1:1 personal emails from an individual teacher, principal, or guidance counselor addressed personally to the parent regarding an individual student\'s urgent academic/disciplinary matter or conference request -> category: "Primary", action: "keep".\n\n' +
     'NON-PROFIT & CHARITY BROADCASTS VS DIRECT CORRESPONDENCE:\n' +
     '• Routine mass newsletters, monthly impact reports, event notices, general fundraising appeals, and volunteer list blasts from non-profits or charities (e.g. Community Food Bank, The Lovelady Center, Southeastern Climbers Coalition, Grace Klein Community mass mail, Restoration Academy bulletins) -> "07_Community_NonProfit", sub-label "Projects/Charity", category: "Updates", action: "archive". Ingest and log them to notes, but keep them archived out of the Inbox.\n' +
@@ -177,9 +177,9 @@ function buildOntologicalPrompt(config, sender, subject, snippet) {
     '• Automated developer platform notifications, deprecation alerts, quota notices, CI/CD run failure notices (e.g. Google AI Studio, Linear, GitHub, Cloud monitoring) -> "05_Tech_Infrastructure", sub-label "Tech/Alerts", category: "Updates", action: "archive". Ingest and log them to notes, but keep them archived out of the Inbox.\n' +
     '• Critical security incidents or billing payment failure notices requiring manual human intervention -> "05_Tech_Infrastructure", sub-label "Tech/Security" or "Tech/Alerts", category: "Primary", action: "keep".\n\n' +
     'PRIMARY PARTY ATTRIBUTION PRINCIPLE (CHILDREN & PRIMARY BENEFICIARY VS INCIDENTAL ADULTS):\n' +
-    '• When an email, legal document, school notification, or healthcare record pertains to a specific child/individual (e.g. Tide, Toby, David, or any household child), classify the email under that primary party\'s specific label (e.g. "Family/Kids/Tide", "Family/Kids/Toby", "Family/Kids/David", or "Family/School-Student").\n' +
+    '• When an email, legal document, school notification, or healthcare record pertains to a specific child/individual (any household child named in CUSTOM_PROMPT_RULES), classify the email under that primary party\'s specific label (e.g. "Family/Kids/<ChildName>" or "Family/School-Student").\n' +
     '• Attribute the email strictly to the PRIMARY SUBJECT / TARGET BENEFICIARY of the matter, rather than incidental parties:\n' +
-    '  - If an email concerns Tide\'s legal name change, government IDs, FSA ID, schooling, or medical care, the primary party is Tide -> "Family/Kids/Tide" (or "02_Finance_Legal" / "Family/Legal" if a formal court filing).\n' +
+    '  - If an email concerns a child\'s legal name change, government IDs, FSA ID, schooling, or medical care, the primary party is that child -> "Family/Kids/<ChildName>" (or "02_Finance_Legal" / "Family/Legal" if a formal court filing).\n' +
     '  - Route child-related legal, educational, or personal matters to the child\'s sub-label, ensuring that mentioned biological parents, guardians, or relatives do not divert the classification to "Family/Sisters".\n' +
     '  - Sub-label "Family/Sisters" applies strictly to direct personal correspondence regarding the sister\'s own independent adult personal affairs.\n\n' +
     '=== TIER 2: ORTHOGONAL TRIAGE MATRIX (LIFECYCLE STATE) ===\n' +
@@ -884,8 +884,15 @@ function createPermanentGmailFilter(
     try {
       const existingFilters = gmailService.Users.Settings.Filters.list('me')
       if (existingFilters?.filter) {
+        const targetLabelId =
+          typeof targetLabel.getId === 'function' ? targetLabel.getId() : null
         const duplicate = existingFilters.filter.some(function (f) {
-          return f.criteria?.from === cleanSender
+          const addLabelIds = f.action?.addLabelIds || []
+          return (
+            f.criteria?.from === cleanSender &&
+            Boolean(targetLabelId) &&
+            addLabelIds.indexOf(targetLabelId) !== -1
+          )
         })
         if (duplicate) {
           console.log(
@@ -1228,11 +1235,28 @@ function makeDeterministicResult_(
   }
 }
 
-const SCHOOL_DOMAINS_ =
-  'bcsk12.org|bcs-lions.org|briarwoodchristianschool.org|mcaabhm.org|jeffersonstate.edu'
+/**
+ * Normalizes a comma/pipe/whitespace-delimited config list into a pipe-delimited term string.
+ *
+ * @param {string|string[]} value - Raw config list
+ * @returns {string} Pipe-delimited lowercase terms
+ */
+function normalizeConfigTermList_(value) {
+  const items = Array.isArray(value)
+    ? value
+    : String(value || '').split(/[,|\s]+/)
+  return items
+    .map((v) =>
+      String(v || '')
+        .trim()
+        .toLowerCase()
+    )
+    .filter(Boolean)
+    .join('|')
+}
 
 const SCHOOL_BROADCAST_TERMS_ =
-  'weekly|newsletter|bulletin|school update|campus update|district update|bcs update|lions update|digest|progress is ready|lunch|menu|portraits|news|noteworthy|announcement|athletics|e learning|e-learning|report card update|trunk or treat|spirit week|pto|pta|open house|picture day|fall festival|spring festival|school announcement|tryouts|tryout|try-outs|try-out|auditions|audition|team tryouts|absent|attendance|tardy|tuition|billing statement|assignment posted|new assignment|grade updated|score published|family portal|parent portal'
+  'weekly|newsletter|bulletin|school update|campus update|district update|digest|progress is ready|lunch|menu|portraits|news|noteworthy|announcement|athletics|e learning|e-learning|report card update|trunk or treat|spirit week|pto|pta|open house|picture day|fall festival|spring festival|school announcement|tryouts|tryout|try-outs|try-out|auditions|audition|team tryouts|absent|attendance|tardy|tuition|billing statement|assignment posted|new assignment|grade updated|score published|family portal|parent portal'
 
 const CAREER_SUBJECT_TERMS_ =
   'employment agreement|employment contract|offer letter|job offer|employment offer|terms of employment|independent contractor agreement|restrictive covenant|confidentiality agreement|interview confirmation|interview invitation|invitation to interview|interview with |schedule an interview|recruiter screen|phone screen'
@@ -1245,9 +1269,13 @@ const CUSTOM_RULE_MATCHERS_ = {
     return (
       matchesSenderDomain_(
         ctx.sender,
-        'ignite-hope.org|helpingoneguy.com|charitywater.org|compassion.com|worldvision.org'
+        'charitywater.org|compassion.com|worldvision.org'
       ) ||
-      containsAny_(ctx.subLower, 'ironmen|iron men') ||
+      matchesSenderDomain_(
+        ctx.sender,
+        ctx.configTerms.nonprofitSenderDomains
+      ) ||
+      containsAny_(ctx.subLower, ctx.configTerms.nonprofitSubjectTerms) ||
       (containsAny_(ctx.sLower, 'newsletter|update|impact') &&
         containsAny_(
           ctx.subLower,
@@ -1281,9 +1309,7 @@ const CUSTOM_RULE_MATCHERS_ = {
     const isParentSquare = matchesSenderDomain_(ctx.sender, 'parentsquare.com')
     return (
       ctx.isBrightArrow ||
-      ((ctx.isSchoolDomain ||
-        isParentSquare ||
-        matchesSenderAddress_(ctx.sender, 'admissions@ua.edu')) &&
+      ((ctx.isSchoolDomain || isParentSquare) &&
         (ctx.isBroadcastSubject || isParentSquare))
     )
   },
@@ -1345,7 +1371,7 @@ const DETERMINISTIC_RULE_SPECS_ = [
   'sender+sub::ebay.com::::::delivered|out for delivery|order confirmed|shipped::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Order Tracking::Online order confirmation or package delivery tracking notice.',
   'sender+sub::ups.com|fedex.com|usps.com|usps.gov::::::delivered|out for delivery|tracking|scheduled delivery|package|shipment::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Carrier Tracking::Carrier parcel shipment or package delivery notification.',
   'sender+sub::amazon.com::::::ordered:|shipped:|delivered:|refund issued|auto-reloaded::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Amazon Routine::Routine Amazon e-commerce order, shipping, or refund update.',
-  'sender+sub::chase.com|bankofamerica.com|spireenergy.com|alabamapower.com|bwwb.org|message.att-mail.com|att-mail.com|citi.com|americanexpress.com|apcocu.org|rocketmortgage.com|mycirclecard.target.com::::capitalone|spectrum|citicards::statement|autopay|payment processed|payment confirmation|payment scheduled|payment received|scheduled payment|bill is ready|bill is available|e-statement|estatement::failed|failure|declined|past due|overdue|action required|unpaid|late fee|returned payment|insufficient funds::02_Finance_Legal::Finance/Bills::Updates::archive::0.98::Routine Billing::Routine billing statement, receipt, or AutoPay confirmation.',
+  'sender+sub::chase.com|bankofamerica.com|message.att-mail.com|att-mail.com|citi.com|americanexpress.com|rocketmortgage.com|mycirclecard.target.com|$billingSenderDomains::::capitalone|spectrum|citicards::statement|autopay|payment processed|payment confirmation|payment scheduled|payment received|scheduled payment|bill is ready|bill is available|e-statement|estatement::failed|failure|declined|past due|overdue|action required|unpaid|late fee|returned payment|insufficient funds::02_Finance_Legal::Finance/Bills::Updates::archive::0.98::Routine Billing::Routine billing statement, receipt, or AutoPay confirmation.',
   'sender+sub::bcbsal.org|bcbs.com|uhc.com|aetna.com|cigna.com|humana.com::::bluecrosspayments|unitedhealthcare::explanation of benefits|claim|claims|eob::::02_Finance_Legal::Finance/Insurance::Updates::archive::0.99::Insurance Claim / EOB Notice::Health insurance claim processing notice or explanation of benefits (EOB) notification routed to Finance/Insurance.',
   'sender+sub::bcbsal.org|bcbs.com|uhc.com|aetna.com|cigna.com|humana.com::::bluecrosspayments|unitedhealthcare::payment|payments|premium|statement|bill|processed|receipt::failed|failure|declined|past due|overdue|action required|unpaid|late fee|returned payment|insufficient funds::02_Finance_Legal::Finance/Bills::Updates::archive::0.99::Insurance Payment Receipt::Health insurance premium payment or processing notification routed to Finance/Bills.',
   'sender+sub::geico.com|progressive.com|statefarm.com::::::auto pay|autopay|payment|bill|statement|policy document|id card::claim|adjuster|settlement|complaint|failed|failure|declined|past due|overdue|action required|unpaid|late fee|returned payment|insufficient funds::02_Finance_Legal::Finance/Bills::Updates::archive::0.99::Auto Insurance Routine Billing::Routine auto insurance billing, AutoPay notice, or policy document routed to Finance/Bills.',
@@ -1356,7 +1382,7 @@ const DETERMINISTIC_RULE_SPECS_ = [
   'sender+sub::homedepot.com::::::order|receipt|picked up|ready for pickup::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Home Depot store receipt or order pickup confirmation.',
   'sender+sub::target.com|costco.com|bestbuy.com|walmart.com::::::order|receipt|ready for pickup|picked up|shipped|delivered::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Retail store order confirmation, receipt, or pickup notice.',
   'sender+sub::ereceiptshell.com|autozone.com|advanceautoparts.com|rockauto.com::::shell e-receipt::receipt|purchase|order|fuel::::03_Vehicles::Vehicles/Maintenance::Updates::archive::0.99::Vehicle Fuel/Maintenance Receipt::Automated vehicle fuel purchase receipt or parts order confirmation routed to Vehicles/Maintenance.',
-  'any::nytimes.com|nextdoor.com|substack.com|redditmail.com|daily.therundown.ai|therundown.ai|mail.instagram.com|instagram.com|facebookmail.com|linkedin.com|pinterest.com|quora.com|youtube.com|twitter.com|x.com::::dougforalabama|ossoff|the passion translation|aibreakfast::::::::::Social::archive::0.98::News/Newsletter/Social::Routine media newsletter, Substack digest, social media alert, or political appeal.',
+  'any::nytimes.com|nextdoor.com|substack.com|redditmail.com|daily.therundown.ai|therundown.ai|mail.instagram.com|instagram.com|facebookmail.com|linkedin.com|pinterest.com|quora.com|youtube.com|twitter.com|x.com::::the passion translation|aibreakfast::::::::::Social::archive::0.98::News/Newsletter/Social::Routine media newsletter, Substack digest, social media alert, or political appeal.',
 ]
 
 function evaluateDeterministicRuleSpec_(specStr, ctx, subject) {
@@ -1370,8 +1396,14 @@ function evaluateDeterministicRuleSpec_(specStr, ctx, subject) {
   if (mode.indexOf('custom:') === 0) {
     matched = CUSTOM_RULE_MATCHERS_[mode.slice(7)](ctx)
   } else {
+    const domainTerms = String(parts[1] || '').replace(
+      /\$(\w+)/g,
+      function (_m, key) {
+        return (ctx.configTerms && ctx.configTerms[key]) || ''
+      }
+    )
     const senderHit =
-      matchesSenderDomain_(ctx.sender, parts[1]) ||
+      matchesSenderDomain_(ctx.sender, domainTerms) ||
       matchesSenderAddress_(ctx.sender, parts[2]) ||
       containsAny_(ctx.sLower, parts[3])
     const subjectHit = containsAny_(ctx.subLower, parts[4])
@@ -1464,7 +1496,10 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
   }
 
   // Teacher / Academic Counselor 1:1 Shield (exclude mass broadcast subjects)
-  const isSchoolDomain = matchesSenderDomain_(sender, SCHOOL_DOMAINS_)
+  const isSchoolDomain = matchesSenderDomain_(
+    sender,
+    normalizeConfigTermList_(config && config.schoolDomains)
+  )
   const isBrightArrow =
     matchesSenderDomain_(sender, ['brightarrow.com']) ||
     sLower.indexOf('brightarrow') !== -1
@@ -1509,6 +1544,24 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     isSchoolDomain: isSchoolDomain,
     isBrightArrow: isBrightArrow,
     isBroadcastSubject: isBroadcastSubject,
+    configTerms: {
+      billingSenderDomains: normalizeConfigTermList_(
+        config && config.billingSenderDomains
+      ),
+      nonprofitSenderDomains: normalizeConfigTermList_(
+        config && config.nonprofitSenderDomains
+      ),
+      nonprofitSubjectTerms: String(
+        (config && config.nonprofitSubjectTerms) || ''
+      )
+        .split(/[,|]+/)
+        .map((t) => t.trim().toLowerCase())
+        .filter(Boolean)
+        .join('|'),
+      promoSenderTerms: normalizeConfigTermList_(
+        config && config.promoSenderTerms
+      ),
+    },
   }
   for (let r = 0; r < DETERMINISTIC_RULE_SPECS_.length; r++) {
     const ruleHit = evaluateDeterministicRuleSpec_(
@@ -1520,9 +1573,14 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
   }
 
   // Retail & E-Commerce Marketing Blasts
-  const isScarsella = sLower.indexOf('scarsella') !== -1
-  const isScarsellaCurriculum =
-    isScarsella &&
+  // Household-specific promotional senders (e.g. local studios/clubs) are configured
+  // via PROMO_SENDER_TERMS; operational schedule/curriculum mail from them is exempt.
+  const isConfiguredPromoSender = containsAny_(
+    sLower,
+    ruleContext.configTerms.promoSenderTerms
+  )
+  const isConfiguredPromoOperational =
+    isConfiguredPromoSender &&
     /\b(curriculum|schedule|testing|belt|forms?)\b/i.test(
       (subject || '') + ' ' + (snippet || '')
     )
@@ -1545,14 +1603,14 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     ) ||
     containsAny_(
       sLower,
-      'lowes|mannlake|urotuning|ray-ban|americanmeadows|foxhound|bhphotovideo|starbucks|birminghamhomebuyers|trailerparts|hillco'
+      'lowes|mannlake|urotuning|ray-ban|americanmeadows|foxhound|bhphotovideo|starbucks|trailerparts|hillco'
     )
 
   if (
     isNonTransactional &&
     (isPromoSubject ||
       (isRetailVendor && isMarketingSender) ||
-      (isScarsella && !isScarsellaCurriculum))
+      (isConfiguredPromoSender && !isConfiguredPromoOperational))
   ) {
     return makeDeterministicResult_(
       null,
@@ -1686,14 +1744,13 @@ function processThreadBatch(threads, config, services) {
     // Category-Driven Action Invariant:
     // Primary belongs in the Action Queue (Inbox).
     // Non-Primary categories (Updates, Promotions, Social, Forums) are Informational Streams
-    // that deterministically bypass the Primary Inbox into their category tab and domain sub-label.
-    if (
-      classification.category &&
-      classification.category !== 'Primary' &&
-      classification.action !== 'trash'
-    ) {
-      classification.action = 'archive'
-    }
+    // that bypass the Primary Inbox — subject to the same destructive-action
+    // shield (confidence + user participation) as the main processing path.
+    const wantsArchive =
+      classification.action === 'archive' ||
+      (Boolean(classification.category) &&
+        classification.category !== 'Primary' &&
+        classification.action !== 'trash')
 
     if (
       classification.category &&
@@ -1703,18 +1760,38 @@ function processThreadBatch(threads, config, services) {
       setGmailCategoryTab(thread, classification.category, services.Gmail)
     }
 
-    if (
-      classification.action === 'archive' &&
-      typeof thread.moveToArchive === 'function'
-    ) {
-      thread.moveToArchive()
+    let archived = false
+    if (wantsArchive && typeof thread.moveToArchive === 'function') {
+      const userSent = isThreadSentOrRepliedByUser(
+        thread,
+        config.userAccountEmail
+      )
+      const archiveAllowed = isDestructiveActionAllowed_({
+        action: 'archive',
+        confidence: classification.confidence,
+      })
+      if (!userSent && archiveAllowed) {
+        thread.moveToArchive()
+        archived = true
+      } else {
+        console.warn(
+          '[processThreadBatch] Shield: Skipped archive for thread ' +
+            threadId +
+            (userSent
+              ? ' (user sent or replied).'
+              : ' (low/invalid confidence ' + classification.confidence + ').')
+        )
+      }
     }
 
     let filterCreated = false
-    if (classification.confidence >= config.autoFilterConfidenceThreshold) {
+    if (
+      primaryTag &&
+      classification.confidence >= config.autoFilterConfidenceThreshold
+    ) {
       filterCreated = createPermanentGmailFilter(
         sender,
-        classification.canonical_label,
+        primaryTag,
         services.Gmail,
         services.GmailApp
       )
@@ -1735,6 +1812,7 @@ function processThreadBatch(threads, config, services) {
       status: 'classified',
       label: classification.canonical_label,
       confidence: classification.confidence,
+      archived: archived,
       filterCreated: filterCreated,
       savedAttachments: savedAttachments,
     })
@@ -1853,8 +1931,16 @@ function insertEntryIntoLogSection(fullContent, newEntry) {
   if (!fullContent) return String(newEntry)
   if (!newEntry) return String(fullContent)
 
+  const section3Marker = '## 3. Ingested Activity'
+  const section3Index = fullContent.indexOf(section3Marker)
   const detailsMarker = '</details>'
-  const detailsIndex = fullContent.indexOf(detailsMarker)
+  // Scope the </details> search to the Activity Log section so earlier
+  // collapsible blocks (Layer 1/2 summaries) are never targeted. Fall back to
+  // the first </details> only when the note has no Section 3 marker.
+  const detailsIndex =
+    section3Index !== -1
+      ? fullContent.indexOf(detailsMarker, section3Index)
+      : fullContent.indexOf(detailsMarker)
 
   if (detailsIndex !== -1) {
     return (
@@ -1864,9 +1950,6 @@ function insertEntryIntoLogSection(fullContent, newEntry) {
       fullContent.substring(detailsIndex)
     )
   }
-
-  const section3Marker = '## 3. Ingested Activity'
-  const section3Index = fullContent.indexOf(section3Marker)
 
   if (section3Index !== -1) {
     const lineBreakIndex = fullContent.indexOf('\n', section3Index)
@@ -2817,7 +2900,18 @@ function setupFiveMinuteTrigger(services) {
   const scriptApp =
     services?.ScriptApp || (typeof ScriptApp !== 'undefined' ? ScriptApp : null)
   if (!scriptApp) return
-  stopAllTriggers(services)
+  // Only remove triggers owned by this module; preserve unrelated project triggers.
+  const ownedHandlers = [
+    'processEmailsWithAiClassifier',
+    'purgeExpiredEmailsByRetentionPolicy',
+    'auditEmailClassifications',
+  ]
+  const existing = scriptApp.getProjectTriggers() || []
+  for (let i = 0; i < existing.length; i++) {
+    if (ownedHandlers.indexOf(existing[i].getHandlerFunction()) !== -1) {
+      scriptApp.deleteTrigger(existing[i])
+    }
+  }
   scriptApp
     .newTrigger('processEmailsWithAiClassifier')
     .timeBased()
@@ -2870,13 +2964,7 @@ const CANONICAL_TAXONOMY_SUBFOLDERS = {
     'Activities_Camps',
   ],
   '05_Tech_Infrastructure': ['NAS_Backups', 'Tasker', 'Hardware_Licenses'],
-  '06_Work_Career': [
-    'Career_Interviews',
-    'Career_DJ',
-    'Career_Rachel',
-    'Employer',
-    'Expenses_Admin',
-  ],
+  '06_Work_Career': ['Career_Interviews', 'Employer', 'Expenses_Admin'],
   '07_Community_NonProfit': ['Community_BOD', 'Projects_Telemetry'],
 }
 
@@ -2951,19 +3039,9 @@ const SUBLABEL_TO_FOLDER_MAP = {
   'family/medical-student': 'Medical_Records',
   'family/health-general': 'Medical_Records',
   'family/school-student': 'Students',
-  'family/school-charley': 'Students',
-  'family/school-toby': 'Students',
-  'family/school-tide': 'Students',
   'family/parents': 'Family_General',
-  'family/kids/tide': 'Students',
-  'family/kids/toby': 'Students',
-  'family/kids/david': 'Students',
   'family/kids': 'Students',
-  'family/kids/school-tide': 'Students',
-  'family/kids/school-toby': 'Students',
   'family/kids/school': 'Students',
-  'family/kids/tide-health': 'Medical_Records',
-  'family/kids/toby-health': 'Medical_Records',
   'family/activities': 'Activities_Camps',
   'family/camps': 'Activities_Camps',
   'family/sisters': 'Family_General',
@@ -2983,8 +3061,6 @@ const SUBLABEL_TO_FOLDER_MAP = {
   'work/general': 'Career_Interviews',
   'work/career': 'Career_Interviews',
   'work/employer': 'Career_Interviews',
-  'career/dj': 'Career_DJ',
-  'career/rachel': 'Career_Rachel',
   'career/employer': 'Employer',
   'work/notes': 'Career_Interviews',
   'work/expenses': 'Expenses_Admin',
@@ -3057,6 +3133,11 @@ function resolveTaxonomySubfolderName(canonicalDomain, subLabel) {
         return 'Medical_Records'
       }
       return 'Students'
+    }
+    if (normalized.startsWith('career/')) {
+      const careerPart = subLabel.split('/').slice(1).join('_').trim()
+      const careerSanitized = careerPart.replace(/[-\s]+/g, '_')
+      if (careerSanitized.length > 0) return 'Career_' + careerSanitized
     }
     if (
       normalized.startsWith('family/sisters') ||
@@ -3952,6 +4033,22 @@ function unzipExistingDriveArchive(fileIdOrName, targetFolder, services) {
 }
 
 /**
+ * Flags an attachment result array as incomplete (non-enumerable `hadErrors`)
+ * so callers can durably queue the thread for retry instead of marking it Processed.
+ *
+ * @param {Object[]} arr - Saved attachment descriptors
+ * @returns {Object[]} Same array, flagged
+ */
+function markAttachmentPersistenceFailed_(arr) {
+  Object.defineProperty(arr, 'hadErrors', {
+    value: true,
+    enumerable: false,
+    configurable: true,
+  })
+  return arr
+}
+
+/**
  * Persists attached documents from a canonical email thread to Google Drive along
  * the label's taxonomy path, skipping duplicates and strictly ignoring non-canonical emails.
  *
@@ -3975,6 +4072,18 @@ function persistCanonicalAttachmentsToDrive(
     return []
   }
 
+  const messages =
+    typeof thread.getMessages === 'function' ? thread.getMessages() : []
+  // Nothing to persist → no Drive access needed and nothing can be lost.
+  const hasEligibleAttachment = messages.some((msg) =>
+    getMessageAttachments_(msg).some((att) => isEligibleAttachment(att))
+  )
+  if (!hasEligibleAttachment) {
+    return []
+  }
+
+  // From here on, any failure means eligible attachments would be dropped, so the
+  // result is flagged (hadErrors) and the caller queues the thread for retry.
   let driveApp = services?.DriveApp
   if (typeof driveApp === 'undefined') {
     driveApp = typeof DriveApp !== 'undefined' ? DriveApp : null
@@ -3983,7 +4092,7 @@ function persistCanonicalAttachmentsToDrive(
     console.error(
       '[persistCanonicalAttachmentsToDrive] DriveApp is unavailable; cannot persist attachments.'
     )
-    return []
+    return markAttachmentPersistenceFailed_([])
   }
 
   const canonicalDomain =
@@ -4008,11 +4117,9 @@ function persistCanonicalAttachmentsToDrive(
         ': ' +
         err.message
     )
-    return []
+    return markAttachmentPersistenceFailed_([])
   }
 
-  const messages =
-    typeof thread.getMessages === 'function' ? thread.getMessages() : []
   const savedFiles = []
   const helperFns = {
     getFileHash: services?.getFileHash || getFileHash,
@@ -4136,11 +4243,7 @@ function persistCanonicalAttachmentsToDrive(
             ': ' +
             saveErr.message
         )
-        Object.defineProperty(savedFiles, 'hadErrors', {
-          value: true,
-          enumerable: false,
-          configurable: true,
-        })
+        markAttachmentPersistenceFailed_(savedFiles)
       }
     })
   })
@@ -5161,7 +5264,7 @@ function revertAndQueueMissedCareerEmails(gmailApp, config) {
   const processedLabel = ensureGmailLabel(processedLabelName, gmail)
 
   const recoverySearch =
-    'newer_than:14d (subject:"Employment Agreement" OR subject:"Employment Contract" OR subject:"Offer Letter" OR subject:"PwC" OR subject:"KPMG")'
+    'newer_than:14d (subject:"Employment Agreement" OR subject:"Employment Contract" OR subject:"Offer Letter" OR subject:"Job Offer")'
 
   const modifiedThreadIds = []
   try {
@@ -5179,12 +5282,15 @@ function revertAndQueueMissedCareerEmails(gmailApp, config) {
           return typeof l.getName === 'function' ? l.getName() : String(l)
         })
       }
-      const hasCareerTag =
-        labels.indexOf('06_Work_Career') !== -1 ||
-        labels.indexOf('Work/Career') !== -1 ||
-        labels.indexOf('Career/DJ') !== -1 ||
-        labels.indexOf('Career/Rachel') !== -1 ||
-        labels.indexOf('Career_Interviews') !== -1
+      const hasCareerTag = labels.some(function (l) {
+        const lower = String(l || '').toLowerCase()
+        return (
+          l === '06_Work_Career' ||
+          l === 'Career_Interviews' ||
+          lower.indexOf('work/') === 0 ||
+          lower.indexOf('career/') === 0
+        )
+      })
 
       if (!hasCareerTag) {
         let changed = false
@@ -5235,7 +5341,7 @@ function runMissedEmailsSweep(config, services) {
 
   // 1. Direct Priority Recovery: First sweep and reclassify career & employment contract emails
   const careerQuery =
-    'newer_than:14d (subject:"Employment Agreement" OR subject:"Employment Contract" OR subject:"Offer Letter" OR subject:"PwC" OR subject:"KPMG")'
+    'newer_than:14d (subject:"Employment Agreement" OR subject:"Employment Contract" OR subject:"Offer Letter" OR subject:"Job Offer")'
   console.log('[runMissedEmailsSweep] Priority career sweep: ' + careerQuery)
   reclassifyThreadsByQuery(
     careerQuery,
@@ -5435,9 +5541,11 @@ function purgeExpiredEmailsByRetentionPolicy(customConfig, customServices) {
             }
           }
           if (isExempt) break
+          // Exempt only canonical taxonomy sub-labels (e.g. Finance/Banking);
+          // operational (AI/*, Retention/*) and arbitrary user nested labels do not exempt.
           if (
             labelName.indexOf('/') !== -1 &&
-            labelName.indexOf('Retention/') !== 0
+            resolveCanonicalDomainFromLabels([labelName], coreDomainLabels)
           ) {
             isExempt = true
             break

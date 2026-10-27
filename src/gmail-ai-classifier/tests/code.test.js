@@ -27,6 +27,17 @@ const makeLabel = (name) => ({
   getId: () => 'label-' + name,
 })
 
+// Household-specific routing lists are config-driven (ScriptProperties), never
+// hardcoded in the engine. Tests inject generic example values here.
+const HOUSEHOLD_TEST_CONFIG = {
+  schoolDomains: 'district-schools.example, academy.example',
+  billingSenderDomains:
+    'power-utility.example, water-works.example, local-cu.example',
+  nonprofitSenderDomains: 'local-nonprofit.example',
+  nonprofitSubjectTerms: 'mens bible study',
+  promoSenderTerms: 'karate-studio',
+}
+
 const makeGmailApp = ({ existingLabel = null, createFails = false } = {}) => ({
   getUserLabelByName: jest.fn(() => existingLabel),
   createLabel: createFails
@@ -345,7 +356,12 @@ describe('createPermanentGmailFilter', () => {
     })
     const mockCreate = jest.fn()
     const mockList = jest.fn(() => ({
-      filter: [{ criteria: { from: 'sender@example.com' } }],
+      filter: [
+        {
+          criteria: { from: 'sender@example.com' },
+          action: { addLabelIds: ['label-01_Household/Primary_House'] },
+        },
+      ],
     }))
     const result = createPermanentGmailFilter(
       'sender@example.com',
@@ -363,7 +379,12 @@ describe('createPermanentGmailFilter', () => {
     })
     const mockCreate = jest.fn()
     const mockList = jest.fn(() => ({
-      filter: [{ criteria: { from: 'john@example.com' } }],
+      filter: [
+        {
+          criteria: { from: 'john@example.com' },
+          action: { addLabelIds: ['label-01_Household/Primary_House'] },
+        },
+      ],
     }))
     const result = createPermanentGmailFilter(
       'John Doe <john@example.com>',
@@ -900,7 +921,7 @@ describe('processThreadBatch', () => {
       id: 't-plain',
       getMessages: () => [
         {
-          from: 'alert@apcocu.org',
+          from: 'alert@chase.com',
           subject: 'Monthly Statement Ready',
           snippet: 'Your account statement is available.',
         },
@@ -1410,16 +1431,16 @@ describe('Ontological Knowledge Graph and Triage Matrix Prompt Architecture', ()
     expect(prompt).toContain(
       'SCHOOL & STUDENT ANNOUNCEMENTS VS DIRECT CORRESPONDENCE'
     )
-    expect(prompt).toContain('MCAA')
-    expect(prompt).toContain('Briarwood')
+    expect(prompt).toContain('PowerSchool')
+    expect(prompt).not.toContain('Briarwood')
     expect(prompt).toContain('FACTS')
     expect(prompt).toContain('PowerSchool')
     expect(prompt).toContain('ParentSquare')
     expect(prompt).toContain('Google Classroom')
     expect(prompt).toContain('Family/School-Student')
     expect(prompt).toContain('PRIMARY PARTY ATTRIBUTION PRINCIPLE')
-    expect(prompt).toContain('Family/Kids/Tide')
-    expect(prompt).toContain('Family/Kids/Toby')
+    expect(prompt).toContain('Family/Kids/<ChildName>')
+    expect(prompt).toContain('CUSTOM_PROMPT_RULES')
     expect(prompt).toContain(
       'NON-PROFIT & CHARITY BROADCASTS VS DIRECT CORRESPONDENCE'
     )
@@ -1561,10 +1582,10 @@ describe('cleanConflictingLabels Sub-Label Cleansing', () => {
     { name: 'code.gs implementation', fn: cleanCodeGs },
   ].forEach(({ name, fn }) => {
     describe(name, () => {
-      test('strips conflicting sub-labels such as Family/Sisters/Kristien when primary is Family/Kids/Tide', () => {
+      test('strips conflicting sub-labels such as Family/Sisters/Jordan when primary is Family/Kids/Alex', () => {
         const removed = []
         const mockLabels = [
-          { getName: () => 'Family/Sisters/Kristien' },
+          { getName: () => 'Family/Sisters/Jordan' },
           { getName: () => '04_Family_Health' },
           { getName: () => 'Retention/Permanent' },
           { getName: () => 'Processed' },
@@ -1582,10 +1603,10 @@ describe('cleanConflictingLabels Sub-Label Cleansing', () => {
           processedLabel: 'Processed',
         }
 
-        fn(mockThread, '04_Family_Health', 'Family/Kids/Tide', config)
+        fn(mockThread, '04_Family_Health', 'Family/Kids/Alex', config)
 
-        // Conflicting sub-label Family/Sisters/Kristien MUST be removed
-        expect(removed).toContain('Family/Sisters/Kristien')
+        // Conflicting sub-label Family/Sisters/Jordan MUST be removed
+        expect(removed).toContain('Family/Sisters/Jordan')
         // Domain code 04_Family_Health removed when targetSubLabel is set
         expect(removed).toContain('04_Family_Health')
         // Redundant Retention/Permanent removed
@@ -1610,7 +1631,7 @@ describe('cleanConflictingLabels Sub-Label Cleansing', () => {
         }
         const config = { canonicalDomains: [] }
 
-        fn(mockThread, '04_Family_Health', 'Family/Kids/Tide', config)
+        fn(mockThread, '04_Family_Health', 'Family/Kids/Alex', config)
 
         expect(removed).toContain('Family')
         expect(removed).toContain('Household')
@@ -1967,14 +1988,14 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
       test('reclassifies historical threads and strips conflicting labels in live mode', () => {
         const addedLabels = []
         const removedLabels = []
-        const mockLabels = [{ getName: () => 'Family/Sisters/Kristien' }]
+        const mockLabels = [{ getName: () => 'Family/Sisters/Jordan' }]
         const mockThread = {
           getId: () => 'thread-xyz',
           getMessages: () => [
             {
               getFrom: () => 'probate@example.com',
               getSubject: () => 'Name Change Decree',
-              getPlainBody: () => 'Order regarding Tide name change petition.',
+              getPlainBody: () => 'Order regarding Alex name change petition.',
             },
           ],
           getLabels: () => mockLabels,
@@ -1996,13 +2017,13 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
         }
         const mockClassify = jest.fn(() => ({
           canonicalDomain: '04_Family_Health',
-          subLabel: 'Family/Kids/Tide',
+          subLabel: 'Family/Kids/Alex',
           action: 'keep',
           category: 'Primary',
         }))
 
         const report = fn(
-          'label:"Family/Sisters" Tide',
+          'label:"Family/Sisters" Alex',
           { maxThreads: 10, dryRun: false },
           { processedLabel: 'Processed' },
           { GmailApp: mockGmail, classifyFn: mockClassify }
@@ -2010,23 +2031,23 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
 
         expect(report.scanned).toBe(1)
         expect(report.reclassified).toBe(1)
-        expect(report.items[0].newSubLabel).toBe('Family/Kids/Tide')
-        expect(removedLabels).toContain('Family/Sisters/Kristien')
-        expect(addedLabels).toContain('Family/Kids/Tide')
+        expect(report.items[0].newSubLabel).toBe('Family/Kids/Alex')
+        expect(removedLabels).toContain('Family/Sisters/Jordan')
+        expect(addedLabels).toContain('Family/Kids/Alex')
         expect(addedLabels).toContain('Processed')
       })
 
       test('does not modify thread labels when dryRun is true', () => {
         const addedLabels = []
         const removedLabels = []
-        const mockLabels = [{ getName: () => 'Family/Sisters/Kristien' }]
+        const mockLabels = [{ getName: () => 'Family/Sisters/Jordan' }]
         const mockThread = {
           getId: () => 'thread-dry',
           getMessages: () => [
             {
               getFrom: () => 'probate@example.com',
-              getSubject: () => 'Tide Document',
-              getPlainBody: () => 'Tide paperwork details',
+              getSubject: () => 'Alex Document',
+              getPlainBody: () => 'Alex paperwork details',
             },
           ],
           getLabels: () => mockLabels,
@@ -2038,13 +2059,13 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
         }
         const mockClassify = jest.fn(() => ({
           canonicalDomain: '04_Family_Health',
-          subLabel: 'Family/Kids/Tide',
+          subLabel: 'Family/Kids/Alex',
           action: 'keep',
           category: 'Primary',
         }))
 
         const report = fn(
-          'label:"Family/Sisters" Tide',
+          'label:"Family/Sisters" Alex',
           { maxThreads: 10, dryRun: true },
           { processedLabel: 'Processed' },
           { GmailApp: mockGmail, classifyFn: mockClassify }
@@ -2136,13 +2157,13 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
         }
         const mockClassify = jest.fn(() => ({
           canonicalDomain: '04_Family_Health',
-          subLabel: 'Family/Kids/Tide',
+          subLabel: 'Family/Kids/Alex',
           action: 'keep',
           category: 'Primary',
         }))
 
         const report = fn(
-          'Tide Name Change',
+          'Alex Name Change',
           { maxThreads: 5, dryRun: false },
           {
             canonicalDomains: ['02_Finance_Legal', '04_Family_Health'],
@@ -2482,7 +2503,7 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
     })
   })
 
-  describe('deterministicRuleClassify_ Scarsella curriculum handling', () => {
+  describe('deterministicRuleClassify_ configured local promo sender curriculum handling', () => {
     const implementations = [
       {
         name: 'src/index.js',
@@ -2496,22 +2517,26 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
 
     implementations.forEach(({ name, fn }) => {
       describe(name, () => {
-        test('classifies generic Scarsella promo as Promotions archive', () => {
+        test('classifies generic configured local promo sender promo as Promotions archive', () => {
           const res = fn(
-            'info@scarsellakarate.com',
+            'info@karate-studio.example',
             'Special Summer Camp Discount!',
-            'Sign up today and get 20% off uniforms'
+            'Sign up today and get 20% off uniforms',
+            null,
+            HOUSEHOLD_TEST_CONFIG
           )
           expect(res).not.toBeNull()
           expect(res.category).toBe('Promotions')
           expect(res.canonicalDomain).toBeNull()
         })
 
-        test('bypasses marketing promo block when Scarsella email contains curriculum or testing', () => {
+        test('bypasses marketing promo block when configured local promo sender email contains curriculum or testing', () => {
           const resCurriculum = fn(
-            'info@scarsellakarate.com',
+            'info@karate-studio.example',
             'March Belt Testing & Curriculum Schedule',
-            'Attached is the testing schedule and curriculum form'
+            'Attached is the testing schedule and curriculum form',
+            null,
+            HOUSEHOLD_TEST_CONFIG
           )
           expect(
             resCurriculum === null || resCurriculum.canonicalDomain !== null
@@ -2521,11 +2546,13 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           }
         })
 
-        test('shields school 1:1 teacher correspondence (bcs-lions.org) into Primary', () => {
+        test('shields school 1:1 teacher correspondence (configured school domain) into Primary', () => {
           const res = fn(
-            'asmith@bcs-lions.org',
+            'asmith@district-schools.example',
             'Student - Math Progress & Tutoring Schedule',
-            'Hello Parents, the student did great on the algebra quiz today...'
+            'Hello Parents, the student did great on the algebra quiz today...',
+            null,
+            HOUSEHOLD_TEST_CONFIG
           )
           expect(res).not.toBeNull()
           expect(res.canonicalDomain).toBe('04_Family_Health')
@@ -2535,11 +2562,13 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(res.reasoning).toBe('Teacher 1:1 Shield')
         })
 
-        test('shields school 1:1 teacher correspondence (briarwoodchristianschool.org) into Primary', () => {
+        test('shields school 1:1 teacher correspondence (second configured school domain) into Primary', () => {
           const res = fn(
-            'teacher@briarwoodchristianschool.org',
+            'teacher@academy.example',
             'Student - Chemistry Study Guide & Quiz Update',
-            'Hello Parents, here is the study guide for tomorrow...'
+            'Hello Parents, here is the study guide for tomorrow...',
+            null,
+            HOUSEHOLD_TEST_CONFIG
           )
           expect(res).not.toBeNull()
           expect(res.canonicalDomain).toBe('04_Family_Health')
@@ -2575,13 +2604,13 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(vercelRes.subLabel).toBe('Tech/Alerts')
         })
 
-        test('classifies utility bills (Alabama Power, BWWB) into Finance/Bills', () => {
+        test('classifies utility bills (configured local utility billers) into Finance/Bills', () => {
           const powerRes = fn(
-            'ebill@alabamapower.com',
+            'ebill@power-utility.example',
             'Your monthly electric bill is ready to view',
             'Account ending in 1234',
             null,
-            {}
+            HOUSEHOLD_TEST_CONFIG
           )
           expect(powerRes).not.toBeNull()
           expect(powerRes.canonicalDomain).toBe('02_Finance_Legal')
@@ -2590,11 +2619,11 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(powerRes.action).toBe('archive')
 
           const waterRes = fn(
-            'ebilling@bwwb.org',
+            'ebilling@water-works.example',
             'Water service statement available',
             'Your current statement',
             null,
-            {}
+            HOUSEHOLD_TEST_CONFIG
           )
           expect(waterRes).not.toBeNull()
           expect(waterRes.canonicalDomain).toBe('02_Finance_Legal')
@@ -2639,7 +2668,7 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(uspsRes.subLabel).toBe('Finance/Purchases')
         })
 
-        test('classifies extended banking statements and payment confirmations (Citi, Amex, APCO CU, Rocket Mortgage)', () => {
+        test('classifies extended banking statements and payment confirmations (Citi, Amex, configured credit union, Rocket Mortgage)', () => {
           const citiRes = fn(
             'citicards@info.citi.com',
             'Your Costco Anywhere Visa statement is available',
@@ -2665,11 +2694,11 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(amexRes.subLabel).toBe('Finance/Bills')
 
           const apcoRes = fn(
-            'noreplies@apcocu.org',
+            'noreplies@local-cu.example',
             'Credit Union e-Statement Notification',
             'Your e-statement is ready',
             null,
-            {}
+            HOUSEHOLD_TEST_CONFIG
           )
           expect(apcoRes).not.toBeNull()
           expect(apcoRes.canonicalDomain).toBe('02_Finance_Legal')
@@ -2819,11 +2848,11 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(brightArrow.reasoning).toBe('School Broadcast')
 
           const elearningDay = fn(
-            'announcements@bcsk12.org',
+            'announcements@district-schools.example',
             'E Learning Day Tomorrow: Weather Announcement',
             'Campus closed for e-learning day tomorrow',
             null,
-            {}
+            HOUSEHOLD_TEST_CONFIG
           )
           expect(elearningDay).not.toBeNull()
           expect(elearningDay.canonicalDomain).toBe('04_Family_Health')
@@ -3156,13 +3185,13 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(calRes.action).toBe('archive')
         })
 
-        test('classifies non-profit charity impact newsletters (Ignite Hope) into Community_NonProfit Updates archive', () => {
+        test('classifies non-profit charity impact newsletters (configured local non-profit) into Community_NonProfit Updates archive', () => {
           const charityRes = fn(
-            'info@ignite-hope.org',
+            'info@local-nonprofit.example',
             '632 hours later, the doors opened!',
-            'Ignite Hope shared a project milestone and renovation update sent via their mass mailer.',
+            'The non-profit shared a project milestone and renovation update sent via their mass mailer.',
             null,
-            {}
+            HOUSEHOLD_TEST_CONFIG
           )
           expect(charityRes).not.toBeNull()
           expect(charityRes.canonicalDomain).toBe('07_Community_NonProfit')
@@ -3174,11 +3203,11 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
 
         test('classifies school-wide sports tryouts (tennis tryouts) as school broadcast into Family/School-Student archive', () => {
           const tryoutRes = fn(
-            'staff@bcsk12.org',
+            'staff@district-schools.example',
             'Junior High Tennis Tryouts Next Week!',
             'Tennis tryouts will be held next week for all interested students.',
             null,
-            {}
+            HOUSEHOLD_TEST_CONFIG
           )
           expect(tryoutRes).not.toBeNull()
           expect(tryoutRes.canonicalDomain).toBe('04_Family_Health')
@@ -3188,13 +3217,13 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(tryoutRes.reasoning).toBe('School Broadcast')
         })
 
-        test('classifies Ironmen weekly Bible study broadcast and notes into Community_NonProfit Updates archive', () => {
+        test('classifies configured weekly Bible study broadcast and notes into Community_NonProfit Updates archive', () => {
           const bibleStudyRes = fn(
             'ministry@example.com',
-            'IRONMEN 6:30am THURSDAY Acts 24 Study Notes',
+            'Mens Bible Study 6:30am THURSDAY Acts 24 Notes',
             'Weekly meeting details and study guide covering Acts 24 with schedule notes.',
             null,
-            {}
+            HOUSEHOLD_TEST_CONFIG
           )
           expect(bibleStudyRes).not.toBeNull()
           expect(bibleStudyRes.canonicalDomain).toBe('07_Community_NonProfit')
@@ -5714,6 +5743,358 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             ).toBe(true)
           })
         })
+      })
+    })
+  })
+})
+
+describe('PR #649 owner review regressions', () => {
+  const implementations = [
+    { name: 'src/index.js', mod: require('../src/index') },
+    { name: 'code.gs', mod: require('../code.gs') },
+  ]
+  const gitHubSync = require('../gitHubSync.gs')
+
+  implementations.forEach(({ name, mod }) => {
+    describe(name, () => {
+      const makeBatchThread = (overrides = {}) => ({
+        getId: () => overrides.id || 't-batch',
+        getMessages: () => [
+          {
+            getFrom: () => overrides.from || 'news@unknown-sender.example',
+            getSubject: () => overrides.subject || 'Quarterly update',
+            getPlainBody: () => 'Body text',
+          },
+        ],
+        getLabels: () => [],
+        addLabel: jest.fn(),
+        removeLabel: jest.fn(),
+        moveToArchive: jest.fn(),
+      })
+      const makeBatchServices = (classification, filterSvc) => ({
+        GmailApp: {
+          getUserLabelByName: jest.fn((n) => ({
+            getName: () => n,
+            getId: () => 'label-' + n,
+          })),
+          createLabel: jest.fn((n) => ({
+            getName: () => n,
+            getId: () => 'label-' + n,
+          })),
+        },
+        UrlFetchApp: {
+          fetch: jest.fn(() => ({
+            getResponseCode: () => 200,
+            getContentText: () =>
+              JSON.stringify({
+                candidates: [
+                  {
+                    content: {
+                      parts: [{ text: JSON.stringify(classification) }],
+                    },
+                  },
+                ],
+              }),
+          })),
+        },
+        Gmail: filterSvc || null,
+      })
+      const batchConfig = {
+        geminiApiKey: 'k',
+        modelEndpoint: 'https://example.test/model',
+        processedLabel: 'Processed',
+        userAccountEmail: 'me@example.com',
+        autoFilterConfidenceThreshold: 0.95,
+        canonicalDomains: [
+          '01_Household',
+          '02_Finance_Legal',
+          '04_Family_Health',
+        ],
+      }
+
+      test('processThreadBatch applies the destructive-action shield for low confidence and user replies', () => {
+        const lowConf = makeBatchThread({ id: 't-low' })
+        const lowRes = mod.processThreadBatch(
+          [lowConf],
+          batchConfig,
+          makeBatchServices({
+            canonical_label: '02_Finance_Legal',
+            canonicalDomain: '02_Finance_Legal',
+            subLabel: 'Finance/Bills',
+            category: 'Updates',
+            action: 'archive',
+            confidence: 0.6,
+            reasoning: 'low',
+          })
+        )
+        expect(lowRes[0].status).toBe('classified')
+        expect(lowRes[0].archived).toBe(false)
+        expect(lowConf.moveToArchive).not.toHaveBeenCalled()
+
+        const replied = makeBatchThread({ id: 't-replied' })
+        replied.getMessages = () => [
+          {
+            getFrom: () => 'news@unknown-sender.example',
+            getSubject: () => 'Quarterly update',
+            getPlainBody: () => 'Body text',
+          },
+          { getFrom: () => 'Me <me@example.com>' },
+        ]
+        const repliedRes = mod.processThreadBatch(
+          [replied],
+          batchConfig,
+          makeBatchServices({
+            canonical_label: '02_Finance_Legal',
+            canonicalDomain: '02_Finance_Legal',
+            subLabel: 'Finance/Bills',
+            category: 'Updates',
+            action: 'archive',
+            confidence: 0.97,
+            reasoning: 'hi',
+          })
+        )
+        expect(repliedRes[0].archived).toBe(false)
+        expect(replied.moveToArchive).not.toHaveBeenCalled()
+
+        const highConf = makeBatchThread({ id: 't-high' })
+        const highRes = mod.processThreadBatch(
+          [highConf],
+          batchConfig,
+          makeBatchServices({
+            canonical_label: '02_Finance_Legal',
+            canonicalDomain: '02_Finance_Legal',
+            subLabel: 'Finance/Bills',
+            category: 'Updates',
+            action: 'keep',
+            confidence: 0.97,
+            reasoning: 'hi',
+          })
+        )
+        expect(highRes[0].archived).toBe(true)
+        expect(highConf.moveToArchive).toHaveBeenCalled()
+      })
+
+      test('processThreadBatch creates the auto-filter for the applied sub-label', () => {
+        const create = jest.fn()
+        const filterSvc = {
+          Users: {
+            Settings: {
+              Filters: { list: jest.fn(() => ({ filter: [] })), create },
+            },
+          },
+        }
+        mod.processThreadBatch(
+          [makeBatchThread({ id: 't-filter' })],
+          batchConfig,
+          makeBatchServices(
+            {
+              canonical_label: '02_Finance_Legal',
+              canonicalDomain: '02_Finance_Legal',
+              subLabel: 'Finance/Bills',
+              category: 'Updates',
+              action: 'archive',
+              confidence: 0.99,
+              reasoning: 'hi',
+            },
+            filterSvc
+          )
+        )
+        expect(create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: { addLabelIds: ['label-Finance/Bills'] },
+          }),
+          'me'
+        )
+      })
+
+      test('createPermanentGmailFilter still creates a filter when the existing sender filter targets a different label', () => {
+        const create = jest.fn()
+        const svc = {
+          Users: {
+            Settings: {
+              Filters: {
+                list: () => ({
+                  filter: [
+                    {
+                      criteria: { from: 'a@example.com' },
+                      action: { addLabelIds: ['label-Other'] },
+                    },
+                    { criteria: { from: 'a@example.com' } },
+                  ],
+                }),
+                create,
+              },
+            },
+          },
+        }
+        const gmailApp = {
+          getUserLabelByName: (n) => ({
+            getName: () => n,
+            getId: () => 'label-' + n,
+          }),
+        }
+        expect(
+          mod.createPermanentGmailFilter(
+            'a@example.com',
+            'Finance/Bills',
+            svc,
+            gmailApp
+          )
+        ).toBe(true)
+        expect(create).toHaveBeenCalled()
+      })
+
+      test('setupFiveMinuteTrigger only replaces triggers owned by this module', () => {
+        const deleted = []
+        const makeTrig = (h) => ({ getHandlerFunction: () => h })
+        const builder = {
+          timeBased: () => builder,
+          everyMinutes: () => builder,
+          everyDays: () => builder,
+          everyHours: () => builder,
+          atHour: () => builder,
+          onWeekDay: () => builder,
+          create: () => ({}),
+        }
+        const scriptApp = {
+          WeekDay: { SUNDAY: 'SUNDAY' },
+          getProjectTriggers: () => [
+            makeTrig('processEmailsWithAiClassifier'),
+            makeTrig('someOtherRoutine'),
+            makeTrig('auditEmailClassifications'),
+          ],
+          deleteTrigger: (t) => deleted.push(t.getHandlerFunction()),
+          newTrigger: () => builder,
+        }
+        mod.setupFiveMinuteTrigger({ ScriptApp: scriptApp })
+        expect(deleted).toContain('processEmailsWithAiClassifier')
+        expect(deleted).toContain('auditEmailClassifications')
+        expect(deleted).not.toContain('someOtherRoutine')
+      })
+
+      test('purgeExpiredEmailsByRetentionPolicy does not exempt operational or arbitrary nested labels', () => {
+        const mk = (id, label) => ({
+          getId: () => id,
+          getLabels: () => [{ getName: () => label }],
+          getMessages: () => [{ getFrom: () => 'promo@store.example' }],
+          moveToTrash: jest.fn(),
+        })
+        const retry = mk('t-retry', 'AI/Needs-Retry')
+        const userNested = mk('t-user', 'Receipts/2024')
+        const canonicalSub = mk('t-canon', 'Finance/Banking')
+        const res = mod.purgeExpiredEmailsByRetentionPolicy(
+          { userAccountEmail: 'me@example.com' },
+          { GmailApp: { search: () => [retry, userNested, canonicalSub] } }
+        )
+        expect(retry.moveToTrash).toHaveBeenCalled()
+        expect(userNested.moveToTrash).toHaveBeenCalled()
+        expect(canonicalSub.moveToTrash).not.toHaveBeenCalled()
+        expect(res).toEqual({ trashedCount: 2, exemptedCount: 1 })
+      })
+
+      test('persistCanonicalAttachmentsToDrive flags early-return failures only when eligible attachments exist', () => {
+        const att = {
+          getName: () => 'invoice.pdf',
+          getContentType: () => 'application/pdf',
+          getSize: () => 4096,
+          getBytes: () => [1, 2, 3],
+        }
+        const withAtt = { getMessages: () => [{ getAttachments: () => [att] }] }
+        const noAtt = { getMessages: () => [{ getAttachments: () => [] }] }
+        const cls = {
+          canonicalDomain: '02_Finance_Legal',
+          subLabel: 'Finance/Bills',
+        }
+        const cfg = { canonicalDomains: ['02_Finance_Legal'] }
+
+        const noDrive = mod.persistCanonicalAttachmentsToDrive(
+          withAtt,
+          cls,
+          cfg,
+          {
+            DriveApp: null,
+          }
+        )
+        expect(noDrive.hadErrors).toBe(true)
+
+        const folderFail = mod.persistCanonicalAttachmentsToDrive(
+          withAtt,
+          cls,
+          cfg,
+          {
+            DriveApp: {
+              getRootFolder: () => {
+                throw new Error('quota')
+              },
+            },
+          }
+        )
+        expect(folderFail.hadErrors).toBe(true)
+
+        const nothing = mod.persistCanonicalAttachmentsToDrive(
+          noAtt,
+          cls,
+          cfg,
+          {
+            DriveApp: null,
+          }
+        )
+        expect(nothing.hadErrors).toBeUndefined()
+      })
+
+      test('insertEntryIntoLogSection targets the Activity Log </details>, not an earlier block', () => {
+        const doc =
+          '# Note\n<details><summary>Layer 1</summary>\nsummary\n</details>\n\n' +
+          '## 3. Ingested Activity Logs\n<details open><summary>Logs</summary>\n### old\n</details>\n'
+        for (const fn of [
+          mod.insertEntryIntoLogSection,
+          gitHubSync.insertEntryIntoLogSection,
+        ]) {
+          const out = fn(doc, '### new')
+          const layer1End = out.indexOf('</details>')
+          expect(out.indexOf('### new')).toBeGreaterThan(
+            out.indexOf('## 3. Ingested')
+          )
+          expect(out.slice(0, layer1End)).not.toContain('### new')
+          expect(fn('<details>a</details>', 'X')).toBe(
+            '<details>aX\n</details>'
+          )
+        }
+      })
+
+      test('resolves household career sub-labels generically without hardcoded names', () => {
+        expect(
+          mod.resolveTaxonomySubfolderName('06_Work_Career', 'Career/Pat')
+        ).toBe('Career_Pat')
+        expect(
+          mod.resolveTaxonomySubfolderName('06_Work_Career', 'Career/Side Gig')
+        ).toBe('Career_Side_Gig')
+        expect(mod.CANONICAL_TAXONOMY_SUBFOLDERS['06_Work_Career']).toEqual([
+          'Career_Interviews',
+          'Employer',
+          'Expenses_Admin',
+        ])
+      })
+
+      test('school, billing, nonprofit, and promo fast paths are inert without config', () => {
+        expect(
+          mod.deterministicRuleClassify_(
+            'teacher@district-schools.example',
+            'Student progress question',
+            'Hello',
+            null,
+            {}
+          )
+        ).toBeNull()
+        expect(
+          mod.deterministicRuleClassify_(
+            'teacher@district-schools.example',
+            'Student progress question',
+            'Hello',
+            null,
+            { schoolDomains: ['district-schools.example'] }
+          ).reasoning
+        ).toBe('Teacher 1:1 Shield')
       })
     })
   })

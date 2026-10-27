@@ -15,7 +15,10 @@ Share the 7 Canonical Domain folders in Google Drive (`01_Household` through `07
 ### Step 2: Deploy Script Instance to Account #2
 
 1. Log into Google Apps Script under `user2@example.com`.
-2. Push or copy `code.gs`, `config.gs`, `gitHubSync.gs`, and `appsscript.json`.
+2. Create or link your own Apps Script project locally — `.clasp.json` is per-developer state and is **gitignored** (never committed):
+   - New project: `cd src/gmail-ai-classifier && npx clasp create --type standalone --title "Gmail AI Classifier" --rootDir .`
+   - Existing project: `cd src/gmail-ai-classifier && npx clasp clone <YOUR_SCRIPT_ID> --rootDir .`
+   - Then `npx clasp push` (or copy `code.gs`, `config.gs`, `gitHubSync.gs`, and `appsscript.json` manually).
 3. Open **Project Settings (gear icon)** $\rightarrow$ **Script Properties**.
 4. Add the following keys:
    - `GEMINI_API_KEY`: Your Google AI Studio API key.
@@ -24,11 +27,15 @@ Share the 7 Canonical Domain folders in Google Drive (`01_Household` through `07
    - `GITHUB_REPO_NAME`: Target GitHub repository name.
    - `DRIVE_ROOT_FOLDER_NAME`: _(Optional)_ Parent folder name in Google Drive under which the 7 canonical domain folders live (defaults to Drive root when omitted).
    - `USER_ACCOUNT_EMAIL`: `user2@example.com`
-   - `CUSTOM_PROMPT_RULES`: _(Optional)_ User-specific domain and student attribution rules appended dynamically to the AI prompt without code modifications.
+   - `CUSTOM_PROMPT_RULES`: _(Optional)_ User-specific domain and student attribution rules appended dynamically to the AI prompt without code modifications (e.g. per-child `Family/Kids/<ChildName>` labels).
+   - `SCHOOL_DOMAINS`: _(Optional)_ Comma-separated school sender domains used by the teacher 1:1 shield and school-broadcast fast path.
+   - `BILLING_SENDER_DOMAINS`: _(Optional)_ Comma-separated local utility / credit-union biller domains for the routine-billing fast path.
+   - `NONPROFIT_SENDER_DOMAINS` / `NONPROFIT_SUBJECT_TERMS`: _(Optional)_ Comma-separated local non-profit sender domains / subject terms for the non-profit newsletter fast path.
+   - `PROMO_SENDER_TERMS`: _(Optional)_ Comma-separated sender substrings for local businesses whose non-operational mail should be routed to Promotions (schedule/curriculum/forms mail is exempt).
 
 ### Step 3: Enable Automated Triggers
 
-Run `setupFiveMinuteTrigger()` in Apps Script under Account #2.
+Run `setupFiveMinuteTrigger()` in Apps Script under Account #2. It replaces only this module's own triggers (`processEmailsWithAiClassifier`, `purgeExpiredEmailsByRetentionPolicy`, `auditEmailClassifications`); other triggers in the project are preserved.
 
 ---
 
@@ -45,7 +52,7 @@ Run `setupFiveMinuteTrigger()` in Apps Script under Account #2.
   - `06_Work_Career`: Professional notes, work expenses, architecture docs.
   - `07_Community_NonProfit`: Sensor telemetry, non-profit BOD notes, charity updates.
 - **Automated Google Drive Taxonomy Attachment Persistence**: Automatically extracts and persists attached documents (`.pdf`, `.docx`, `.xlsx`, `.csv`, etc.) along the label's 2-level Google Drive taxonomy path (`[Domain]/[Subfolder]`, or `[DRIVE_ROOT_FOLDER_NAME]/[Domain]/[Subfolder]` when `DRIVE_ROOT_FOLDER_NAME` is configured), with MD5 content fingerprint deduplication and automatic signature/tracking pixel filtering (`< 35KB` for images). Strictly ignores attachments for non-canonical emails (promotions, newsletters, spam) to prevent storage bloat. Formatted Google Drive links are automatically appended to GitHub markdown notes under `- **Attachments**:`.
-- **2-Year Category Retention Engine**: Automatically purges promotional, social, and forum emails older than 2 years every Sunday at 1:00 AM, while keeping core threads **indefinitely**. The retention guard exempts any thread carrying a canonical-domain label **or one of its classifier sub-labels** (e.g. `Finance/Banking`), plus starred and user-sent/replied threads — so a core message tagged only with its sub-label is never trashed.
+- **2-Year Category Retention Engine**: Automatically purges promotional, social, and forum emails older than 2 years every Sunday at 1:00 AM, while keeping core threads **indefinitely**. The retention guard exempts any thread carrying a canonical-domain label **or one of its canonical taxonomy sub-labels** (e.g. `Finance/Banking`), plus starred and user-sent/replied threads — so a core message tagged only with its sub-label is never trashed. Operational labels (`AI/*`, `Retention/*`) and arbitrary user nested labels do not grant an exemption.
 
 ---
 

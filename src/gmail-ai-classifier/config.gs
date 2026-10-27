@@ -79,6 +79,13 @@ function getAiClassifierConfig() {
       getProp('USER_ACCOUNT_EMAIL') ||
       'household-member@gmail.com',
     customPromptRules: getProp('CUSTOM_PROMPT_RULES') || '',
+    // Household-specific deterministic routing lists (comma-separated). Kept out of
+    // the generic engine so no personal schools, businesses, or regions are hardcoded.
+    schoolDomains: getProp('SCHOOL_DOMAINS') || '',
+    billingSenderDomains: getProp('BILLING_SENDER_DOMAINS') || '',
+    nonprofitSenderDomains: getProp('NONPROFIT_SENDER_DOMAINS') || '',
+    nonprofitSubjectTerms: getProp('NONPROFIT_SUBJECT_TERMS') || '',
+    promoSenderTerms: getProp('PROMO_SENDER_TERMS') || '',
     auditDigestEmail: getProp('AUDIT_DIGEST_EMAIL') || '',
     auditLookbackDays: auditLookbackDays,
     processedLabel: getProp('PROCESSED_LABEL') || 'Processed',
