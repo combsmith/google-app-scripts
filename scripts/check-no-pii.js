@@ -424,4 +424,22 @@ function main() {
   process.exit(0)
 }
 
-main()
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    BASE_PROHIBITED_RULES,
+    loadCustomRules,
+    isScannablePath,
+    isIgnoredPath,
+    toPosixPath,
+    isMatchWhitelisted,
+    scanFile,
+    getTrackedRepoFiles,
+    getAllRepoFiles,
+    getStagedFiles,
+    readTargetFileContent,
+  }
+}
+
+if (require.main === module) {
+  main()
+}
