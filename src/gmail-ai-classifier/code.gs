@@ -1241,15 +1241,13 @@ function makeDeterministicResult_(
 }
 
 /**
- * Normalizes a comma/pipe/whitespace-delimited config list into a pipe-delimited term string.
+ * Normalizes a comma/pipe-delimited config list into a pipe-delimited term string.
  *
  * @param {string|string[]} value - Raw config list
  * @returns {string} Pipe-delimited lowercase terms
  */
 function normalizeConfigTermList_(value) {
-  const items = Array.isArray(value)
-    ? value
-    : String(value || '').split(/[,|\s]+/)
+  const items = Array.isArray(value) ? value : String(value || '').split(/[,|]/)
   return items
     .map((v) =>
       String(v || '')

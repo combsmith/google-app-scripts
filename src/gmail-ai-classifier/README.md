@@ -16,9 +16,15 @@ Share the 7 Canonical Domain folders in Google Drive (`01_Household` through `07
 
 1. Log into Google Apps Script under `user2@example.com`.
 2. Create or link your own Apps Script project locally — `.clasp.json` is per-developer state and is **gitignored** (never committed):
-   - New project: `cd src/gmail-ai-classifier && npx clasp create --type standalone --title "Gmail AI Classifier" --rootDir .`
-   - Existing project: `cd src/gmail-ai-classifier && npx clasp clone <YOUR_SCRIPT_ID> --rootDir .`
-   - Then `npx clasp push` (or copy `code.gs`, `config.gs`, `gitHubSync.gs`, and `appsscript.json` manually).
+   - Login first: `npx @google/clasp login`
+   - New project: Create a separate directory, then:
+     ```
+     mkdir -p ~/my-gas-project && cd ~/my-gas-project
+     npx @google/clasp create --type standalone --title "Gmail AI Classifier"
+     cp <path-to-repo>/src/gmail-ai-classifier/{code.gs,config.gs,gitHubSync.gs,appsscript.json} .
+     npx @google/clasp push
+     ```
+   - Existing project: `mkdir -p ~/my-gas-project && cd ~/my-gas-project && npx @google/clasp clone <YOUR_SCRIPT_ID> && cp <path-to-repo>/src/gmail-ai-classifier/{code.gs,config.gs,gitHubSync.gs,appsscript.json} . && npx @google/clasp push`
 3. Open **Project Settings (gear icon)** $\rightarrow$ **Script Properties**.
 4. Add the following keys:
    - `GEMINI_API_KEY`: Your Google AI Studio API key.

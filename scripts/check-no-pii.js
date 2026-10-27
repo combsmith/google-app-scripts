@@ -208,6 +208,15 @@ function getTrackedRepoFiles() {
       .split('\0')
       .filter(Boolean)
       .filter((f) => !isIgnoredPath(f) && isScannablePath(f))
+      .filter((f) => {
+        const fullPath = path.resolve(REPO_ROOT, f)
+        try {
+          const stat = fs.lstatSync(fullPath)
+          return !stat.isSymbolicLink()
+        } catch {
+          return false
+        }
+      })
   } catch {
     return null
   }
@@ -221,7 +230,9 @@ function getAllRepoFiles(dir = REPO_ROOT, base = '') {
     if (isIgnoredPath(relPath)) continue
 
     const fullPath = path.join(dir, entry.name)
-    if (entry.isDirectory()) {
+    if (entry.isSymbolicLink()) {
+      continue
+    } else if (entry.isDirectory()) {
       results = results.concat(getAllRepoFiles(fullPath, relPath))
     } else if (entry.isFile()) {
       if (isScannablePath(relPath)) {
@@ -262,9 +273,11 @@ function readTargetFileContent(relPath, isStagedOnly) {
       return execFileSync('git', ['show', `:${posixRelPath}`], {
         cwd: REPO_ROOT,
         encoding: 'utf8',
+        maxBuffer: 64 * 1024 * 1024,
       })
-    } catch {
-      return null
+    } catch (err) {
+      console.error(`Error reading staged blob for ${relPath}: ${err.message}`)
+      process.exit(1)
     }
   }
 
@@ -276,7 +289,14 @@ function readTargetFileContent(relPath, isStagedOnly) {
 function scanFile(relPath, { isStagedOnly = false } = {}) {
   if (isIgnoredPath(relPath)) return []
   const content = readTargetFileContent(relPath, isStagedOnly)
-  if (!content || content.includes('\0')) return []
+  if (!content) return []
+
+  if (content.includes('\0')) {
+    console.error(
+      `Error: ${relPath} contains binary/NUL bytes; cannot scan for PII`
+    )
+    process.exit(1)
+  }
 
   const lines = content.split('\n')
   const violations = []
