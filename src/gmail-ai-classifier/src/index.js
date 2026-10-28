@@ -3664,13 +3664,28 @@ function collectCandidateDriveFiles_(folder, fileName) {
     addFromIterator(folder.getFilesByName(fileName))
   }
 
-  if (folder && typeof folder.getFiles === 'function' && fileName) {
+  const canSearch = folder && typeof folder.searchFiles === 'function'
+  if (
+    folder &&
+    (canSearch || typeof folder.getFiles === 'function') &&
+    fileName
+  ) {
     const clean = String(fileName).trim()
     const dotIdx = clean.lastIndexOf('.')
     const stem = (dotIdx > 0 ? clean.slice(0, dotIdx) : clean).toLowerCase()
     const ext = dotIdx > 0 ? clean.slice(dotIdx).toLowerCase() : ''
 
-    addFromIterator(folder.getFiles(), function (f) {
+    // Prefer a targeted Drive query over enumerating every file in the folder,
+    // which grows unbounded as taxonomy folders accumulate documents.
+    const candidates = canSearch
+      ? folder.searchFiles(
+          "title contains '" +
+            (stem + '_').replace(/\\/g, '\\\\').replace(/'/g, "\\'") +
+            "'"
+        )
+      : folder.getFiles()
+
+    addFromIterator(candidates, function (f) {
       const fName = (
         typeof f.getName === 'function' ? f.getName() : f.name || ''
       ).toLowerCase()
@@ -6125,6 +6140,7 @@ if (typeof module !== 'undefined' && module.exports) {
     findDriveTaxonomyFolder_,
     isDuplicateAttachment,
     resolveAttachmentName,
+    collectCandidateDriveFiles_,
     extractZipArchiveToSubfolder,
     unzipExistingDriveArchive,
     persistCanonicalAttachmentsToDrive,

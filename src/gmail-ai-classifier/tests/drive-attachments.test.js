@@ -7,6 +7,7 @@ const {
   ensureDriveTaxonomyFolder,
   isDuplicateAttachment,
   resolveAttachmentName,
+  collectCandidateDriveFiles_,
   extractZipArchiveToSubfolder,
   unzipExistingDriveArchive,
   persistCanonicalAttachmentsToDrive,
@@ -517,6 +518,30 @@ describe('Drive Attachment Persistence along Taxonomy Path', () => {
   })
 
   describe('isDuplicateAttachment & resolveAttachmentName', () => {
+    test('collectCandidateDriveFiles_ uses a targeted searchFiles query instead of enumerating the folder', () => {
+      const makeIter = (list) => {
+        let i = 0
+        return { hasNext: () => i < list.length, next: () => list[i++] }
+      }
+      const renamed = { getName: () => "O'Brien_report_123.pdf" }
+      const unrelated = { getName: () => 'other_file.pdf' }
+      const folder = {
+        getFilesByName: jest.fn(() => makeIter([])),
+        getFiles: jest.fn(() => {
+          throw new Error('must not enumerate the whole folder')
+        }),
+        searchFiles: jest.fn(() => makeIter([renamed, unrelated])),
+      }
+      const iter = collectCandidateDriveFiles_(folder, "O'Brien_report.pdf")
+      const names = []
+      while (iter.hasNext()) names.push(iter.next().getName())
+      expect(names).toEqual(["O'Brien_report_123.pdf"])
+      expect(folder.getFiles).not.toHaveBeenCalled()
+      expect(folder.searchFiles).toHaveBeenCalledWith(
+        "title contains 'o\\'brien_report_'"
+      )
+    })
+
     test('identifies exact duplicate file by size and MD5 hash', () => {
       const folder = createMockFolder('Bills')
       const blob1 = createMockAttachment({
