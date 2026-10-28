@@ -29,7 +29,7 @@ function getFileHash(blob) {
         .join('')
     }
     return ''
-  } catch {
+  } catch (e) {
     return ''
   }
 }
@@ -352,7 +352,7 @@ function computeStringHash(str, services) {
         })
         .join('')
     }
-  } catch {
+  } catch (e) {
     // Non-blocking fallback
   }
   var hash = 0
@@ -411,7 +411,7 @@ function classifyWithGemini(sender, subject, snippet, config, services) {
             return cachedResult
           }
         }
-      } catch {
+      } catch (e) {
         // Cache read is non-blocking
       }
     }
@@ -503,7 +503,7 @@ function classifyWithGemini(sender, subject, snippet, config, services) {
             if (cache && cacheKey) {
               try {
                 cache.put(cacheKey, JSON.stringify(parsedObj), 21600)
-              } catch {
+              } catch (e) {
                 // Cache write is non-blocking
               }
             }
@@ -578,7 +578,7 @@ function extractJsonSubstring(text) {
     var rawJson = text.substring(start, end + 1)
     try {
       return JSON.parse(rawJson)
-    } catch {
+    } catch (e) {
       try {
         var cleaned = rawJson.replace(/,\s*([\]}])/g, '$1')
         return JSON.parse(cleaned)
@@ -709,7 +709,7 @@ function incrementThreadRetryCount_(thread, cache) {
   var count = getThreadRetryCount_(thread, cache) + 1
   try {
     cache.put('retry_count_' + threadId, String(count), 21600)
-  } catch {
+  } catch (e) {
     // Cache write is non-blocking
   }
   return count
@@ -724,7 +724,7 @@ function clearThreadRetryCount_(thread, cache) {
   if (!threadId) return
   try {
     cache.remove('retry_count_' + threadId)
-  } catch {
+  } catch (e) {
     // Non-blocking
   }
 }
@@ -826,7 +826,7 @@ function ensureGmailLabel(labelName, gmailApp, gmailAdvanced) {
         )
         const created = gmailApp.getUserLabelByName(labelName)
         if (created) return created
-      } catch {
+      } catch (e) {
         // Fall back to standard createLabel
       }
     }
@@ -846,7 +846,7 @@ function ensureGmailLabel(labelName, gmailApp, gmailAdvanced) {
           }
         }
       }
-    } catch {}
+    } catch (e) {}
     console.error(
       '[ensureGmailLabel] Error creating label:',
       labelName,
@@ -1470,7 +1470,7 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
           )
         }
       }
-    } catch {
+    } catch (e) {
       // ignore thread check errors
     }
   }
@@ -2019,7 +2019,7 @@ function getNotePathForDomain(domain, _subLabel) {
           return customMap[domain]
         }
       }
-    } catch {
+    } catch (e) {
       // Fall through to default map
     }
   }
@@ -2352,7 +2352,7 @@ function hasSecondaryCategory_(thread, rawLabels, services) {
       ) {
         return true
       }
-    } catch {
+    } catch (e) {
       // Non-blocking fallback when Advanced Gmail API is unavailable
     }
   }
@@ -2454,7 +2454,7 @@ function auditClassifications(threads, config, services) {
     if (typeof thread.isInTrash === 'function') {
       try {
         isInTrash = thread.isInTrash()
-      } catch {}
+      } catch (e) {}
     } else if (thread.isInTrash === true || thread.isTrash === true) {
       isInTrash = true
     }
@@ -2616,7 +2616,7 @@ function auditClassifications(threads, config, services) {
                   )
                 }
               }
-            } catch {
+            } catch (e) {
               // Non-blocking folder check
             }
           }
@@ -3404,7 +3404,7 @@ function getMessageAttachments_(msg) {
           includeAttachments: true,
         }) || []
       )
-    } catch {
+    } catch (e) {
       return msg.getAttachments() || []
     }
   }
@@ -3466,7 +3466,7 @@ function enrichSnippetWithAttachments_(snippet, message) {
         ']'
       )
     }
-  } catch {
+  } catch (e) {
     // ignore attachment inspection errors
   }
   return baseSnippet
@@ -3497,7 +3497,7 @@ function getOrCreateChildFolder_(parentFolder, folderName, lockService) {
   if (lock && typeof lock.tryLock === 'function') {
     try {
       acquired = lock.tryLock(5000)
-    } catch {}
+    } catch (e) {}
   }
   try {
     return (
@@ -3508,7 +3508,7 @@ function getOrCreateChildFolder_(parentFolder, folderName, lockService) {
     if (acquired && lock && typeof lock.releaseLock === 'function') {
       try {
         lock.releaseLock()
-      } catch {
+      } catch (e) {
         // Ignore lock release errors
       }
     }
@@ -3624,7 +3624,7 @@ function extractBlobBytes_(blob) {
     if (Buffer.isBuffer(blob)) {
       return blob
     }
-  } catch {
+  } catch (e) {
     return Buffer.from('')
   }
   return Buffer.from('')
@@ -3727,7 +3727,7 @@ function findMatchingDuplicateFile_(existingFiles, newFileBlob, helperFns) {
     if (newFileHash === null) {
       try {
         newFileHash = hashFn(newFileBlob)
-      } catch {
+      } catch (e) {
         return null
       }
     }
@@ -3943,7 +3943,7 @@ function extractZipArchiveToSubfolder(
             'Extracted-From: ' +
             fileName
           extractedFile.setDescription(desc)
-        } catch {}
+        } catch (e) {}
       }
 
       const cDomain = metadata?.canonicalDomain || ''
@@ -4020,7 +4020,7 @@ function unzipExistingDriveArchive(fileIdOrName, targetFolder, services) {
           parentFolder = parents.next()
         }
       }
-    } catch {}
+    } catch (e) {}
   }
 
   if (!zipFile || !parentFolder) {
@@ -4207,7 +4207,7 @@ function persistCanonicalAttachmentsToDrive(
         if (typeof file.setDescription === 'function') {
           try {
             file.setDescription(tagBlock)
-          } catch {
+          } catch (e) {
             // Non-blocking metadata description tagging
           }
         }
@@ -4567,7 +4567,7 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
             try {
               foundFile.setDescription(tagBlock)
               report.taggedCount++
-            } catch {
+            } catch (e) {
               // Non-blocking
             }
           }
@@ -4780,7 +4780,7 @@ function getThreadLastMessageTimestamp_(thread) {
       const parsed = Date.parse(d)
       if (!Number.isNaN(parsed)) return parsed
     }
-  } catch {
+  } catch (e) {
     // Non-blocking fallback
   }
   return 0
@@ -5301,13 +5301,13 @@ function revertAndQueueMissedCareerEmails(gmailApp, config) {
           try {
             thread.removeLabel(processedLabel)
             changed = true
-          } catch {}
+          } catch (e) {}
         }
         if (retryLabel && labels.indexOf(retryLabelName) === -1) {
           try {
             thread.addLabel(retryLabel)
             changed = true
-          } catch {}
+          } catch (e) {}
         }
         if (changed) {
           const tId =
@@ -5817,7 +5817,7 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
           threadLabels = lList.map(function (l) {
             return typeof l.getName === 'function' ? l.getName() : String(l)
           })
-        } catch {}
+        } catch (e) {}
       }
       const isAlreadyProcessed =
         config.processedLabel &&
@@ -6027,7 +6027,7 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
             if (retryLabel && threadLabels.indexOf(retryLabelName) !== -1) {
               try {
                 thread.removeLabel(retryLabel)
-              } catch {}
+              } catch (e) {}
             }
             if (manualReviewLabel) {
               thread.addLabel(manualReviewLabel)
@@ -6073,7 +6073,7 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
     if (lock) {
       try {
         lock.releaseLock()
-      } catch {
+      } catch (e) {
         // ignore lock release error
       }
     }
