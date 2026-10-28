@@ -1262,17 +1262,26 @@ const CAREER_SUBJECT_TERMS_ =
 const CAREER_SNIPPET_TERMS_ =
   'employment agreement|offer of employment|terms of employment|pleased to offer you the position|pleased to offer you|pleased to confirm our offer|congratulations on your offer|employment document|restrictive covenants agreement'
 
+const NONPROFIT_ACTIONABLE_TERMS_ =
+  'please confirm|confirm your|please reply|please respond|reply required|response required|rsvp|action required|action needed|your shift|volunteer shift|can you attend|are you able|need your|urgent'
+
 const CUSTOM_RULE_MATCHERS_ = {
   nonprofit: function (ctx) {
+    // Sender membership alone is not broadcast evidence: direct, actionable
+    // correspondence (e.g. shift confirmations) falls through to Gemini.
+    const looksActionable =
+      containsAny_(ctx.subLower, NONPROFIT_ACTIONABLE_TERMS_) ||
+      containsAny_(ctx.snipLower, NONPROFIT_ACTIONABLE_TERMS_)
     return (
-      matchesSenderDomain_(
-        ctx.sender,
-        'charitywater.org|compassion.com|worldvision.org'
-      ) ||
-      matchesSenderDomain_(
-        ctx.sender,
-        ctx.configTerms.nonprofitSenderDomains
-      ) ||
+      (!looksActionable &&
+        (matchesSenderDomain_(
+          ctx.sender,
+          'charitywater.org|compassion.com|worldvision.org'
+        ) ||
+          matchesSenderDomain_(
+            ctx.sender,
+            ctx.configTerms.nonprofitSenderDomains
+          ))) ||
       containsAny_(ctx.subLower, ctx.configTerms.nonprofitSubjectTerms) ||
       (containsAny_(ctx.sLower, 'newsletter|update|impact') &&
         containsAny_(

@@ -3201,6 +3201,27 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(charityRes.reasoning).toBe('NonProfit Impact Newsletter')
         })
 
+        test('does not archive actionable direct mail from built-in or configured nonprofit domains', () => {
+          const builtIn = fn(
+            'coordinator@charitywater.org',
+            'Please confirm your volunteer shift tomorrow',
+            'Please confirm your attendance for tomorrow.',
+            null,
+            HOUSEHOLD_TEST_CONFIG
+          )
+          expect(builtIn === null || builtIn.action !== 'archive').toBe(true)
+          const configured = fn(
+            'info@local-nonprofit.example',
+            'RSVP needed for Saturday',
+            'Please reply to confirm.',
+            null,
+            HOUSEHOLD_TEST_CONFIG
+          )
+          expect(configured === null || configured.action !== 'archive').toBe(
+            true
+          )
+        })
+
         test('classifies school-wide sports tryouts (tennis tryouts) as school broadcast into Family/School-Student archive', () => {
           const tryoutRes = fn(
             'staff@district-schools.example',
