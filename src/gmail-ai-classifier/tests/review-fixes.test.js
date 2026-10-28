@@ -298,3 +298,57 @@ describe('config retry label', () => {
     }
   })
 })
+
+describe('config manual-review label', () => {
+  test('default unprocessed query uses the configured manual-review label', () => {
+    const prev = global.PropertiesService
+    global.PropertiesService = {
+      getScriptProperties: () => ({
+        getProperty: (k) => (k === 'MANUAL_REVIEW_LABEL' ? 'Ops/Review' : null),
+      }),
+    }
+    try {
+      const cfg = require('../config.gs').getAiClassifierConfig()
+      expect(cfg.manualReviewLabel).toBe('Ops/Review')
+      expect(cfg.unprocessedQuery).toContain('-label:Ops/Review')
+      expect(cfg.unprocessedQuery).not.toContain('AI/Manual-Review')
+    } finally {
+      global.PropertiesService = prev
+    }
+  })
+})
+
+describe('doesDriveFileMatchThreadAttachment_ cross-thread content match', () => {
+  const att = { getSize: () => 5 }
+  const file = {
+    getDescription: () => 'Thread-ID: other',
+    getSize: () => 5,
+    getBlob: () => 'blob',
+  }
+  const helperFns = { getFileHash: () => 'same-hash' }
+
+  test('rejects another thread file by default', () => {
+    expect(
+      mod.doesDriveFileMatchThreadAttachment_(file, att, 'mine', helperFns)
+    ).toBe(false)
+  })
+
+  test('accepts identical content from another thread for audits', () => {
+    expect(
+      mod.doesDriveFileMatchThreadAttachment_(file, att, 'mine', {
+        ...helperFns,
+        allowCrossThreadContentMatch: true,
+      })
+    ).toBe(true)
+  })
+
+  test('still rejects differing content for audits', () => {
+    let n = 0
+    expect(
+      mod.doesDriveFileMatchThreadAttachment_(file, att, 'mine', {
+        getFileHash: () => 'h' + n++,
+        allowCrossThreadContentMatch: true,
+      })
+    ).toBe(false)
+  })
+})

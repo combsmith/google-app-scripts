@@ -4858,7 +4858,12 @@ function doesDriveFileMatchThreadAttachment_(
       ? fileCandidate.getDescription() || ''
       : fileCandidate.description || ''
   if (desc && desc.indexOf('Thread-ID:') !== -1) {
-    return Boolean(threadId) && desc.indexOf('Thread-ID: ' + threadId) !== -1
+    if (Boolean(threadId) && desc.indexOf('Thread-ID: ' + threadId) !== -1) {
+      return true
+    }
+    // Thread metadata is provenance: ingestion dedupes identical content across
+    // threads, so audits may still accept a content match from another thread.
+    if (!(helperFns && helperFns.allowCrossThreadContentMatch)) return false
   }
 
   const candidateSize = extractFileSize_(fileCandidate)
@@ -5866,7 +5871,9 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
         usedRemoteApi = true
         if (!classification) {
           consecutiveRemoteFailures++
-          recordCircuitBreakerFailure(props)
+          // classifyWithGemini already records its own failure; only record for
+          // injected classifiers so each failed classification counts once.
+          if (services.classifyFn) recordCircuitBreakerFailure(props)
           if (consecutiveRemoteFailures >= 2) {
             console.warn(
               '[processEmailsWithAiClassifier] Multiple consecutive remote API failures detected; disabling remote API for remainder of batch to preserve execution budget.'
@@ -6178,6 +6185,7 @@ if (typeof module !== 'undefined' && module.exports) {
     listAvailableGeminiModels,
     isCircuitBreakerOpen,
     recordCircuitBreakerFailure,
+    doesDriveFileMatchThreadAttachment_,
     recordCircuitBreakerSuccess,
     getThreadRetryCount_,
     incrementThreadRetryCount_,

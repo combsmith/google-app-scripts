@@ -71,6 +71,8 @@ function getAiClassifierConfig() {
   var processedLabelQuery = processedLabel.replace(/\s+/g, '-')
   var retryLabel = getProp('RETRY_LABEL') || 'AI/Needs-Retry'
   var retryLabelQuery = retryLabel.replace(/\s+/g, '-')
+  var manualReviewLabel = getProp('MANUAL_REVIEW_LABEL') || 'AI/Manual-Review'
+  var manualReviewLabelQuery = manualReviewLabel.replace(/\s+/g, '-')
 
   return {
     geminiApiKey: getProp('GEMINI_API_KEY') || '',
@@ -96,16 +98,20 @@ function getAiClassifierConfig() {
     auditLookbackDays: auditLookbackDays,
     processedLabel: processedLabel,
     retryLabel: retryLabel,
-    manualReviewLabel: getProp('MANUAL_REVIEW_LABEL') || 'AI/Manual-Review',
+    manualReviewLabel: manualReviewLabel,
     unprocessedQuery:
       getProp('UNPROCESSED_QUERY') ||
       'label:' +
         retryLabelQuery +
         ' OR (in:inbox -label:' +
         processedLabelQuery +
-        ' -label:AI/Manual-Review) OR (newer_than:14d -label:' +
+        ' -label:' +
+        manualReviewLabelQuery +
+        ') OR (newer_than:14d -label:' +
         processedLabelQuery +
-        ' -label:AI/Manual-Review -from:me)',
+        ' -label:' +
+        manualReviewLabelQuery +
+        ' -from:me)',
     autoFilterConfidenceThreshold: autoFilterConfidenceThreshold,
     modelEndpoint:
       customEndpoint ||
