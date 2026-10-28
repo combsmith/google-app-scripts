@@ -1223,3 +1223,43 @@ describe.each([
     })
   })
 })
+
+describe.each([
+  ['code.gs', codeMod],
+  ['src/index.js', indexMod],
+])('round-4 review fixes (%s)', (_implName, mod) => {
+  test('document scans with rating/star substrings stay eligible', () => {
+    const img = (name) => ({ name, size: 200 * 1024 })
+    expect(
+      mod.evaluateAttachmentEligibility(img('operating-agreement.png')).eligible
+    ).toBe(true)
+    expect(
+      mod.evaluateAttachmentEligibility(img('start-of-care.png')).eligible
+    ).toBe(true)
+    expect(
+      mod.evaluateAttachmentEligibility(img('star-rating.png')).eligible
+    ).toBe(false)
+  })
+
+  test('compound domain labels resolve to their root domain', () => {
+    expect(
+      mod.resolveCanonicalDomainFromLabels(['02_Finance_Legal/Bills'])
+    ).toBe('02_Finance_Legal')
+  })
+
+  test('revertAndQueueMissedCareerEmails skips manual-review threads', () => {
+    const thread = {
+      getId: () => 'th-manual',
+      getLabels: () => [label('AI/Manual-Review')],
+      removeLabel: jest.fn(),
+      addLabel: jest.fn(),
+    }
+    const gmail = {
+      search: jest.fn(() => [thread]),
+      getUserLabelByName: jest.fn((name) => label(name)),
+    }
+    const res = mod.revertAndQueueMissedCareerEmails(gmail, {})
+    expect(res).toEqual([])
+    expect(thread.addLabel).not.toHaveBeenCalled()
+  })
+})

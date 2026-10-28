@@ -2647,7 +2647,7 @@ function auditClassifications(threads, config, services) {
 
     if (NEWSLETTER_KEYWORDS.test(subject) && assignedCanonical.length > 0) {
       const hasNewsletterSublabel = rawLabels.some((l) =>
-        /newsletter|digest|news/i.test(l)
+        /newsletter|digest|news|school|student|nonprofit|community/i.test(l)
       )
       if (!hasNewsletterSublabel) {
         flags.push(
@@ -3551,8 +3551,8 @@ function evaluateAttachmentEligibility(att) {
       /divider/i,
       /border/i,
       /bullet/i,
-      /rating/i,
-      /star/i,
+      /(^|[-_.\s])(rating|ratings)($|[-_.\s\d])/i,
+      /(^|[-_.\s])(star|stars)($|[-_.\s\d])/i,
       /thumbnail/i,
       /thumb/i,
       /outlook-[a-z0-9]+/i,
@@ -4574,8 +4574,10 @@ function resolveCanonicalDomainFromLabels(rawLabels, canonicalDomains) {
   // 1. Direct match on root domain codes (e.g. "01_Household")
   for (let i = 0; i < rawLabels.length; i++) {
     const l = rawLabels[i]
-    if (allowed.includes(l) || /^0[1-7]_/.test(l)) {
-      return l
+    // Compound labels like "02_Finance_Legal/Bills" resolve to their root segment
+    const root = String(l || '').split('/')[0]
+    if (allowed.includes(root) || /^0[1-7]_/.test(root)) {
+      return root
     }
   }
   // 2. Canonical sub-label prefix mapping
@@ -5722,6 +5724,10 @@ function revertAndQueueMissedCareerEmails(gmailApp, config) {
         labels = lObjs.map(function (l) {
           return typeof l.getName === 'function' ? l.getName() : String(l)
         })
+      }
+      // Threads escalated to manual review must not be re-queued for retry
+      if (labels.indexOf(cfg.manualReviewLabel || 'AI/Manual-Review') !== -1) {
+        continue
       }
       const hasCareerTag = labels.some(function (l) {
         const lower = String(l || '').toLowerCase()
