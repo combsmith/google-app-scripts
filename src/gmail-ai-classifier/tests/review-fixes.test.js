@@ -352,3 +352,73 @@ describe('doesDriveFileMatchThreadAttachment_ cross-thread content match', () =>
     ).toBe(false)
   })
 })
+
+describe('same-thread attachment provenance requires a content match', () => {
+  const att = { getSize: () => 5 }
+  const file = {
+    getDescription: () => 'Thread-ID: mine',
+    getSize: () => 5,
+    getBlob: () => 'blob',
+  }
+
+  test('rejects a same-thread file whose content differs', () => {
+    let n = 0
+    expect(
+      mod.doesDriveFileMatchThreadAttachment_(file, att, 'mine', {
+        getFileHash: () => 'h' + n++,
+      })
+    ).toBe(false)
+  })
+
+  test('accepts a same-thread file whose content matches', () => {
+    expect(
+      mod.doesDriveFileMatchThreadAttachment_(file, att, 'mine', {
+        getFileHash: () => 'same',
+      })
+    ).toBe(true)
+  })
+})
+
+describe('isSubLabelOfDomain_', () => {
+  test('only accepts sub-labels that resolve to the domain', () => {
+    expect(mod.isSubLabelOfDomain_('Finance/Bills', '02_Finance_Legal')).toBe(
+      true
+    )
+    expect(
+      mod.isSubLabelOfDomain_('02_Finance_Legal/Bills', '02_Finance_Legal')
+    ).toBe(true)
+    expect(
+      mod.isSubLabelOfDomain_('Personal/Follow-Up', '02_Finance_Legal')
+    ).toBe(false)
+    expect(mod.isSubLabelOfDomain_('Tech/Alerts', '02_Finance_Legal')).toBe(
+      false
+    )
+  })
+})
+
+describe('manual-payment bill notices fall through to semantic classification', () => {
+  const cfg = { billingSenderDomains: 'utility.example' }
+  test('bill-ready with manual payment due is not archived', () => {
+    expect(
+      mod.deterministicRuleClassify_(
+        'billing@utility.example',
+        'Your bill is ready',
+        'Autopay is disabled. Please pay $150 by November 1 to avoid interruption of service.',
+        null,
+        cfg
+      )
+    ).toBeNull()
+  })
+
+  test('routine bill-ready notice is still archived', () => {
+    const r = mod.deterministicRuleClassify_(
+      'billing@utility.example',
+      'Your bill is ready',
+      'Your statement is available online.',
+      null,
+      cfg
+    )
+    expect(r.category).toBe('Updates')
+    expect(r.action).toBe('archive')
+  })
+})
