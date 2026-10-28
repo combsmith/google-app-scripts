@@ -1256,6 +1256,9 @@ function normalizeConfigTermList_(value) {
 const SCHOOL_BROADCAST_TERMS_ =
   'weekly|newsletter|bulletin|school update|campus update|district update|digest|progress is ready|lunch|menu|portraits|news|noteworthy|announcement|athletics|e learning|e-learning|report card update|trunk or treat|spirit week|pto|pta|open house|picture day|fall festival|spring festival|school announcement|tryouts|tryout|try-outs|try-out|auditions|audition|team tryouts|absent|attendance|tardy|tuition|billing statement|assignment posted|new assignment|grade updated|score published|family portal|parent portal'
 
+const MANUAL_PAYMENT_SNIPPET_TERMS_ =
+  'autopay is disabled|autopay is off|autopay is not enabled|auto-pay is off|not enrolled in autopay|please pay|pay by|pay now|payment is due|amount due|balance due|payment due|to avoid interruption|to avoid a late fee|to avoid late fees|manual payment'
+
 const CAREER_SUBJECT_TERMS_ =
   'employment agreement|employment contract|offer letter|job offer|employment offer|terms of employment|independent contractor agreement|restrictive covenant|confidentiality agreement|interview confirmation|interview invitation|invitation to interview|interview with |schedule an interview|recruiter screen|phone screen'
 
@@ -1397,6 +1400,14 @@ function evaluateDeterministicRuleSpec_(specStr, ctx, subject) {
   const mode = parts[0]
   const excludeSubject = parts[5]
   if (excludeSubject && containsAny_(ctx.subLower, excludeSubject)) {
+    return null
+  }
+  // Generic "bill is ready" subjects can hide an outstanding manual payment;
+  // let those fall through to semantic classification.
+  if (
+    parts[7] === 'Finance/Bills' &&
+    containsAny_(ctx.snipLower, MANUAL_PAYMENT_SNIPPET_TERMS_)
+  ) {
     return null
   }
   let matched = false
@@ -2570,7 +2581,7 @@ function auditClassifications(threads, config, services) {
           if (/^0[1-7]_/.test(l)) {
             return l.startsWith(domain + '/')
           }
-          return true
+          return isSubLabelOfDomain_(l, domain)
         }) || ''
       const subfolderName = resolveTaxonomySubfolderName(domain, subLabel)
       const msgs = thread.getMessages() || []
@@ -4319,6 +4330,22 @@ function resolveCanonicalDomainFromLabels(rawLabels, canonicalDomains) {
 }
 
 /**
+ * True when a taxonomy sub-label (e.g. "Finance/Bills") belongs to the given
+ * canonical domain, so unrelated labels like "Personal/Follow-Up" are never
+ * used to resolve a Drive subfolder.
+ *
+ * @param {string} label - Gmail label name
+ * @param {string} domain - Canonical domain code
+ * @returns {boolean}
+ */
+function isSubLabelOfDomain_(label, domain) {
+  return (
+    String(label || '').startsWith(domain + '/') ||
+    resolveCanonicalDomainFromLabels([label]) === domain
+  )
+}
+
+/**
  * Scans historical Gmail threads for attachments across the 7 Canonical Domains,
  * verifies whether each attachment exists in Google Drive under the correct taxonomy path,
  * checks/applies native [AI_INDEXED] description tags, and optionally backfills missing files.
@@ -4434,11 +4461,13 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
         !l.startsWith('Retention/') &&
         !l.includes('Archives')
       )
+    const isDomainSubLabel = (l) =>
+      isTaxonomySubLabel(l) && isSubLabelOfDomain_(l, canonicalDomain)
     const subLabel =
       rawLabels.find(
-        (l) => isTaxonomySubLabel(l) && !l.includes(canonicalDomain)
+        (l) => isDomainSubLabel(l) && !l.includes(canonicalDomain)
       ) ||
-      rawLabels.find((l) => isTaxonomySubLabel(l)) ||
+      rawLabels.find((l) => isDomainSubLabel(l)) ||
       ''
     const subfolderName = resolveTaxonomySubfolderName(
       canonicalDomain,
@@ -4858,12 +4887,15 @@ function doesDriveFileMatchThreadAttachment_(
       ? fileCandidate.getDescription() || ''
       : fileCandidate.description || ''
   if (desc && desc.indexOf('Thread-ID:') !== -1) {
-    if (Boolean(threadId) && desc.indexOf('Thread-ID: ' + threadId) !== -1) {
-      return true
+    // Thread metadata is provenance, not proof: a thread can hold several
+    // same-named attachments, so a matching Thread-ID still requires a content
+    // match below. Ingestion dedupes identical content across threads, so audits
+    // may also accept a content match from another thread.
+    const sameThread =
+      Boolean(threadId) && desc.indexOf('Thread-ID: ' + threadId) !== -1
+    if (!sameThread && !(helperFns && helperFns.allowCrossThreadContentMatch)) {
+      return false
     }
-    // Thread metadata is provenance: ingestion dedupes identical content across
-    // threads, so audits may still accept a content match from another thread.
-    if (!(helperFns && helperFns.allowCrossThreadContentMatch)) return false
   }
 
   const candidateSize = extractFileSize_(fileCandidate)
@@ -5005,6 +5037,7 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
         return (
           l.indexOf('/') !== -1 &&
           l !== oldDomain &&
+          (!oldDomain || isSubLabelOfDomain_(l, oldDomain)) &&
           l.toLowerCase().indexOf('ai/') !== 0 &&
           l.indexOf('Archives') === -1 &&
           l.indexOf('Retention/') === -1
@@ -6186,6 +6219,7 @@ if (typeof module !== 'undefined' && module.exports) {
     isCircuitBreakerOpen,
     recordCircuitBreakerFailure,
     doesDriveFileMatchThreadAttachment_,
+    isSubLabelOfDomain_,
     recordCircuitBreakerSuccess,
     getThreadRetryCount_,
     incrementThreadRetryCount_,
