@@ -1262,4 +1262,35 @@ describe.each([
     expect(res).toEqual([])
     expect(thread.addLabel).not.toHaveBeenCalled()
   })
+  test('revertAndQueueMissedCareerEmails skips threads the user already replied to', () => {
+    const thread = {
+      getId: () => 'th-replied',
+      getLabels: () => [],
+      getMessages: () => [{ getFrom: () => 'Me <me@example.com>' }],
+      removeLabel: jest.fn(),
+      addLabel: jest.fn(),
+    }
+    const gmail = {
+      search: jest.fn(() => [thread]),
+      getUserLabelByName: jest.fn((name) => label(name)),
+    }
+    const res = mod.revertAndQueueMissedCareerEmails(gmail, {
+      userAccountEmail: 'me@example.com',
+    })
+    expect(res).toEqual([])
+    expect(thread.addLabel).not.toHaveBeenCalled()
+  })
+
+  test('revertAndQueueMissedCareerEmails returns [] when the search throws', () => {
+    const gmail = {
+      search: jest.fn(() => {
+        throw new Error('search failed')
+      }),
+      getUserLabelByName: jest.fn((name) => label(name)),
+    }
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(mod.revertAndQueueMissedCareerEmails(gmail, {})).toEqual([])
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
 })
