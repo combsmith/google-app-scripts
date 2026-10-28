@@ -82,6 +82,7 @@ function getAiClassifierConfig() {
     githubRepoOwner: getProp('GITHUB_REPO_OWNER') || '',
     githubRepoName: getProp('GITHUB_REPO_NAME') || '',
     driveRootFolderName: getProp('DRIVE_ROOT_FOLDER_NAME') || '',
+    driveRootFolderId: getProp('DRIVE_ROOT_FOLDER_ID') || '',
     userAccountEmail:
       userEmail ||
       getProp('USER_ACCOUNT_EMAIL') ||

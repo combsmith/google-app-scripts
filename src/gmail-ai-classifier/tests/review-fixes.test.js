@@ -422,3 +422,132 @@ describe('manual-payment bill notices fall through to semantic classification', 
     expect(r.action).toBe('archive')
   })
 })
+
+describe('round-3 review fixes', () => {
+  test('doesDriveFileMatchThreadAttachment_ rejects when hashes are unavailable', () => {
+    const file = { getSize: () => 5, getBlob: () => 'blob' }
+    const att = { getSize: () => 5 }
+    expect(
+      mod.doesDriveFileMatchThreadAttachment_(file, att, 't', {
+        getFileHash: () => '',
+      })
+    ).toBe(false)
+  })
+
+  test('family shield matches complete addresses only', () => {
+    const cfg = {
+      familyEmails: 'relative@example.com',
+      userAccountEmail: 'me@example.com',
+      canonicalDomains: DOMAINS,
+    }
+    const hit = mod.deterministicRuleClassify_(
+      'Relative <relative@example.com>',
+      'Hello',
+      'hi',
+      null,
+      cfg
+    )
+    expect(hit && hit.subLabel).toBe('Family/Correspondence')
+    const miss = mod.deterministicRuleClassify_(
+      'other.relative@example.com',
+      'Hello',
+      'hi',
+      null,
+      cfg
+    )
+    expect(miss && miss.subLabel).not.toBe('Family/Correspondence')
+  })
+
+  test('shared root folder ID is used instead of creating a private tree', () => {
+    const shared = {
+      getFoldersByName: () => ({ hasNext: () => false }),
+      createFolder: jest.fn((n) => ({
+        n,
+        getFoldersByName: () => ({ hasNext: () => false }),
+        createFolder: jest.fn((m) => ({ m })),
+      })),
+    }
+    const drive = {
+      getRootFolder: jest.fn(),
+      getFolderById: jest.fn(() => shared),
+    }
+    mod.ensureDriveTaxonomyFolder('02_Finance_Legal', 'Bills', drive, {
+      rootFolderId: 'shared-id',
+    })
+    expect(drive.getFolderById).toHaveBeenCalledWith('shared-id')
+    expect(drive.getRootFolder).not.toHaveBeenCalled()
+  })
+
+  describe('retention', () => {
+    const old = new Date(Date.now() - 3 * 365 * 24 * 3600 * 1000)
+    const mk = (id, over) => ({
+      getId: () => id,
+      getFirstMessageSubject: () => 's',
+      getLabels: () => [label('Promotions')],
+      getMessages: () => [msg('promo@store.example')],
+      getLastMessageDate: () => old,
+      moveToTrash: jest.fn(),
+      ...over,
+    })
+
+    test('keeps mixed Promotions/Primary conversations', () => {
+      const mixed = mk('mixed')
+      const promo = mk('promo')
+      const Gmail = {
+        Users: {
+          Threads: {
+            get: (u, id) => ({
+              messages:
+                id === 'mixed'
+                  ? [
+                      { labelIds: ['CATEGORY_PROMOTIONS'] },
+                      { labelIds: ['CATEGORY_PERSONAL'] },
+                    ]
+                  : [{ labelIds: ['CATEGORY_PROMOTIONS'] }],
+            }),
+          },
+        },
+      }
+      mod.purgeExpiredEmailsByRetentionPolicy(
+        { userAccountEmail: 'me@example.com', canonicalDomains: DOMAINS },
+        {
+          Gmail,
+          GmailApp: {
+            search: jest.fn((q, off) => (off === 0 ? [mixed, promo] : [])),
+          },
+        }
+      )
+      expect(mixed.moveToTrash).not.toHaveBeenCalled()
+      expect(promo.moveToTrash).toHaveBeenCalled()
+    })
+
+    test('persists a cursor past permanently exempt threads', () => {
+      const store = {}
+      const PropertiesService = {
+        getScriptProperties: () => ({
+          getProperty: (k) => store[k] || null,
+          setProperty: (k, v) => {
+            store[k] = v
+          },
+        }),
+      }
+      const exempt = Array.from({ length: 50 }, (_, i) =>
+        mk('e' + i, { getLabels: () => [label('02_Finance_Legal/Bills')] })
+      )
+      const eligible = mk('ok')
+      const search = jest.fn((q, off, size) => {
+        const all = exempt.concat([eligible])
+        return all.slice(off, off + size)
+      })
+      const run = () =>
+        mod.purgeExpiredEmailsByRetentionPolicy(
+          { userAccountEmail: 'me@example.com', canonicalDomains: DOMAINS },
+          { PropertiesService, GmailApp: { search } }
+        )
+      run()
+      expect(eligible.moveToTrash).toHaveBeenCalled()
+      // reached the end of the results, so the cursor resets
+      expect(store.RETENTION_PURGE_OFFSET).toBe('0')
+    })
+  })
+})

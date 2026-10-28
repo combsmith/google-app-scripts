@@ -1498,7 +1498,7 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
   if (
     familyList.length > 0 &&
     familyList.some(function (f) {
-      return f.trim() && sLower.indexOf(f.trim()) !== -1
+      return f.trim() && extractSenderAddress_(sender) === f.trim()
     })
   ) {
     return makeDeterministicResult_(

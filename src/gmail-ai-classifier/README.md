@@ -37,6 +37,7 @@ Share the 7 Canonical Domain folders in Google Drive (`01_Household` through `07
    - `GITHUB_PAT`: Fine-grained GitHub Personal Access Token with write access to your target repository.
    - `GITHUB_REPO_OWNER`: Target GitHub repository owner / organization name.
    - `GITHUB_REPO_NAME`: Target GitHub repository name.
+   - `DRIVE_ROOT_FOLDER_ID`: _(Optional)_ ID of a shared Drive folder (e.g. shared with Editor access to a second account) that holds the canonical domain folders; takes precedence over `DRIVE_ROOT_FOLDER_NAME` so no private copy of the taxonomy tree is created.
    - `DRIVE_ROOT_FOLDER_NAME`: _(Optional)_ Parent folder name in Google Drive under which the 7 canonical domain folders live (defaults to Drive root when omitted).
    - `USER_ACCOUNT_EMAIL`: `user2@example.com`
    - `CUSTOM_PROMPT_RULES`: _(Optional)_ User-specific domain and student attribution rules appended dynamically to the AI prompt without code modifications (e.g. per-child `Family/Kids/<ChildName>` labels).

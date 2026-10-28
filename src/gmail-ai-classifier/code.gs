@@ -1545,7 +1545,7 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
   if (
     familyList.length > 0 &&
     familyList.some(function (f) {
-      return f.trim() && sLower.indexOf(f.trim()) !== -1
+      return f.trim() && extractSenderAddress_(sender) === f.trim()
     })
   ) {
     return makeDeterministicResult_(
@@ -2675,7 +2675,7 @@ function auditClassifications(threads, config, services) {
                 domain,
                 subfolderName,
                 driveApp,
-                config?.driveRootFolderName
+                driveRootOptions_(config)
               )
               // Reuse the backfill's content-matching lookup (including conflict-renamed
               // candidates) so a same-named unrelated file cannot hide a missing attachment.
@@ -3635,6 +3635,21 @@ function getOrCreateChildFolder_(parentFolder, folderName, lockService) {
   }
 }
 
+/**
+ * Builds the Drive root argument for taxonomy folder helpers from config,
+ * preferring an explicit shared root folder ID over a My Drive folder name.
+ */
+function driveRootOptions_(cfg) {
+  const rootFolderId = String(cfg?.driveRootFolderId || '').trim()
+  if (rootFolderId) {
+    return {
+      rootFolderId: rootFolderId,
+      rootFolderName: cfg?.driveRootFolderName || '',
+    }
+  }
+  return cfg?.driveRootFolderName
+}
+
 function resolveDriveRootContainer_(
   driveApp,
   rootFolderName,
@@ -3649,6 +3664,22 @@ function resolveDriveRootContainer_(
         : null
   if (!drive) {
     throw new Error('DriveApp service unavailable')
+  }
+
+  // A shared taxonomy tree (e.g. a second household account with Editor access)
+  // is not a child of this account's My Drive root, so an explicit folder ID wins.
+  const rootFolderId =
+    typeof rootFolderName === 'object' && rootFolderName
+      ? String(rootFolderName.rootFolderId || '').trim()
+      : ''
+  if (rootFolderId) {
+    if (typeof drive.getFolderById !== 'function') {
+      throw new Error('DriveApp service cannot resolve shared root folder ID')
+    }
+    return drive.getFolderById(rootFolderId)
+  }
+  if (typeof rootFolderName === 'object' && rootFolderName) {
+    rootFolderName = rootFolderName.rootFolderName || ''
   }
 
   let root =
@@ -3695,7 +3726,9 @@ function ensureDriveTaxonomyFolder(
       : null
   const root = resolveDriveRootContainer_(
     driveApp,
-    rootFolderName,
+    rootFolderNameOrOptions?.rootFolderId
+      ? rootFolderNameOrOptions
+      : rootFolderName,
     true,
     lockService
   )
@@ -4247,7 +4280,7 @@ function persistCanonicalAttachmentsToDrive(
       canonicalDomain,
       subfolderName,
       driveApp,
-      config?.driveRootFolderName
+      driveRootOptions_(config)
     )
   } catch (err) {
     console.error(
@@ -4675,13 +4708,13 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
               canonicalDomain,
               subfolderName,
               drive,
-              cfg.driveRootFolderName
+              driveRootOptions_(cfg)
             )
           : ensureDriveTaxonomyFolder(
               canonicalDomain,
               subfolderName,
               drive,
-              cfg.driveRootFolderName
+              driveRootOptions_(cfg)
             )
         folderCache[folderKey] = targetFolder
       } catch (err) {
@@ -5082,7 +5115,8 @@ function doesDriveFileMatchThreadAttachment_(
     return candidateHash === attHash
   }
 
-  return true
+  // Content could not be verified (a digest is unavailable): never assume a match.
+  return false
 }
 
 /**
@@ -5301,19 +5335,19 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
                 oldDomain,
                 oldSubfolder,
                 drive,
-                cfg.driveRootFolderName
+                driveRootOptions_(cfg)
               ) ||
               ensureDriveTaxonomyFolder(
                 oldDomain,
                 oldSubfolder,
                 drive,
-                cfg.driveRootFolderName
+                driveRootOptions_(cfg)
               )
             const newFolder = ensureDriveTaxonomyFolder(
               newDomain,
               newSubfolder,
               drive,
-              cfg.driveRootFolderName
+              driveRootOptions_(cfg)
             )
             const helperFns = {
               getFileHash: services?.getFileHash || getFileHash,
@@ -5717,7 +5751,7 @@ function isThreadSentOrRepliedByUser(thread, userEmail) {
  * Verifies that every message in a thread satisfies the retention age and star
  * exclusions (the search query only guarantees that at least one message does).
  */
-function isWholeThreadRetentionEligible_(thread) {
+function isWholeThreadRetentionEligible_(thread, services) {
   try {
     if (typeof thread.getLastMessageDate === 'function') {
       const lastDate = thread.getLastMessageDate()
@@ -5738,6 +5772,27 @@ function isWholeThreadRetentionEligible_(thread) {
           msgs[m] &&
           typeof msgs[m].isStarred === 'function' &&
           msgs[m].isStarred()
+        ) {
+          return false
+        }
+      }
+    }
+    // Retention only covers Promotions/Social/Forums: a conversation that also
+    // holds a Primary/Updates/Personal message is exempt as a whole.
+    const gmailAdv =
+      services?.Gmail || (typeof Gmail !== 'undefined' ? Gmail : null)
+    const threadId = typeof thread.getId === 'function' ? thread.getId() : ''
+    if (threadId && typeof gmailAdv?.Users?.Threads?.get === 'function') {
+      const meta = gmailAdv.Users.Threads.get('me', threadId)
+      const msgMeta = Array.isArray(meta?.messages) ? meta.messages : []
+      for (let k = 0; k < msgMeta.length; k++) {
+        const ids = Array.isArray(msgMeta[k]?.labelIds)
+          ? msgMeta[k].labelIds
+          : []
+        if (
+          ids.some(function (id) {
+            return /^CATEGORY_(PERSONAL|UPDATES)$/i.test(String(id || ''))
+          })
         ) {
           return false
         }
@@ -5788,10 +5843,44 @@ function purgeExpiredEmailsByRetentionPolicy(customConfig, customServices) {
   let trashedCount = 0
   let exemptedCount = 0
   let totalFound = 0
+  // Exempt threads stay searchable, so persist how many lead the result list;
+  // otherwise every run rescans the same exempt prefix and never reaches the rest.
+  const cursorKey = 'RETENTION_PURGE_OFFSET'
+  const props =
+    services.PropertiesService &&
+    typeof services.PropertiesService.getScriptProperties === 'function'
+      ? services.PropertiesService.getScriptProperties()
+      : typeof PropertiesService !== 'undefined' &&
+          typeof PropertiesService.getScriptProperties === 'function'
+        ? PropertiesService.getScriptProperties()
+        : null
+  const saveCursor = function (value) {
+    try {
+      if (props && typeof props.setProperty === 'function') {
+        props.setProperty(cursorKey, String(value))
+      }
+    } catch (e) {
+      // Cursor persistence is best-effort
+    }
+  }
   let offset = 0
+  try {
+    const stored =
+      props && typeof props.getProperty === 'function'
+        ? parseInt(props.getProperty(cursorKey), 10)
+        : 0
+    offset = Number.isFinite(stored) && stored > 0 ? stored : 0
+  } catch (e) {
+    offset = 0
+  }
 
   for (let page = 0; page < maxPages; page++) {
-    const rawPage = gmail.search(retentionQuery, offset, pageSize) || []
+    let rawPage = gmail.search(retentionQuery, offset, pageSize) || []
+    if (page === 0 && rawPage.length === 0 && offset > 0) {
+      // Stored cursor is past the end of the results: restart from the top.
+      offset = 0
+      rawPage = gmail.search(retentionQuery, offset, pageSize) || []
+    }
     const threads = sortThreadsByLastMessageDate_(rawPage)
     if (page === 0) {
       console.log(
@@ -5851,7 +5940,7 @@ function purgeExpiredEmailsByRetentionPolicy(customConfig, customServices) {
 
         // Safety Shield 3: Gmail returns a thread when ANY message matches the query,
         // so verify the whole conversation is old and unstarred before trashing it.
-        if (!isExempt && !isWholeThreadRetentionEligible_(thread)) {
+        if (!isExempt && !isWholeThreadRetentionEligible_(thread, services)) {
           isExempt = true
         }
 
@@ -5883,9 +5972,11 @@ function purgeExpiredEmailsByRetentionPolicy(customConfig, customServices) {
 
     offset += pageRemainingCount
     if (rawPage.length < pageSize) {
+      offset = 0
       break
     }
   }
+  saveCursor(offset)
 
   console.log(
     '[purgeExpiredEmailsByRetentionPolicy] Retention cleanup complete. Scanned ' +
