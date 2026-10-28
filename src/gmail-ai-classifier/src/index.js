@@ -77,16 +77,16 @@ function validateOntologicalClassification(classification, canonicalDomains) {
     return false
   }
   if (
-    typeof classification.confidence === 'number' &&
-    (!Number.isFinite(classification.confidence) ||
-      classification.confidence < 0 ||
-      classification.confidence > 1)
+    typeof classification.confidence !== 'number' ||
+    !Number.isFinite(classification.confidence) ||
+    classification.confidence < 0 ||
+    classification.confidence > 1
   ) {
     return false
   }
+  // canonicalDomain may be explicitly null/empty, but the key must be present
   if (
-    classification.confidence !== undefined &&
-    typeof classification.confidence !== 'number'
+    !Object.prototype.hasOwnProperty.call(classification, 'canonicalDomain')
   ) {
     return false
   }
@@ -101,18 +101,10 @@ function validateOntologicalClassification(classification, canonicalDomains) {
       return false
     }
   }
-  if (
-    classification.category !== undefined &&
-    classification.category !== null &&
-    VALID_ONTOLOGICAL_CATEGORIES_.indexOf(classification.category) === -1
-  ) {
+  if (VALID_ONTOLOGICAL_CATEGORIES_.indexOf(classification.category) === -1) {
     return false
   }
-  if (
-    classification.action !== undefined &&
-    classification.action !== null &&
-    VALID_ONTOLOGICAL_ACTIONS_.indexOf(classification.action) === -1
-  ) {
+  if (VALID_ONTOLOGICAL_ACTIONS_.indexOf(classification.action) === -1) {
     return false
   }
   return true
@@ -391,7 +383,23 @@ function classifyWithGemini(sender, subject, snippet, config, services) {
   // 1. Check classification cache
   var cacheKey = null
   if (cache) {
-    var rawKey = (sender || '') + '|' + (subject || '') + '|' + (snippet || '')
+    // Fingerprint the effective prompt configuration so rule/model changes
+    // invalidate previously cached classifications.
+    var configFingerprint = JSON.stringify([
+      (config && config.customPromptRules) || '',
+      (config && config.geminiModel) || '',
+      (config && config.canonicalDomains) || [],
+      (config && config.schoolDomains) || '',
+      (config && config.familyEmails) || '',
+    ])
+    var rawKey =
+      (sender || '') +
+      '|' +
+      (subject || '') +
+      '|' +
+      (snippet || '') +
+      '|' +
+      configFingerprint
     var hashed = computeStringHash(rawKey, services)
     if (hashed) {
       cacheKey = 'cls_' + hashed
@@ -1086,11 +1094,14 @@ function cleanConflictingLabels(thread, targetDomain, targetSubLabel, config) {
       }
 
       // 6. Clean conflicting sub-labels if they don't match targetSubLabel
+      // Only classifier-owned taxonomy sub-labels may be removed; unrelated
+      // user-created nested labels (e.g. Personal/Follow-Up) are left intact.
       if (
         lName.indexOf('/') !== -1 &&
         lName !== targetSubLabel &&
         lName.indexOf('Archives') === -1 &&
-        lName.indexOf('Retention/') === -1
+        lName.indexOf('Retention/') === -1 &&
+        resolveCanonicalDomainFromLabels([lName], canonicalDomains)
       ) {
         removeLabelSafe(lObj, 'Removed conflicting sub-label: ' + lName)
       }
@@ -1236,13 +1247,13 @@ function makeDeterministicResult_(
 }
 
 /**
- * Normalizes a comma/pipe/whitespace-delimited config list into a pipe-delimited term string.
+ * Normalizes a comma/pipe-delimited config list into a pipe-delimited term string.
  *
  * @param {string|string[]} value - Raw config list
  * @returns {string} Pipe-delimited lowercase terms
  */
 function normalizeConfigTermList_(value) {
-  const items = Array.isArray(value) ? value : String(value || '').split(/[,|]/)
+  const items = Array.isArray(value) ? value : String(value || '').split(',')
   return items
     .map((v) =>
       String(v || '')
@@ -1255,6 +1266,15 @@ function normalizeConfigTermList_(value) {
 
 const SCHOOL_BROADCAST_TERMS_ =
   'weekly|newsletter|bulletin|school update|campus update|district update|digest|progress is ready|lunch|menu|portraits|news|noteworthy|announcement|athletics|e learning|e-learning|report card update|trunk or treat|spirit week|pto|pta|open house|picture day|fall festival|spring festival|school announcement|tryouts|tryout|try-outs|try-out|auditions|audition|team tryouts|absent|attendance|tardy|tuition|billing statement|assignment posted|new assignment|grade updated|score published|family portal|parent portal'
+
+const SCHOOL_ACTIONABLE_TERMS_ =
+  'urgent|conference|disciplin|suspension|expulsion|action required|action needed|reply required|response required|please respond|please reply|immediate attention'
+
+const SECURITY_WARNING_SUBJECT_TERMS_ =
+  "suspicious|unusual activity|unusual sign-in|unauthorized|compromised|unrecognized sign-in|unrecognized device|unrecognized login|blocked sign-in|sign-in blocked|account locked|account has been locked|wasn't you|was not you"
+
+const SECURITY_WARNING_SNIPPET_TERMS_ =
+  'suspicious activity|suspicious sign-in|suspicious login|unauthorized access|account was compromised|account has been compromised'
 
 const MANUAL_PAYMENT_SNIPPET_TERMS_ =
   'autopay is disabled|autopay is off|autopay is not enabled|auto-pay is off|not enrolled in autopay|please pay|pay by|pay now|payment is due|amount due|balance due|payment due|to avoid interruption|to avoid a late fee|to avoid late fees|manual payment'
@@ -1371,7 +1391,8 @@ const DETERMINISTIC_RULE_SPECS_ = [
   'any::pypi.org|npmjs.com|docker.com|crates.io::::::[pypi]|trusted publisher::::05_Tech_Infrastructure::Tech/Alerts::Updates::archive::0.99::Package Registry Alert::Package repository publishing, release, or trusted publisher notification routed to Tech/Alerts.',
   'any::::::::you shared some google account data with|google account data with|granted access to your google account|third-party access|app access granted::::05_Tech_Infrastructure::Tech/Security::Primary::keep::1::Third-Party Authorization Shield::Third-party application account data sharing or authorization notice preserved in Primary Inbox as security warning.',
   'any::::::::verification code|security code|one-time passcode|one-time password|your login code|new sign-in|signed in from a new|new device signed in|sign-in from new device|security alert for your|password changed|password reset confirmation::::05_Tech_Infrastructure::Tech/Security::Updates::archive::0.99::Authentication/Sign-in Ping::Automated authentication verification code or device sign-in alert routed to Tech/Security.',
-  'sender+sub::cvs.com|walgreens.com|questdiagnostics.com|labcorp.com|zocdoc.com|athenahealth.com::::mychart|cvshealth::appointment reminder|upcoming appointment|appointment confirmation|appointment is confirmed|prescription is ready|prescription ready|refill reminder|refill confirmation::action required|abnormal|urgent|past due|overdue::04_Family_Health::Family/Health-Medical::Updates::archive::0.99::Healthcare/Pharmacy Alert::Automated patient portal appointment reminder or pharmacy prescription status notice.',
+  'sender+sub::cvs.com|walgreens.com|questdiagnostics.com|labcorp.com|zocdoc.com|athenahealth.com::::mychart|cvshealth::prescription is ready|prescription ready|rx is ready|rx ready::picked up|already picked up|has been picked up|was picked up|delivered::04_Family_Health::Family/Health-Medical::Primary::keep::0.99::Prescription Ready Alert::Pharmacy prescription ready-for-pickup notice kept in Primary Inbox as action required.',
+  'sender+sub::cvs.com|walgreens.com|questdiagnostics.com|labcorp.com|zocdoc.com|athenahealth.com::::mychart|cvshealth::appointment reminder|upcoming appointment|appointment confirmation|appointment is confirmed|refill reminder|refill confirmation|prescription picked up|order picked up::action required|abnormal|urgent|past due|overdue|prescription is ready|prescription ready|ready for pickup|rx is ready|rx ready::04_Family_Health::Family/Health-Medical::Updates::archive::0.99::Healthcare/Pharmacy Alert::Automated patient portal appointment reminder or pharmacy refill confirmation notice.',
   'sender+sub::delta.com|southwest.com|aa.com|united.com|airbnb.com|vrbo.com|marriott.com|hilton.com|uber.com|lyft.com|waymo.com::::waymo::flight confirmation|flight status|boarding pass|check in for your flight|reservation confirmed|reservation confirmation|upcoming stay|trip with uber|ride with lyft|waymo ride|riding with waymo|receipt::::01_Household::Household/Travel::Updates::archive::0.99::Travel Confirmation::Travel itinerary reservation, flight check-in, or rideshare receipt.',
   'any::::::::how was your experience|how did we do|rate your recent|rate your experience|rate your stay|tell us what you think|take our survey|take our quick survey|quick survey|feedback requested|review your purchase|leave a review|your opinion matters::::::::Promotions::archive::0.99::Customer Survey::Automated post-transaction customer satisfaction feedback or survey request.',
   'any::ifttt.com|notify.mios.com::::::::::01_Household::Household/Property::Updates::archive::0.98::IFTTT / Weather Alert::Automated weather or IoT trigger notification routed to Household/Property.',
@@ -1467,15 +1488,37 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     try {
       const msgs = thread.getMessages() || []
       for (let m = 0; m < msgs.length; m++) {
-        const fromA = (
+        const fromA = extractSenderAddress_(
           msgs[m] && typeof msgs[m].getFrom === 'function'
             ? msgs[m].getFrom()
             : (msgs[m] && msgs[m].from) || ''
-        ).toLowerCase()
-        if (fromA.indexOf(userEmail) !== -1) {
+        )
+        if (fromA === userEmail.trim()) {
+          // Preserve any existing canonical filing; the shield only governs
+          // inbox/destructive actions, never erases taxonomy labels.
+          const existingNames = (
+            typeof thread.getLabels === 'function'
+              ? thread.getLabels() || []
+              : []
+          ).map((lb) =>
+            lb && typeof lb.getName === 'function' ? lb.getName() : String(lb)
+          )
+          const existingDomain = resolveCanonicalDomainFromLabels(
+            existingNames,
+            config && config.canonicalDomains
+          )
+          const existingSub =
+            existingNames.find(
+              (n) =>
+                n.indexOf('/') !== -1 &&
+                resolveCanonicalDomainFromLabels(
+                  [n],
+                  config && config.canonicalDomains
+                ) === existingDomain
+            ) || null
           return makeDeterministicResult_(
-            null,
-            null,
+            existingDomain,
+            existingSub,
             'Primary',
             'keep',
             1.0,
@@ -1521,7 +1564,14 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
   const isBrightArrow =
     matchesSenderDomain_(sender, ['brightarrow.com']) ||
     sLower.indexOf('brightarrow') !== -1
-  const isBroadcastSubject = containsAny_(subLower, SCHOOL_BROADCAST_TERMS_)
+  // Urgent/actionable individual requests (conference, discipline) stay Primary even
+  // when the subject also matches a broadcast term such as "attendance".
+  const isActionableSchool =
+    isSchoolDomain &&
+    !isBrightArrow &&
+    containsAny_(subLower, SCHOOL_ACTIONABLE_TERMS_)
+  const isBroadcastSubject =
+    containsAny_(subLower, SCHOOL_BROADCAST_TERMS_) && !isActionableSchool
 
   if (isSchoolDomain && !isBroadcastSubject && !isBrightArrow) {
     return makeDeterministicResult_(
@@ -1550,6 +1600,24 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       subject,
       'Employment agreement, offer letter, or career interview communication preserved in Primary Inbox.',
       'Career / Employment Contract Rule'
+    )
+  }
+
+  // Suspicious-login / account-compromise warnings need human attention, so they
+  // outrank the routine authentication fast path below.
+  if (
+    containsAny_(subLower, SECURITY_WARNING_SUBJECT_TERMS_) ||
+    containsAny_(snipLower, SECURITY_WARNING_SNIPPET_TERMS_)
+  ) {
+    return makeDeterministicResult_(
+      '05_Tech_Infrastructure',
+      'Tech/Security',
+      'Primary',
+      'keep',
+      0.99,
+      subject,
+      'Suspicious sign-in or account-security warning preserved in Primary Inbox.',
+      'Security Warning Shield'
     )
   }
 
@@ -1738,6 +1806,8 @@ function processThreadBatch(threads, config, services) {
       )
     }
 
+    classification = withEffectiveSubLabel_(classification, primaryTag)
+
     if (primaryTag) {
       const categoryLabel = ensureGmailLabel(
         primaryTag,
@@ -1823,6 +1893,38 @@ function processThreadBatch(threads, config, services) {
         config,
         services
       )
+    }
+
+    if (savedAttachments && savedAttachments.hadErrors) {
+      // Persistence failed: withhold Processed and queue a durable retry
+      try {
+        if (typeof thread.removeLabel === 'function') {
+          thread.removeLabel(processedLabel)
+        }
+        const retryObj = ensureGmailLabel(
+          config.retryLabel || 'AI/Needs-Retry',
+          services.GmailApp,
+          services.Gmail
+        )
+        if (retryObj && typeof thread.addLabel === 'function') {
+          thread.addLabel(retryObj)
+        }
+      } catch (retryErr) {
+        console.warn(
+          '[processThreadBatch] Failed to queue attachment retry: ' +
+            retryErr.message
+        )
+      }
+      results.push({
+        threadId: threadId,
+        status: 'attachment_persistence_failed',
+        label: classification.canonical_label,
+        confidence: classification.confidence,
+        archived: archived,
+        filterCreated: filterCreated,
+        savedAttachments: savedAttachments,
+      })
+      return
     }
 
     results.push({
@@ -2488,7 +2590,10 @@ function auditClassifications(threads, config, services) {
           NEWSLETTER_KEYWORDS.test(subject) ||
           TOS_KEYWORDS.test(subject) ||
           SURVEY_KEYWORDS.test(subject) ||
-          POLITICAL_KEYWORDS.test(subject)))
+          POLITICAL_KEYWORDS.test(subject) ||
+          // Gmail system categories assigned by the processor (lazy: only when unfiled)
+          (assignedCanonical.length === 0 &&
+            hasSecondaryCategory_(thread, rawLabels, services))))
 
     // 1. Missing Domain
     if (assignedCanonical.length === 0 && !isNonCanonicalStream) {
@@ -2598,16 +2703,37 @@ function auditClassifications(threads, config, services) {
                 domain,
                 subfolderName,
                 driveApp,
-                config?.driveRootFolderName
+                driveRootOptions_(config)
               )
-              const existingFiles = targetFolder
-                ? targetFolder.getFilesByName(attName)
+              // Reuse the backfill's content-matching lookup (including conflict-renamed
+              // candidates) so a same-named unrelated file cannot hide a missing attachment.
+              const candidates = targetFolder
+                ? collectCandidateDriveFiles_(targetFolder, attName)
                 : null
-              if (
-                !existingFiles ||
-                (typeof existingFiles.hasNext === 'function' &&
-                  !existingFiles.hasNext())
+              const auditHelperFns = {
+                getFileHash: config?.getFileHash || getFileHash,
+                allowCrossThreadContentMatch: true,
+              }
+              let driveFile = null
+              while (
+                candidates &&
+                typeof candidates.hasNext === 'function' &&
+                candidates.hasNext()
               ) {
+                const candidate = candidates.next()
+                if (
+                  doesDriveFileMatchThreadAttachment_(
+                    candidate,
+                    att,
+                    id,
+                    auditHelperFns
+                  )
+                ) {
+                  driveFile = candidate
+                  break
+                }
+              }
+              if (!driveFile) {
                 flags.push(
                   'MISSING_DRIVE_ATTACHMENT: Eligible attachment "' +
                     attName +
@@ -2617,8 +2743,7 @@ function auditClassifications(threads, config, services) {
                     subfolderName +
                     '".'
                 )
-              } else if (typeof existingFiles.next === 'function') {
-                const driveFile = existingFiles.next()
+              } else {
                 const desc =
                   typeof driveFile.getDescription === 'function'
                     ? driveFile.getDescription()
@@ -2765,10 +2890,68 @@ function auditEmailClassifications(customConfig, customServices) {
     lookback +
     'd'
 
-  const rawThreads =
-    gmail && typeof gmail.search === 'function'
-      ? gmail.search(query, 0, 50)
-      : []
+  const pageSize = 50
+  const maxPages =
+    config.auditMaxPages && config.auditMaxPages > 0 ? config.auditMaxPages : 5
+  const cursorKey = 'AUDIT_CLASSIFICATIONS_OFFSET'
+  const props =
+    services.PropertiesService &&
+    typeof services.PropertiesService.getScriptProperties === 'function'
+      ? services.PropertiesService.getScriptProperties()
+      : typeof PropertiesService !== 'undefined' &&
+          typeof PropertiesService.getScriptProperties === 'function'
+        ? PropertiesService.getScriptProperties()
+        : null
+  const saveCursor = function (value) {
+    try {
+      if (props && typeof props.setProperty === 'function') {
+        props.setProperty(cursorKey, String(value))
+      }
+    } catch (e) {
+      // Best-effort cursor persistence
+    }
+  }
+  let offset = 0
+  try {
+    const stored =
+      props && typeof props.getProperty === 'function'
+        ? parseInt(props.getProperty(cursorKey), 10)
+        : 0
+    offset = Number.isFinite(stored) && stored > 0 ? stored : 0
+  } catch (e) {
+    offset = 0
+  }
+
+  const rawThreads = []
+  const seenThreads = []
+  const seenThreadIds = {}
+  if (gmail && typeof gmail.search === 'function') {
+    let reachedEnd = false
+    for (let page = 0; page < maxPages; page++) {
+      let pageThreads = gmail.search(query, offset, pageSize) || []
+      if (page === 0 && pageThreads.length === 0 && offset > 0) {
+        offset = 0
+        pageThreads = gmail.search(query, offset, pageSize) || []
+      }
+      let addedOnPage = 0
+      for (let i = 0; i < pageThreads.length; i++) {
+        const t = pageThreads[i]
+        if (!t || seenThreads.indexOf(t) !== -1) continue
+        const tid = typeof t.getId === 'function' ? String(t.getId() || '') : ''
+        if (tid && seenThreadIds[tid]) continue
+        seenThreads.push(t)
+        if (tid) seenThreadIds[tid] = true
+        rawThreads.push(t)
+        addedOnPage++
+      }
+      if (pageThreads.length < pageSize || addedOnPage === 0) {
+        reachedEnd = true
+        break
+      }
+      offset += pageThreads.length
+    }
+    saveCursor(reachedEnd ? 0 : offset)
+  }
   const threads = sortThreadsByLastMessageDate_(rawThreads)
   console.log(
     '[auditEmailClassifications] Found ' +
@@ -3509,7 +3692,15 @@ function getOrCreateChildFolder_(parentFolder, folderName, lockService) {
       ? lockSvc.getScriptLock()
       : null
   let acquired = false
-  if (lock && typeof lock.tryLock === 'function') {
+  // tryLock is a no-op when this execution already holds the script lock, so a
+  // caller-held lock must be left untouched (never released here).
+  let alreadyHeld = false
+  if (lock && typeof lock.hasLock === 'function') {
+    try {
+      alreadyHeld = lock.hasLock() === true
+    } catch (e) {}
+  }
+  if (!alreadyHeld && lock && typeof lock.tryLock === 'function') {
     try {
       acquired = lock.tryLock(5000)
     } catch (e) {}
@@ -3530,6 +3721,21 @@ function getOrCreateChildFolder_(parentFolder, folderName, lockService) {
   }
 }
 
+/**
+ * Builds the Drive root argument for taxonomy folder helpers from config,
+ * preferring an explicit shared root folder ID over a My Drive folder name.
+ */
+function driveRootOptions_(cfg) {
+  const rootFolderId = String(cfg?.driveRootFolderId || '').trim()
+  if (rootFolderId) {
+    return {
+      rootFolderId: rootFolderId,
+      rootFolderName: cfg?.driveRootFolderName || '',
+    }
+  }
+  return cfg?.driveRootFolderName
+}
+
 function resolveDriveRootContainer_(
   driveApp,
   rootFolderName,
@@ -3544,6 +3750,22 @@ function resolveDriveRootContainer_(
         : null
   if (!drive) {
     throw new Error('DriveApp service unavailable')
+  }
+
+  // A shared taxonomy tree (e.g. a second household account with Editor access)
+  // is not a child of this account's My Drive root, so an explicit folder ID wins.
+  const rootFolderId =
+    typeof rootFolderName === 'object' && rootFolderName
+      ? String(rootFolderName.rootFolderId || '').trim()
+      : ''
+  if (rootFolderId) {
+    if (typeof drive.getFolderById !== 'function') {
+      throw new Error('DriveApp service cannot resolve shared root folder ID')
+    }
+    return drive.getFolderById(rootFolderId)
+  }
+  if (typeof rootFolderName === 'object' && rootFolderName) {
+    rootFolderName = rootFolderName.rootFolderName || ''
   }
 
   let root =
@@ -3590,7 +3812,9 @@ function ensureDriveTaxonomyFolder(
       : null
   const root = resolveDriveRootContainer_(
     driveApp,
-    rootFolderName,
+    rootFolderNameOrOptions?.rootFolderId
+      ? rootFolderNameOrOptions
+      : rootFolderName,
     true,
     lockService
   )
@@ -3760,13 +3984,16 @@ function findMatchingDuplicateFile_(existingFiles, newFileBlob, helperFns) {
       } catch (e) {
         return null
       }
+      // An empty hash means digest computation failed; never treat as a match
+      if (!newFileHash) return null
     }
 
     const existingBlob =
       typeof existingFile.getBlob === 'function'
         ? existingFile.getBlob()
         : existingFile
-    if (hashFn(existingBlob) === newFileHash) {
+    const existingHash = hashFn(existingBlob)
+    if (existingHash && existingHash === newFileHash) {
       return existingFile
     }
   }
@@ -4139,7 +4366,7 @@ function persistCanonicalAttachmentsToDrive(
       canonicalDomain,
       subfolderName,
       driveApp,
-      config?.driveRootFolderName
+      driveRootOptions_(config)
     )
   } catch (err) {
     console.error(
@@ -4154,6 +4381,7 @@ function persistCanonicalAttachmentsToDrive(
   }
 
   const savedFiles = []
+  const existingSavedFiles = []
   const helperFns = {
     getFileHash: services?.getFileHash || getFileHash,
   }
@@ -4180,11 +4408,39 @@ function persistCanonicalAttachmentsToDrive(
         typeof att.copyBlob === 'function' ? att.copyBlob() : att
       const existingFiles = collectCandidateDriveFiles_(targetFolder, fileName)
 
-      if (isDuplicateAttachment(existingFiles, newFileBlob, helperFns)) {
+      const duplicateFile = findMatchingDuplicateFile_(
+        existingFiles,
+        newFileBlob,
+        helperFns
+      )
+      if (duplicateFile) {
         console.log(
           '[persistCanonicalAttachmentsToDrive] Skipped exact duplicate attachment: ' +
             fileName
         )
+        // Record this thread as a co-owner so realigning the original thread
+        // copies rather than moves the shared file.
+        recordDriveFileCoOwner_(
+          duplicateFile,
+          typeof thread.getId === 'function' ? thread.getId() : thread.id || ''
+        )
+        // Still report the already-saved file so retry completion can index every
+        // attachment in the thread, not only newly uploaded ones.
+        const dupId =
+          typeof duplicateFile.getId === 'function' ? duplicateFile.getId() : ''
+        existingSavedFiles.push({
+          name:
+            typeof duplicateFile.getName === 'function'
+              ? duplicateFile.getName()
+              : fileName,
+          url:
+            typeof duplicateFile.getUrl === 'function'
+              ? duplicateFile.getUrl()
+              : 'https://drive.google.com/file/d/' + dupId,
+          id: dupId,
+          domain: canonicalDomain,
+          subfolder: subfolderName,
+        })
         return
       }
 
@@ -4281,6 +4537,13 @@ function persistCanonicalAttachmentsToDrive(
     })
   })
 
+  // Previously saved duplicates are exposed (non-enumerable) so retry completion
+  // can index every attachment without changing the "newly saved" result.
+  Object.defineProperty(savedFiles, 'existingFiles', {
+    value: existingSavedFiles,
+    enumerable: false,
+    configurable: true,
+  })
   return savedFiles
 }
 
@@ -4389,7 +4652,35 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
 
   const defaultCanonicalQuery =
     'has:attachment (label:01_Household OR label:02_Finance_Legal OR label:03_Vehicles OR label:04_Family_Health OR label:05_Tech_Infrastructure OR label:06_Work_Career OR label:07_Community_NonProfit OR label:Household OR label:Finance OR label:Vehicles OR label:Family OR label:Tech OR label:Work OR label:Community OR label:Projects OR label:NonProfit)'
-  const searchQuery = opts.query || defaultCanonicalQuery
+  // Nested labels are searched by full path; parent labels do not match children
+  // reliably, so include every existing canonical sub-label by name.
+  let canonicalSubLabelTerms = []
+  if (typeof gmail.getUserLabels === 'function') {
+    try {
+      canonicalSubLabelTerms = (gmail.getUserLabels() || [])
+        .map((lb) =>
+          lb && typeof lb.getName === 'function' ? lb.getName() : ''
+        )
+        .filter(
+          (n) =>
+            n &&
+            n.indexOf('/') !== -1 &&
+            !/^(ai|retention)\//i.test(n) &&
+            resolveCanonicalDomainFromLabels([n], canonicalDomains)
+        )
+        .map((n) => 'label:"' + n.replace(/"/g, '') + '"')
+    } catch (e) {
+      canonicalSubLabelTerms = []
+    }
+  }
+  const defaultQuery =
+    canonicalSubLabelTerms.length > 0
+      ? defaultCanonicalQuery.replace(
+          /\)$/,
+          ' OR ' + canonicalSubLabelTerms.join(' OR ') + ')'
+        )
+      : defaultCanonicalQuery
+  const searchQuery = opts.query || defaultQuery
 
   let threads = []
   if (typeof gmail.search === 'function') {
@@ -4509,13 +4800,13 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
               canonicalDomain,
               subfolderName,
               drive,
-              cfg.driveRootFolderName
+              driveRootOptions_(cfg)
             )
           : ensureDriveTaxonomyFolder(
               canonicalDomain,
               subfolderName,
               drive,
-              cfg.driveRootFolderName
+              driveRootOptions_(cfg)
             )
         folderCache[folderKey] = targetFolder
       } catch (err) {
@@ -4597,6 +4888,9 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
             : ''
 
         if (desc && desc.includes('[AI_INDEXED]')) {
+          if (!isDryRun) {
+            recordDriveFileCoOwner_(foundFile, threadId)
+          }
           report.alreadyStoredAndTagged++
           report.items.push({
             threadId: threadId,
@@ -4613,7 +4907,9 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
           report.alreadyStoredUntagged++
           if (!isDryRun && typeof foundFile.setDescription === 'function') {
             try {
-              foundFile.setDescription(tagBlock)
+              const nextDesc = desc ? desc + '\n' + tagBlock : tagBlock
+              foundFile.setDescription(nextDesc)
+              recordDriveFileCoOwner_(foundFile, threadId)
               report.taggedCount++
             } catch (e) {
               // Non-blocking
@@ -4956,7 +5252,8 @@ function doesDriveFileMatchThreadAttachment_(
     return candidateHash === attHash
   }
 
-  return true
+  // Content could not be verified (a digest is unavailable): never assume a match.
+  return false
 }
 
 /**
@@ -5086,7 +5383,7 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
 
     const newDomain =
       classification.canonicalDomain || classification.canonical_label
-    const newSubLabel = classification.subLabel || ''
+    let newSubLabel = classification.subLabel || ''
     const tldChanged = oldDomain && newDomain && oldDomain !== newDomain
 
     const attachmentsMoved = []
@@ -5112,6 +5409,9 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
         const targetLabel = ensureGmailLabel(primaryTag, gmail)
         thread.addLabel(targetLabel)
       }
+      // Use the label that was actually applied for Drive paths and summaries
+      classification = withEffectiveSubLabel_(classification, primaryTag)
+      newSubLabel = classification.subLabel || ''
       if (
         classification.category &&
         classification.category !== 'Primary' &&
@@ -5172,19 +5472,19 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
                 oldDomain,
                 oldSubfolder,
                 drive,
-                cfg.driveRootFolderName
+                driveRootOptions_(cfg)
               ) ||
               ensureDriveTaxonomyFolder(
                 oldDomain,
                 oldSubfolder,
                 drive,
-                cfg.driveRootFolderName
+                driveRootOptions_(cfg)
               )
             const newFolder = ensureDriveTaxonomyFolder(
               newDomain,
               newSubfolder,
               drive,
-              cfg.driveRootFolderName
+              driveRootOptions_(cfg)
             )
             const helperFns = {
               getFileHash: services?.getFileHash || getFileHash,
@@ -5274,6 +5574,33 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
         )
         if (saved && saved.length > 0) {
           attachmentsSaved = saved
+        }
+        if (saved && saved.hadErrors) {
+          // Persistence failed: undo successful completion and queue a durable retry
+          const processedName = cfg.processedLabel || 'Processed'
+          try {
+            const processedObj = ensureGmailLabel(processedName, gmail)
+            if (processedObj && typeof thread.removeLabel === 'function') {
+              thread.removeLabel(processedObj)
+            }
+            const retryObj = ensureGmailLabel(
+              cfg.retryLabel || 'AI/Needs-Retry',
+              gmail
+            )
+            if (retryObj && typeof thread.addLabel === 'function') {
+              thread.addLabel(retryObj)
+            }
+          } catch (retryErr) {
+            console.warn(
+              '[reclassifyThreadsByQuery] Failed to queue attachment retry: ' +
+                retryErr.message
+            )
+          }
+          console.warn(
+            '[reclassifyThreadsByQuery] Attachment persistence failed; queued thread ' +
+              threadId +
+              ' for retry.'
+          )
         }
       }
     }
@@ -5552,11 +5879,8 @@ function isThreadSentOrRepliedByUser(thread, userEmail) {
     for (let m = 0; m < messages.length; m++) {
       const msg = messages[m]
       if (!msg || typeof msg.getFrom !== 'function') continue
-      const rawFrom = msg.getFrom()
-      const fromAddr = (
-        rawFrom && typeof rawFrom === 'string' ? rawFrom : ''
-      ).toLowerCase()
-      if (fromAddr.indexOf(primaryEmail) !== -1) {
+      const fromAddr = extractSenderAddress_(msg.getFrom())
+      if (fromAddr === primaryEmail.trim()) {
         return true
       }
     }
@@ -5567,6 +5891,64 @@ function isThreadSentOrRepliedByUser(thread, userEmail) {
     )
   }
   return false
+}
+
+/**
+ * Verifies that every message in a thread satisfies the retention age and star
+ * exclusions (the search query only guarantees that at least one message does).
+ */
+function isWholeThreadRetentionEligible_(thread, services) {
+  try {
+    if (typeof thread.getLastMessageDate === 'function') {
+      const lastDate = thread.getLastMessageDate()
+      const lastMs = lastDate instanceof Date ? lastDate.getTime() : NaN
+      const cutoffMs = Date.now() - 2 * 365 * 24 * 60 * 60 * 1000
+      if (!Number.isNaN(lastMs) && lastMs > cutoffMs) return false
+    }
+    if (
+      typeof thread.hasStarredMessages === 'function' &&
+      thread.hasStarredMessages()
+    ) {
+      return false
+    }
+    if (typeof thread.getMessages === 'function') {
+      const msgs = thread.getMessages() || []
+      for (let m = 0; m < msgs.length; m++) {
+        if (
+          msgs[m] &&
+          typeof msgs[m].isStarred === 'function' &&
+          msgs[m].isStarred()
+        ) {
+          return false
+        }
+      }
+    }
+    // Retention only covers Promotions/Social/Forums: a conversation that also
+    // holds a Primary/Updates/Personal message is exempt as a whole.
+    const gmailAdv =
+      services?.Gmail || (typeof Gmail !== 'undefined' ? Gmail : null)
+    const threadId = typeof thread.getId === 'function' ? thread.getId() : ''
+    if (threadId && typeof gmailAdv?.Users?.Threads?.get === 'function') {
+      const meta = gmailAdv.Users.Threads.get('me', threadId)
+      const msgMeta = Array.isArray(meta?.messages) ? meta.messages : []
+      for (let k = 0; k < msgMeta.length; k++) {
+        const ids = Array.isArray(msgMeta[k]?.labelIds)
+          ? msgMeta[k].labelIds
+          : []
+        if (
+          ids.some(function (id) {
+            return /^CATEGORY_(PERSONAL|UPDATES)$/i.test(String(id || ''))
+          })
+        ) {
+          return false
+        }
+      }
+    }
+  } catch (e) {
+    // Unable to verify eligibility: fail closed and keep the thread
+    return false
+  }
+  return true
 }
 
 /**
@@ -5607,10 +5989,44 @@ function purgeExpiredEmailsByRetentionPolicy(customConfig, customServices) {
   let trashedCount = 0
   let exemptedCount = 0
   let totalFound = 0
+  // Exempt threads stay searchable, so persist how many lead the result list;
+  // otherwise every run rescans the same exempt prefix and never reaches the rest.
+  const cursorKey = 'RETENTION_PURGE_OFFSET'
+  const props =
+    services.PropertiesService &&
+    typeof services.PropertiesService.getScriptProperties === 'function'
+      ? services.PropertiesService.getScriptProperties()
+      : typeof PropertiesService !== 'undefined' &&
+          typeof PropertiesService.getScriptProperties === 'function'
+        ? PropertiesService.getScriptProperties()
+        : null
+  const saveCursor = function (value) {
+    try {
+      if (props && typeof props.setProperty === 'function') {
+        props.setProperty(cursorKey, String(value))
+      }
+    } catch (e) {
+      // Cursor persistence is best-effort
+    }
+  }
   let offset = 0
+  try {
+    const stored =
+      props && typeof props.getProperty === 'function'
+        ? parseInt(props.getProperty(cursorKey), 10)
+        : 0
+    offset = Number.isFinite(stored) && stored > 0 ? stored : 0
+  } catch (e) {
+    offset = 0
+  }
 
   for (let page = 0; page < maxPages; page++) {
-    const rawPage = gmail.search(retentionQuery, offset, pageSize) || []
+    let rawPage = gmail.search(retentionQuery, offset, pageSize) || []
+    if (page === 0 && rawPage.length === 0 && offset > 0) {
+      // Stored cursor is past the end of the results: restart from the top.
+      offset = 0
+      rawPage = gmail.search(retentionQuery, offset, pageSize) || []
+    }
     const threads = sortThreadsByLastMessageDate_(rawPage)
     if (page === 0) {
       console.log(
@@ -5668,6 +6084,12 @@ function purgeExpiredEmailsByRetentionPolicy(customConfig, customServices) {
           }
         }
 
+        // Safety Shield 3: Gmail returns a thread when ANY message matches the query,
+        // so verify the whole conversation is old and unstarred before trashing it.
+        if (!isExempt && !isWholeThreadRetentionEligible_(thread, services)) {
+          isExempt = true
+        }
+
         if (!isExempt) {
           if (typeof thread.moveToTrash === 'function') {
             thread.moveToTrash()
@@ -5696,9 +6118,11 @@ function purgeExpiredEmailsByRetentionPolicy(customConfig, customServices) {
 
     offset += pageRemainingCount
     if (rawPage.length < pageSize) {
+      offset = 0
       break
     }
   }
+  saveCursor(offset)
 
   console.log(
     '[purgeExpiredEmailsByRetentionPolicy] Retention cleanup complete. Scanned ' +
@@ -5711,6 +6135,23 @@ function purgeExpiredEmailsByRetentionPolicy(customConfig, customServices) {
 }
 
 const DESTRUCTIVE_CONFIDENCE_MIN = 0.85
+
+/**
+ * Returns a copy of the classification whose subLabel is the effective Gmail
+ * label actually applied, so Drive paths agree with label-based audits.
+ */
+function withEffectiveSubLabel_(classification, effectiveLabel) {
+  if (
+    !classification ||
+    !effectiveLabel ||
+    isRootDomainLabel(effectiveLabel) ||
+    classification.subLabel === effectiveLabel
+  ) {
+    return classification
+  }
+  return Object.assign({}, classification, { subLabel: effectiveLabel })
+}
+const SECONDARY_SWEEP_OFFSET_KEY_ = 'SECONDARY_SWEEP_OFFSET'
 
 function isDestructiveActionAllowed_(classification) {
   if (!classification || typeof classification !== 'object') {
@@ -5808,12 +6249,39 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
     const manualReviewLabelName = config.manualReviewLabel || 'AI/Manual-Review'
 
     let isSecondarySweep = false
+    let sweepOffset = 0
+    let sweepPropsRef = null
+    let sweepRetainedCount = 0
     if (threads.length === 0) {
       // Secondary sweep: Look for unread unstarred inbox threads to realign non-Primary items
       const sweepQuery =
         'in:inbox is:unread -is:starred -from:me -label:' +
         manualReviewLabelName
-      const rawSweepThreads = gmail.search(sweepQuery, 0, 15) || []
+      const sweepProps =
+        (services.PropertiesService &&
+        typeof services.PropertiesService.getScriptProperties === 'function'
+          ? services.PropertiesService.getScriptProperties()
+          : null) ||
+        services.properties ||
+        (typeof PropertiesService !== 'undefined' &&
+        typeof PropertiesService.getScriptProperties === 'function'
+          ? PropertiesService.getScriptProperties()
+          : null)
+      sweepPropsRef = sweepProps
+      if (sweepProps && typeof sweepProps.getProperty === 'function') {
+        const storedOffset = Number.parseInt(
+          sweepProps.getProperty(SECONDARY_SWEEP_OFFSET_KEY_),
+          10
+        )
+        sweepOffset =
+          Number.isFinite(storedOffset) && storedOffset > 0 ? storedOffset : 0
+      }
+      let rawSweepThreads = gmail.search(sweepQuery, sweepOffset, 15) || []
+      if (rawSweepThreads.length === 0 && sweepOffset > 0) {
+        // Cursor ran past the end of the matches; wrap around to the start
+        sweepOffset = 0
+        rawSweepThreads = gmail.search(sweepQuery, 0, 15) || []
+      }
       threads = sortThreadsByLastMessageDate_(rawSweepThreads)
       isSecondarySweep = true
       console.log(
@@ -5929,6 +6397,14 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
         config.processedLabel &&
         threadLabels.indexOf(config.processedLabel) !== -1
       const isManualReview = threadLabels.indexOf(manualReviewLabelName) !== -1
+      let leftSweepResults = false
+      const markLeftSweep = function () {
+        if (!leftSweepResults) {
+          leftSweepResults = true
+          sweepRetainedCount--
+        }
+      }
+      sweepRetainedCount++
 
       let classification = deterministicRuleClassify_(
         sender,
@@ -5938,6 +6414,15 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
         config
       )
       let usedRemoteApi = false
+      // classifyWithGemini may have opened the breaker on a previous thread; skipped
+      // calls must not count as failed attempts for this thread.
+      if (
+        !classification &&
+        !remoteQuotaExhausted &&
+        isCircuitBreakerOpen(props)
+      ) {
+        remoteQuotaExhausted = true
+      }
       if (
         !classification &&
         !remoteQuotaExhausted &&
@@ -5990,9 +6475,27 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
             gmail,
             services.Gmail
           )
-          if (targetLabel) {
-            thread.addLabel(targetLabel)
+          if (!targetLabel) {
+            const labelRetryCount = incrementThreadRetryCount_(thread, cache)
+            if (labelRetryCount >= 5 && manualReviewLabel) {
+              thread.addLabel(manualReviewLabel)
+              if (retryLabel) {
+                try {
+                  thread.removeLabel(retryLabel)
+                } catch (e) {}
+              }
+            } else if (retryLabel) {
+              thread.addLabel(retryLabel)
+            }
+            console.warn(
+              '[processEmailsWithAiClassifier] Taxonomy label "' +
+                primaryTag +
+                '" is unavailable; queued thread for retry without marking Processed.'
+            )
+            continue
           }
+          thread.addLabel(targetLabel)
+          classification = withEffectiveSubLabel_(classification, primaryTag)
 
           const savedAttachments = persistCanonicalAttachmentsToDrive(
             thread,
@@ -6004,6 +6507,11 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
             const attRetryCount = incrementThreadRetryCount_(thread, cache)
             if (attRetryCount >= 5 && manualReviewLabel) {
               thread.addLabel(manualReviewLabel)
+              if (retryLabel) {
+                try {
+                  thread.removeLabel(retryLabel)
+                } catch (e) {}
+              }
             } else if (retryLabel) {
               thread.addLabel(retryLabel)
             }
@@ -6035,7 +6543,7 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
                   subject,
                   classification.summary,
                   config.userAccountEmail,
-                  savedAttachments
+                  savedAttachments.concat(savedAttachments.existingFiles || [])
                 )
                 assertNoAsciiReplacement_(
                   (subject || '') + (classification.summary || ''),
@@ -6060,6 +6568,8 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
           }
         }
 
+        const wantsMarkRead =
+          classification.action === 'mark_read' || classification.markRead
         if (
           classification.category &&
           classification.category !== 'Primary' &&
@@ -6087,19 +6597,38 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
         } else if (requestedDestructive && !userSent) {
           if (classification.action === 'trash') {
             thread.moveToTrash()
+            markLeftSweep()
             console.log(
               '[processEmailsWithAiClassifier] Action: Moved spam/unwanted thread to TRASH.'
             )
           } else {
             thread.moveToArchive()
+            markLeftSweep()
             console.log(
               '[processEmailsWithAiClassifier] Action: Archived thread out of INBOX.'
             )
           }
         }
 
-        if (classification.action === 'mark_read' || classification.markRead) {
+        if (
+          classification.category === 'Primary' &&
+          classification.action === 'keep' &&
+          !userSent &&
+          threadLabels.indexOf(retryLabelName) !== -1 &&
+          typeof thread.isInInbox === 'function' &&
+          !thread.isInInbox() &&
+          typeof thread.moveToInbox === 'function'
+        ) {
+          // Recovered actionable threads must return to the inbox
+          thread.moveToInbox()
+          console.log(
+            '[processEmailsWithAiClassifier] Action: Restored recovered Primary thread to INBOX.'
+          )
+        }
+
+        if (wantsMarkRead) {
           thread.markRead()
+          markLeftSweep()
           console.log(
             '[processEmailsWithAiClassifier] Action: Marked thread as READ.'
           )
@@ -6173,6 +6702,28 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
         if (utilsService && typeof utilsService.sleep === 'function') {
           utilsService.sleep(2000)
         }
+      }
+    }
+
+    if (
+      isSecondarySweep &&
+      sweepPropsRef &&
+      typeof sweepPropsRef.setProperty === 'function'
+    ) {
+      // Advance past threads that stayed in the sweep results so retained Primary
+      // conversations cannot permanently block realignment of the rest.
+      const nextOffset =
+        threads.length < 15 ? 0 : sweepOffset + sweepRetainedCount
+      try {
+        sweepPropsRef.setProperty(
+          SECONDARY_SWEEP_OFFSET_KEY_,
+          String(nextOffset)
+        )
+      } catch (e) {
+        console.warn(
+          '[processEmailsWithAiClassifier] Failed to persist sweep cursor:',
+          e.message
+        )
       }
     }
 

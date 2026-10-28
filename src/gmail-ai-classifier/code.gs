@@ -1396,7 +1396,8 @@ const DETERMINISTIC_RULE_SPECS_ = [
   'any::pypi.org|npmjs.com|docker.com|crates.io::::::[pypi]|trusted publisher::::05_Tech_Infrastructure::Tech/Alerts::Updates::archive::0.99::Package Registry Alert::Package repository publishing, release, or trusted publisher notification routed to Tech/Alerts.',
   'any::::::::you shared some google account data with|google account data with|granted access to your google account|third-party access|app access granted::::05_Tech_Infrastructure::Tech/Security::Primary::keep::1::Third-Party Authorization Shield::Third-party application account data sharing or authorization notice preserved in Primary Inbox as security warning.',
   'any::::::::verification code|security code|one-time passcode|one-time password|your login code|new sign-in|signed in from a new|new device signed in|sign-in from new device|security alert for your|password changed|password reset confirmation::::05_Tech_Infrastructure::Tech/Security::Updates::archive::0.99::Authentication/Sign-in Ping::Automated authentication verification code or device sign-in alert routed to Tech/Security.',
-  'sender+sub::cvs.com|walgreens.com|questdiagnostics.com|labcorp.com|zocdoc.com|athenahealth.com::::mychart|cvshealth::appointment reminder|upcoming appointment|appointment confirmation|appointment is confirmed|prescription is ready|prescription ready|refill reminder|refill confirmation::action required|abnormal|urgent|past due|overdue::04_Family_Health::Family/Health-Medical::Updates::archive::0.99::Healthcare/Pharmacy Alert::Automated patient portal appointment reminder or pharmacy prescription status notice.',
+  'sender+sub::cvs.com|walgreens.com|questdiagnostics.com|labcorp.com|zocdoc.com|athenahealth.com::::mychart|cvshealth::prescription is ready|prescription ready|rx is ready|rx ready::picked up|already picked up|has been picked up|was picked up|delivered::04_Family_Health::Family/Health-Medical::Primary::keep::0.99::Prescription Ready Alert::Pharmacy prescription ready-for-pickup notice kept in Primary Inbox as action required.',
+  'sender+sub::cvs.com|walgreens.com|questdiagnostics.com|labcorp.com|zocdoc.com|athenahealth.com::::mychart|cvshealth::appointment reminder|upcoming appointment|appointment confirmation|appointment is confirmed|refill reminder|refill confirmation|prescription picked up|order picked up::action required|abnormal|urgent|past due|overdue|prescription is ready|prescription ready|ready for pickup|rx is ready|rx ready::04_Family_Health::Family/Health-Medical::Updates::archive::0.99::Healthcare/Pharmacy Alert::Automated patient portal appointment reminder or pharmacy refill confirmation notice.',
   'sender+sub::delta.com|southwest.com|aa.com|united.com|airbnb.com|vrbo.com|marriott.com|hilton.com|uber.com|lyft.com|waymo.com::::waymo::flight confirmation|flight status|boarding pass|check in for your flight|reservation confirmed|reservation confirmation|upcoming stay|trip with uber|ride with lyft|waymo ride|riding with waymo|receipt::::01_Household::Household/Travel::Updates::archive::0.99::Travel Confirmation::Travel itinerary reservation, flight check-in, or rideshare receipt.',
   'any::::::::how was your experience|how did we do|rate your recent|rate your experience|rate your stay|tell us what you think|take our survey|take our quick survey|quick survey|feedback requested|review your purchase|leave a review|your opinion matters::::::::Promotions::archive::0.99::Customer Survey::Automated post-transaction customer satisfaction feedback or survey request.',
   'any::ifttt.com|notify.mios.com::::::::::01_Household::Household/Property::Updates::archive::0.98::IFTTT / Weather Alert::Automated weather or IoT trigger notification routed to Household/Property.',
@@ -2894,10 +2895,68 @@ function auditEmailClassifications(customConfig, customServices) {
     lookback +
     'd'
 
-  const rawThreads =
-    gmail && typeof gmail.search === 'function'
-      ? gmail.search(query, 0, 50)
-      : []
+  const pageSize = 50
+  const maxPages =
+    config.auditMaxPages && config.auditMaxPages > 0 ? config.auditMaxPages : 5
+  const cursorKey = 'AUDIT_CLASSIFICATIONS_OFFSET'
+  const props =
+    services.PropertiesService &&
+    typeof services.PropertiesService.getScriptProperties === 'function'
+      ? services.PropertiesService.getScriptProperties()
+      : typeof PropertiesService !== 'undefined' &&
+          typeof PropertiesService.getScriptProperties === 'function'
+        ? PropertiesService.getScriptProperties()
+        : null
+  const saveCursor = function (value) {
+    try {
+      if (props && typeof props.setProperty === 'function') {
+        props.setProperty(cursorKey, String(value))
+      }
+    } catch (e) {
+      // Best-effort cursor persistence
+    }
+  }
+  let offset = 0
+  try {
+    const stored =
+      props && typeof props.getProperty === 'function'
+        ? parseInt(props.getProperty(cursorKey), 10)
+        : 0
+    offset = Number.isFinite(stored) && stored > 0 ? stored : 0
+  } catch (e) {
+    offset = 0
+  }
+
+  const rawThreads = []
+  const seenThreads = []
+  const seenThreadIds = {}
+  if (gmail && typeof gmail.search === 'function') {
+    let reachedEnd = false
+    for (let page = 0; page < maxPages; page++) {
+      let pageThreads = gmail.search(query, offset, pageSize) || []
+      if (page === 0 && pageThreads.length === 0 && offset > 0) {
+        offset = 0
+        pageThreads = gmail.search(query, offset, pageSize) || []
+      }
+      let addedOnPage = 0
+      for (let i = 0; i < pageThreads.length; i++) {
+        const t = pageThreads[i]
+        if (!t || seenThreads.indexOf(t) !== -1) continue
+        const tid = typeof t.getId === 'function' ? String(t.getId() || '') : ''
+        if (tid && seenThreadIds[tid]) continue
+        seenThreads.push(t)
+        if (tid) seenThreadIds[tid] = true
+        rawThreads.push(t)
+        addedOnPage++
+      }
+      if (pageThreads.length < pageSize || addedOnPage === 0) {
+        reachedEnd = true
+        break
+      }
+      offset += pageThreads.length
+    }
+    saveCursor(reachedEnd ? 0 : offset)
+  }
   const threads = sortThreadsByLastMessageDate_(rawThreads)
   console.log(
     '[auditEmailClassifications] Found ' +
@@ -4834,6 +4893,9 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
             : ''
 
         if (desc && desc.includes('[AI_INDEXED]')) {
+          if (!isDryRun) {
+            recordDriveFileCoOwner_(foundFile, threadId)
+          }
           report.alreadyStoredAndTagged++
           report.items.push({
             threadId: threadId,
@@ -4850,7 +4912,9 @@ function auditAndBackfillCanonicalAttachments(options, config, services) {
           report.alreadyStoredUntagged++
           if (!isDryRun && typeof foundFile.setDescription === 'function') {
             try {
-              foundFile.setDescription(tagBlock)
+              const nextDesc = desc ? desc + '\n' + tagBlock : tagBlock
+              foundFile.setDescription(nextDesc)
+              recordDriveFileCoOwner_(foundFile, threadId)
               report.taggedCount++
             } catch (e) {
               // Non-blocking

@@ -3317,7 +3317,7 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(deviceRes.action).toBe('archive')
         })
 
-        test('classifies healthcare appointment reminders and pharmacy alerts into Family/Health-Medical archive', () => {
+        test('classifies healthcare appointment reminders and pharmacy alerts into Family/Health-Medical', () => {
           const apptRes = fn(
             'donotreply@mychart.example.org',
             'Upcoming Appointment Reminder for Tomorrow',
@@ -3332,6 +3332,19 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(apptRes.action).toBe('archive')
           expect(apptRes.reasoning).toBe('Healthcare/Pharmacy Alert')
 
+          const refillRes = fn(
+            'rx@cvs.com',
+            'Refill confirmation for your prescription',
+            'Your prescription refill confirmation',
+            null,
+            {}
+          )
+          expect(refillRes).not.toBeNull()
+          expect(refillRes.canonicalDomain).toBe('04_Family_Health')
+          expect(refillRes.subLabel).toBe('Family/Health-Medical')
+          expect(refillRes.category).toBe('Updates')
+          expect(refillRes.action).toBe('archive')
+
           const rxRes = fn(
             'rx@cvs.com',
             'Your prescription is ready for pickup',
@@ -3342,8 +3355,8 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(rxRes).not.toBeNull()
           expect(rxRes.canonicalDomain).toBe('04_Family_Health')
           expect(rxRes.subLabel).toBe('Family/Health-Medical')
-          expect(rxRes.category).toBe('Updates')
-          expect(rxRes.action).toBe('archive')
+          expect(rxRes.category).toBe('Primary')
+          expect(rxRes.action).toBe('keep')
         })
 
         test('classifies travel reservations, flight status, and rideshare receipts into Household/Travel archive', () => {
