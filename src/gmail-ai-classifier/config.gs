@@ -66,6 +66,10 @@ function getAiClassifierConfig() {
     ? 0.95
     : Math.min(1, Math.max(0, parsedThreshold))
 
+  var processedLabel = getProp('PROCESSED_LABEL') || 'Processed'
+  // Gmail search label operators replace spaces with hyphens
+  var processedLabelQuery = processedLabel.replace(/\s+/g, '-')
+
   return {
     geminiApiKey: getProp('GEMINI_API_KEY') || '',
     geminiModel: modelName,
@@ -88,12 +92,16 @@ function getAiClassifierConfig() {
     promoSenderTerms: getProp('PROMO_SENDER_TERMS') || '',
     auditDigestEmail: getProp('AUDIT_DIGEST_EMAIL') || '',
     auditLookbackDays: auditLookbackDays,
-    processedLabel: getProp('PROCESSED_LABEL') || 'Processed',
+    processedLabel: processedLabel,
     retryLabel: getProp('RETRY_LABEL') || 'AI/Needs-Retry',
     manualReviewLabel: getProp('MANUAL_REVIEW_LABEL') || 'AI/Manual-Review',
     unprocessedQuery:
       getProp('UNPROCESSED_QUERY') ||
-      'label:AI/Needs-Retry OR (in:inbox -label:Processed -label:AI/Manual-Review) OR (newer_than:14d -label:Processed -label:AI/Manual-Review -from:me)',
+      'label:AI/Needs-Retry OR (in:inbox -label:' +
+        processedLabelQuery +
+        ' -label:AI/Manual-Review) OR (newer_than:14d -label:' +
+        processedLabelQuery +
+        ' -label:AI/Manual-Review -from:me)',
     autoFilterConfidenceThreshold: autoFilterConfidenceThreshold,
     modelEndpoint:
       customEndpoint ||

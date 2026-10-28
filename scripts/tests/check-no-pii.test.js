@@ -365,6 +365,32 @@ describe('check-no-pii.js', () => {
       }
     })
 
+    it('should detect PII in UTF-16BE and UTF-16LE encoded files', () => {
+      const text = 'Email: private.person@gmail.com\n' // pii-ignore
+      const le = Buffer.concat([
+        Buffer.from([0xff, 0xfe]),
+        Buffer.from(text, 'utf16le'),
+      ])
+      const be = Buffer.concat([
+        Buffer.from([0xfe, 0xff]),
+        Buffer.from(text, 'utf16le').swap16(),
+      ])
+      for (const [name, buf] of [
+        ['le', le],
+        ['be', be],
+      ]) {
+        const tmpFile = path.join(os.tmpdir(), 'test-utf16-' + name + '.txt')
+        fs.writeFileSync(tmpFile, buf)
+        try {
+          const violations = scanFile(tmpFile)
+          expect(violations.length).toBeGreaterThan(0)
+          expect(violations[0].rule).toBe('Personal Gmail Addresses')
+        } finally {
+          fs.unlinkSync(tmpFile)
+        }
+      }
+    })
+
     it('should respect whitelist patterns', () => {
       const tmpFile = path.join(os.tmpdir(), 'test-whitelist.txt')
       fs.writeFileSync(tmpFile, 'Please contact testuser@gmail.com\n') // pii-ignore

@@ -304,7 +304,15 @@ function scanFile(relPath, { isStagedOnly = false } = {}) {
             (buffer[0] === 0xff && buffer[1] === 0xfe) ||
             (buffer[0] === 0xfe && buffer[1] === 0xff)
           ) {
-            content = buffer.toString('utf16le')
+            if (buffer[0] === 0xfe && buffer[1] === 0xff) {
+              // UTF-16BE: swap byte order (even-length slice) before LE decode
+              const evenLen = buffer.length - (buffer.length % 2)
+              content = Buffer.from(buffer.subarray(0, evenLen))
+                .swap16()
+                .toString('utf16le')
+            } else {
+              content = buffer.toString('utf16le')
+            }
             if (content.includes('\0')) {
               console.error(
                 `Error: ${relPath} contains binary/NUL bytes even after UTF-16 decode; cannot scan for PII`
