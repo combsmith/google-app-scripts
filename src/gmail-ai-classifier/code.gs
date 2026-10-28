@@ -6192,6 +6192,11 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
             const labelRetryCount = incrementThreadRetryCount_(thread, cache)
             if (labelRetryCount >= 5 && manualReviewLabel) {
               thread.addLabel(manualReviewLabel)
+              if (retryLabel) {
+                try {
+                  thread.removeLabel(retryLabel)
+                } catch (e) {}
+              }
             } else if (retryLabel) {
               thread.addLabel(retryLabel)
             }
@@ -6215,6 +6220,11 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
             const attRetryCount = incrementThreadRetryCount_(thread, cache)
             if (attRetryCount >= 5 && manualReviewLabel) {
               thread.addLabel(manualReviewLabel)
+              if (retryLabel) {
+                try {
+                  thread.removeLabel(retryLabel)
+                } catch (e) {}
+              }
             } else if (retryLabel) {
               thread.addLabel(retryLabel)
             }

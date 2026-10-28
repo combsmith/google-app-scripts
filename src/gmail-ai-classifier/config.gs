@@ -69,6 +69,8 @@ function getAiClassifierConfig() {
   var processedLabel = getProp('PROCESSED_LABEL') || 'Processed'
   // Gmail search label operators replace spaces with hyphens
   var processedLabelQuery = processedLabel.replace(/\s+/g, '-')
+  var retryLabel = getProp('RETRY_LABEL') || 'AI/Needs-Retry'
+  var retryLabelQuery = retryLabel.replace(/\s+/g, '-')
 
   return {
     geminiApiKey: getProp('GEMINI_API_KEY') || '',
@@ -93,11 +95,13 @@ function getAiClassifierConfig() {
     auditDigestEmail: getProp('AUDIT_DIGEST_EMAIL') || '',
     auditLookbackDays: auditLookbackDays,
     processedLabel: processedLabel,
-    retryLabel: getProp('RETRY_LABEL') || 'AI/Needs-Retry',
+    retryLabel: retryLabel,
     manualReviewLabel: getProp('MANUAL_REVIEW_LABEL') || 'AI/Manual-Review',
     unprocessedQuery:
       getProp('UNPROCESSED_QUERY') ||
-      'label:AI/Needs-Retry OR (in:inbox -label:' +
+      'label:' +
+        retryLabelQuery +
+        ' OR (in:inbox -label:' +
         processedLabelQuery +
         ' -label:AI/Manual-Review) OR (newer_than:14d -label:' +
         processedLabelQuery +

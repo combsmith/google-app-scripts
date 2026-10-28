@@ -4532,6 +4532,70 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             expect(addedLabels).not.toContain('Processed')
           })
 
+          test('removes retryLabel when attachment persistence failures escalate to manual review', () => {
+            const addedLabels = []
+            const removedLabels = []
+            mockCacheStore['retry_count_th-att-5'] = '4'
+
+            const retryLabelObj = { getName: () => 'AI/Needs-Retry' }
+            const att = {
+              getName: () => 'invoice.pdf',
+              getContentType: () => 'application/pdf',
+              getSize: () => 4096,
+              getBytes: () => [1, 2, 3],
+            }
+            const thread = {
+              getId: () => 'th-att-5',
+              getMessages: () => [
+                {
+                  getFrom: () => 'billing@vendor.example',
+                  getSubject: () => 'Invoice',
+                  getPlainBody: () => 'Please find the invoice attached',
+                  getDate: () => new Date(),
+                  getAttachments: () => [att],
+                },
+              ],
+              getLabels: () => [retryLabelObj],
+              addLabel: jest.fn((lbl) => addedLabels.push(lbl.getName())),
+              removeLabel: jest.fn((lbl) => removedLabels.push(lbl.getName())),
+              moveToArchive: jest.fn(),
+            }
+            const mockGmail = {
+              search: jest.fn(() => [thread]),
+              getUserLabelByName: jest.fn((name) => ({ getName: () => name })),
+            }
+            const mockClassifyFn = jest.fn(() => ({
+              confidence: 0.99,
+              category: 'Primary',
+              action: 'keep',
+              canonicalDomain: '02_Finance_Legal',
+              subLabel: 'Finance/Bills',
+            }))
+
+            mod.processEmailsWithAiClassifier(
+              {
+                geminiApiKey: 'test-key',
+                processedLabel: 'Processed',
+                retryLabel: 'AI/Needs-Retry',
+                manualReviewLabel: 'AI/Manual-Review',
+                unprocessedQuery: 'label:AI/Needs-Retry',
+                canonicalDomains: ['02_Finance_Legal'],
+              },
+              {
+                LockService: mockLockService,
+                GmailApp: mockGmail,
+                DriveApp: null,
+                classifyFn: mockClassifyFn,
+                PropertiesService: { getScriptProperties: () => mockProps },
+                CacheService: { getScriptCache: () => mockCache },
+              }
+            )
+
+            expect(addedLabels).toContain('AI/Manual-Review')
+            expect(removedLabels).toContain('AI/Needs-Retry')
+            expect(addedLabels).not.toContain('Processed')
+          })
+
           test('removes retryLabel and adds processedLabel when thread succeeds on subsequent run', () => {
             const addedLabels = []
             const removedLabels = []

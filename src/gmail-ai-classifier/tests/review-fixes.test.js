@@ -279,3 +279,22 @@ describe('config processed label', () => {
     }
   })
 })
+
+describe('config retry label', () => {
+  test('default unprocessed query uses the configured retry label', () => {
+    const prev = global.PropertiesService
+    global.PropertiesService = {
+      getScriptProperties: () => ({
+        getProperty: (k) => (k === 'RETRY_LABEL' ? 'Ops/Retry' : null),
+      }),
+    }
+    try {
+      const cfg = require('../config.gs').getAiClassifierConfig()
+      expect(cfg.retryLabel).toBe('Ops/Retry')
+      expect(cfg.unprocessedQuery).toContain('label:Ops/Retry OR')
+      expect(cfg.unprocessedQuery).not.toContain('AI/Needs-Retry')
+    } finally {
+      global.PropertiesService = prev
+    }
+  })
+})
