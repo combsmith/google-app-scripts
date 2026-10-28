@@ -1293,6 +1293,9 @@ const CAREER_SNIPPET_TERMS_ =
 const NONPROFIT_ACTIONABLE_TERMS_ =
   'please confirm|confirm your|please reply|please respond|reply required|response required|rsvp|action required|action needed|your shift|volunteer shift|can you attend|are you able|need your|urgent'
 
+const SAAS_ACTIONABLE_TERMS_ =
+  'payment failed|payment failure|payment declined|payment method|update your payment|billing issue|past due|suspend|suspension|action required|action needed|urgent'
+
 const CUSTOM_RULE_MATCHERS_ = {
   nonprofit: function (ctx) {
     // Sender membership alone is not broadcast evidence: direct, actionable
@@ -1319,6 +1322,14 @@ const CUSTOM_RULE_MATCHERS_ = {
     )
   },
   saasPlan: function (ctx) {
+    // Actionable failures (e.g. payment problems) must reach semantic
+    // classification so they stay in Primary.
+    if (
+      containsAny_(ctx.subLower, SAAS_ACTIONABLE_TERMS_) ||
+      containsAny_(ctx.snipLower, SAAS_ACTIONABLE_TERMS_)
+    ) {
+      return false
+    }
     return (
       containsAny_(
         ctx.subLower,
@@ -1341,7 +1352,13 @@ const CUSTOM_RULE_MATCHERS_ = {
     )
   },
   schoolBroadcast: function (ctx) {
-    const isParentSquare = matchesSenderDomain_(ctx.sender, 'parentsquare.com')
+    // The ParentSquare platform sends both broadcasts and individual teacher
+    // requests, so it needs broadcast evidence: actionable messages fall
+    // through to Gemini.
+    const isParentSquare =
+      matchesSenderDomain_(ctx.sender, 'parentsquare.com') &&
+      !containsAny_(ctx.subLower, SCHOOL_ACTIONABLE_TERMS_) &&
+      !containsAny_(ctx.snipLower, SCHOOL_ACTIONABLE_TERMS_)
     return (
       ctx.isBrightArrow ||
       ((ctx.isSchoolDomain || isParentSquare) &&

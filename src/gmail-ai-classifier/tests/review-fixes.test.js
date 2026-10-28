@@ -1293,4 +1293,44 @@ describe.each([
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()
   })
+  describe('fast-path guards for actionable messages', () => {
+    const classify = (sender, subject, snippet) =>
+      mod.deterministicRuleClassify_(sender, subject, snippet, null, {})
+
+    test('SaaS plan fast path still archives routine plan notices', () => {
+      const res = classify(
+        'noreply@cloudflare.com',
+        'Your account plan has changed',
+        'Plan details'
+      )
+      expect(res && res.subLabel).toBe('Tech/Alerts')
+    })
+
+    test('SaaS plan fast path skips actionable payment failures', () => {
+      const res = classify(
+        'billing@cloudflare.com',
+        'Action required: account plan payment failed',
+        'Update your payment method to prevent service suspension'
+      )
+      expect(!res || res.subLabel !== 'Tech/Alerts').toBe(true)
+    })
+
+    test('ParentSquare personal conference requests are not fast-pathed', () => {
+      const res = classify(
+        'Teacher via ParentSquare <no-reply@parentsquare.com>',
+        'Urgent: please confirm the conference for your child',
+        'Please reply'
+      )
+      expect(!res || res.subLabel !== 'Family/School-Student').toBe(true)
+    })
+
+    test('ParentSquare broadcasts are still routed to the school label', () => {
+      const res = classify(
+        'School via ParentSquare <no-reply@parentsquare.com>',
+        'Weekly Newsletter',
+        'This week at school'
+      )
+      expect(res && res.subLabel).toBe('Family/School-Student')
+    })
+  })
 })
