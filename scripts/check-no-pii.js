@@ -213,11 +213,11 @@ function getTrackedRepoFiles() {
         try {
           const stat = fs.lstatSync(fullPath)
           return !stat.isSymbolicLink()
-        } catch {
+        } catch (err) {
           return false
         }
       })
-  } catch {
+  } catch (err) {
     return null
   }
 }
