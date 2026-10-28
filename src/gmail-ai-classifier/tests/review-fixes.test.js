@@ -551,3 +551,187 @@ describe('round-3 review fixes', () => {
     })
   })
 })
+
+describe('processThreadBatch attachment persistence failures', () => {
+  test('removes Processed and queues retry when Drive persistence fails', () => {
+    const processed = label('Processed')
+    const added = []
+    const removed = []
+    const att = {
+      getName: () => 'bill.pdf',
+      getContentType: () => 'application/pdf',
+      getSize: () => 2048,
+      getBytes: () => [1, 2, 3],
+    }
+    const thread = {
+      getId: () => 't-fail',
+      getMessages: () => [
+        {
+          getFrom: () => 'someone@example.com',
+          getSubject: () => 'Invoice',
+          getPlainBody: () => 'Please see attached',
+          getAttachments: () => [att],
+        },
+      ],
+      addLabel: jest.fn((l) => added.push(l.getName())),
+      removeLabel: jest.fn((l) => removed.push(l.getName())),
+    }
+    const body = {
+      canonical_label: '02_Finance_Legal/Taxes',
+      confidence: 0.5,
+      reasoning: 'ok',
+    }
+    const services = {
+      GmailApp: {
+        getUserLabelByName: jest.fn(() => null),
+        createLabel: jest.fn((n) => label(n)),
+      },
+      UrlFetchApp: {
+        fetch: jest.fn(() => ({
+          getResponseCode: () => 200,
+          getContentText: () =>
+            JSON.stringify({
+              candidates: [
+                { content: { parts: [{ text: JSON.stringify(body) }] } },
+              ],
+            }),
+        })),
+      },
+      DriveApp: {
+        getRootFolder: () => {
+          throw new Error('quota')
+        },
+      },
+    }
+    const results = mod.processThreadBatch(
+      [thread],
+      {
+        processedLabel: 'Processed',
+        retryLabel: 'AI/Needs-Retry',
+        canonicalDomains: ['02_Finance_Legal/Taxes'],
+        geminiApiKey: 'k',
+        modelEndpoint: 'https://example.com/m',
+        autoFilterConfidenceThreshold: 0.95,
+      },
+      services
+    )
+    expect(processed.getName()).toBe('Processed')
+    expect(results[0].status).toBe('attachment_persistence_failed')
+    expect(removed).toContain('Processed')
+    expect(added).toContain('AI/Needs-Retry')
+  })
+})
+
+describe('shared deduplicated attachments during realignment', () => {
+  test('recordDriveFileCoOwner_ appends a new thread once', () => {
+    let desc = 'Thread-ID: a'
+    const file = {
+      getDescription: () => desc,
+      setDescription: jest.fn((d) => {
+        desc = d
+      }),
+    }
+    mod.recordDriveFileCoOwner_(file, 'b')
+    mod.recordDriveFileCoOwner_(file, 'b')
+    expect(file.setDescription).toHaveBeenCalledTimes(1)
+    expect(desc).toBe('Thread-ID: a\nThread-ID: b')
+    expect(mod.isDriveFileSharedWithOtherThreads_(file, 'a')).toBe(true)
+    expect(
+      mod.isDriveFileSharedWithOtherThreads_(
+        { description: 'Thread-ID: a' },
+        'a'
+      )
+    ).toBe(false)
+    expect(() => mod.recordDriveFileCoOwner_(null, 'b')).not.toThrow()
+    expect(() =>
+      mod.recordDriveFileCoOwner_(
+        {
+          setDescription: () => {
+            throw new Error('ro')
+          },
+        },
+        'b'
+      )
+    ).not.toThrow()
+  })
+
+  test('realigning the original thread copies a shared file instead of moving it', () => {
+    const shared = {
+      getName: () => 'bill.pdf',
+      getDescription: () => 'Thread-ID: thread-a\nThread-ID: thread-b',
+      moveTo: jest.fn(),
+      makeCopy: jest.fn(),
+    }
+    const oldFolder = {
+      getName: () => 'Bills',
+      getFilesByName: () => ({
+        hasNext: jest.fn().mockReturnValueOnce(true).mockReturnValue(false),
+        next: () => shared,
+      }),
+    }
+    const newFolder = {
+      getName: () => 'Taxes',
+      getFilesByName: () => ({ hasNext: () => false }),
+      createFile: jest.fn(),
+    }
+    const sub = {
+      getFoldersByName: (n) => ({
+        hasNext: () => true,
+        next: () => (n === 'Taxes' ? newFolder : oldFolder),
+      }),
+      createFolder: (n) => (n === 'Taxes' ? newFolder : oldFolder),
+    }
+    const drive = {
+      getRootFolder: () => ({
+        getFoldersByName: () => ({ hasNext: () => true, next: () => sub }),
+        createFolder: () => sub,
+      }),
+    }
+    const att = {
+      getName: () => 'bill.pdf',
+      getContentType: () => 'application/pdf',
+      getSize: () => 15000,
+      getBytes: () => new Uint8Array([1, 2, 3]),
+    }
+    const thread = {
+      getId: () => 'thread-a',
+      getMessages: () => [
+        {
+          getFrom: () => 'a@example.com',
+          getSubject: () => 'Bill',
+          getPlainBody: () => 'x',
+          getAttachments: () => [att],
+        },
+      ],
+      getLabels: () => [label('02_Finance_Legal'), label('Finance/Bills')],
+      addLabel: jest.fn(),
+      removeLabel: jest.fn(),
+    }
+    const gmail = {
+      search: jest.fn(() => [thread]),
+      getUserLabelByName: jest.fn((n) => label(n)),
+      createLabel: jest.fn((n) => label(n)),
+    }
+    mod.reclassifyThreadsByQuery(
+      'q',
+      { maxThreads: 5, dryRun: false },
+      {
+        canonicalDomains: ['02_Finance_Legal'],
+        processedLabel: 'Processed',
+      },
+      {
+        GmailApp: gmail,
+        DriveApp: drive,
+        classifyFn: () => ({
+          canonicalDomain: '02_Finance_Legal',
+          subLabel: 'Finance/Taxes',
+          action: 'keep',
+          category: 'Primary',
+        }),
+        getFileHash: () => 'h',
+      }
+    )
+    expect(shared.makeCopy).toHaveBeenCalledWith('bill.pdf', newFolder)
+    expect(shared.moveTo).not.toHaveBeenCalled()
+  })
+})

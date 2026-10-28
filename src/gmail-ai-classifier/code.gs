@@ -1899,6 +1899,38 @@ function processThreadBatch(threads, config, services) {
       )
     }
 
+    if (savedAttachments && savedAttachments.hadErrors) {
+      // Persistence failed: withhold Processed and queue a durable retry
+      try {
+        if (typeof thread.removeLabel === 'function') {
+          thread.removeLabel(processedLabel)
+        }
+        const retryObj = ensureGmailLabel(
+          config.retryLabel || 'AI/Needs-Retry',
+          services.GmailApp,
+          services.Gmail
+        )
+        if (retryObj && typeof thread.addLabel === 'function') {
+          thread.addLabel(retryObj)
+        }
+      } catch (retryErr) {
+        console.warn(
+          '[processThreadBatch] Failed to queue attachment retry: ' +
+            retryErr.message
+        )
+      }
+      results.push({
+        threadId: threadId,
+        status: 'attachment_persistence_failed',
+        label: classification.canonical_label,
+        confidence: classification.confidence,
+        archived: archived,
+        filterCreated: filterCreated,
+        savedAttachments: savedAttachments,
+      })
+      return
+    }
+
     results.push({
       threadId: threadId,
       status: 'classified',
@@ -4332,6 +4364,12 @@ function persistCanonicalAttachmentsToDrive(
           '[persistCanonicalAttachmentsToDrive] Skipped exact duplicate attachment: ' +
             fileName
         )
+        // Record this thread as a co-owner so realigning the original thread
+        // copies rather than moves the shared file.
+        recordDriveFileCoOwner_(
+          duplicateFile,
+          typeof thread.getId === 'function' ? thread.getId() : thread.id || ''
+        )
         // Still report the already-saved file so retry completion can index every
         // attachment in the thread, not only newly uploaded ones.
         const dupId =
@@ -5064,6 +5102,46 @@ function sortThreadsByLastMessageDate_(threads) {
 }
 
 /**
+ * Appends a `Thread-ID:` line to a deduplicated Drive file's description so a
+ * later realignment can tell the file is shared across threads. Best effort.
+ *
+ * @param {Object} file - Drive file
+ * @param {string} threadId - Thread that deduplicated against the file
+ */
+function recordDriveFileCoOwner_(file, threadId) {
+  if (!file || !threadId || typeof file.setDescription !== 'function') return
+  try {
+    const desc =
+      (typeof file.getDescription === 'function' && file.getDescription()) || ''
+    if (desc.indexOf('Thread-ID: ' + threadId) !== -1) return
+    file.setDescription(desc + '\nThread-ID: ' + threadId)
+  } catch (e) {
+    console.warn(
+      '[recordDriveFileCoOwner_] Could not record co-owner: ' + e.message
+    )
+  }
+}
+
+/**
+ * True when the file's description names a thread other than `threadId`, i.e.
+ * it was deduplicated across threads and is not exclusively owned.
+ *
+ * @param {Object} file - Drive file
+ * @param {string} threadId - Thread being realigned
+ * @returns {boolean}
+ */
+function isDriveFileSharedWithOtherThreads_(file, threadId) {
+  const desc =
+    typeof file.getDescription === 'function'
+      ? file.getDescription() || ''
+      : file.description || ''
+  const ids = desc.match(/Thread-ID: *(\S+)/g) || []
+  return ids.some(function (m) {
+    return m.replace(/Thread-ID: */, '') !== threadId
+  })
+}
+
+/**
  * Verifies that a candidate Drive file in `oldFolder` actually belongs to the
  * thread attachment being relocated (`Thread-ID` description match or size/hash match),
  * preventing unrelated files that share a generic filename (e.g. `invoice.pdf`) from being moved.
@@ -5380,7 +5458,16 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
                       helperFns
                     )
                   ) {
-                    fileToMove.moveTo(newFolder)
+                    if (
+                      typeof fileToMove.makeCopy === 'function' &&
+                      isDriveFileSharedWithOtherThreads_(fileToMove, threadId)
+                    ) {
+                      // Shared via cross-thread dedup: keep the source for the
+                      // other thread(s) and place a copy in the new folder.
+                      fileToMove.makeCopy(attName, newFolder)
+                    } else {
+                      fileToMove.moveTo(newFolder)
+                    }
                     attachmentsMoved.push({
                       name: attName,
                       from: oldDomain + '/' + oldSubfolder,
@@ -6673,6 +6760,8 @@ if (typeof module !== 'undefined' && module.exports) {
     isCircuitBreakerOpen,
     recordCircuitBreakerFailure,
     doesDriveFileMatchThreadAttachment_,
+    recordDriveFileCoOwner_,
+    isDriveFileSharedWithOtherThreads_,
     isSubLabelOfDomain_,
     recordCircuitBreakerSuccess,
     getThreadRetryCount_,

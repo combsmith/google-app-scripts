@@ -4865,6 +4865,46 @@ function sortThreadsByLastMessageDate_(threads) {
 }
 
 /**
+ * Appends a `Thread-ID:` line to a deduplicated Drive file's description so a
+ * later realignment can tell the file is shared across threads. Best effort.
+ *
+ * @param {Object} file - Drive file
+ * @param {string} threadId - Thread that deduplicated against the file
+ */
+function recordDriveFileCoOwner_(file, threadId) {
+  if (!file || !threadId || typeof file.setDescription !== 'function') return
+  try {
+    const desc =
+      (typeof file.getDescription === 'function' && file.getDescription()) || ''
+    if (desc.indexOf('Thread-ID: ' + threadId) !== -1) return
+    file.setDescription(desc + '\nThread-ID: ' + threadId)
+  } catch (e) {
+    console.warn(
+      '[recordDriveFileCoOwner_] Could not record co-owner: ' + e.message
+    )
+  }
+}
+
+/**
+ * True when the file's description names a thread other than `threadId`, i.e.
+ * it was deduplicated across threads and is not exclusively owned.
+ *
+ * @param {Object} file - Drive file
+ * @param {string} threadId - Thread being realigned
+ * @returns {boolean}
+ */
+function isDriveFileSharedWithOtherThreads_(file, threadId) {
+  const desc =
+    typeof file.getDescription === 'function'
+      ? file.getDescription() || ''
+      : file.description || ''
+  const ids = desc.match(/Thread-ID: *(\S+)/g) || []
+  return ids.some(function (m) {
+    return m.replace(/Thread-ID: */, '') !== threadId
+  })
+}
+
+/**
  * Verifies that a candidate Drive file in `oldFolder` actually belongs to the
  * thread attachment being relocated (`Thread-ID` description match or size/hash match),
  * preventing unrelated files that share a generic filename (e.g. `invoice.pdf`) from being moved.
@@ -5177,7 +5217,16 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
                       helperFns
                     )
                   ) {
-                    fileToMove.moveTo(newFolder)
+                    if (
+                      typeof fileToMove.makeCopy === 'function' &&
+                      isDriveFileSharedWithOtherThreads_(fileToMove, threadId)
+                    ) {
+                      // Shared via cross-thread dedup: keep the source for the
+                      // other thread(s) and place a copy in the new folder.
+                      fileToMove.makeCopy(attName, newFolder)
+                    } else {
+                      fileToMove.moveTo(newFolder)
+                    }
                     attachmentsMoved.push({
                       name: attName,
                       from: oldDomain + '/' + oldSubfolder,
@@ -6219,6 +6268,8 @@ if (typeof module !== 'undefined' && module.exports) {
     isCircuitBreakerOpen,
     recordCircuitBreakerFailure,
     doesDriveFileMatchThreadAttachment_,
+    recordDriveFileCoOwner_,
+    isDriveFileSharedWithOtherThreads_,
     isSubLabelOfDomain_,
     recordCircuitBreakerSuccess,
     getThreadRetryCount_,
