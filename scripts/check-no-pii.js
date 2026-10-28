@@ -213,13 +213,11 @@ function getTrackedRepoFiles() {
         try {
           const stat = fs.lstatSync(fullPath)
           return !stat.isSymbolicLink()
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
         } catch (_err) {
           // Symlink check failed; filter out this file
           return false
         }
       })
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
   } catch (_err) {
     return null
   }
@@ -334,7 +332,6 @@ function scanFile(relPath, { isStagedOnly = false } = {}) {
           )
           process.exit(1)
         }
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
       } catch (_err) {
         console.error(
           `Error: ${relPath} cannot be decoded as text; cannot scan for PII`
