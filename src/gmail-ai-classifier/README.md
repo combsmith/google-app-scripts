@@ -20,6 +20,7 @@ Share the 7 Canonical Domain folders in Google Drive (`01_Household` through `07
    - New project: Create a separate directory, then:
      ```
      mkdir -p ~/my-gas-project && cd ~/my-gas-project
+     npx @google/clasp login
      npx @google/clasp create --type standalone --title "Gmail AI Classifier"
      cp <path-to-repo>/src/gmail-ai-classifier/{code.gs,config.gs,gitHubSync.gs,appsscript.json} .
      npx @google/clasp push
@@ -27,6 +28,7 @@ Share the 7 Canonical Domain folders in Google Drive (`01_Household` through `07
    - Existing project: Create a separate directory and clone, then:
      ```
      mkdir -p ~/my-gas-project && cd ~/my-gas-project
+     npx @google/clasp login
      npx @google/clasp clone <YOUR_SCRIPT_ID>
      cp <path-to-repo>/src/gmail-ai-classifier/{code.gs,config.gs,gitHubSync.gs,appsscript.json} .
      npx @google/clasp push

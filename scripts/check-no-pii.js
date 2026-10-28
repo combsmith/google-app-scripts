@@ -212,9 +212,11 @@ function getTrackedRepoFiles() {
         const fullPath = path.resolve(REPO_ROOT, f)
         try {
           const stat = fs.lstatSync(fullPath)
-          return !stat.isSymbolicLink()
+          if (stat.isSymbolicLink() || !stat.isFile()) {
+            return false
+          }
+          return true
         } catch (_err) {
-          // Symlink check failed; filter out this file
           return false
         }
       })
@@ -269,25 +271,45 @@ function isMatchWhitelisted(line, match, whitelist) {
 
 function readTargetFileContent(relPath, isStagedOnly) {
   const posixRelPath = toPosixPath(relPath)
+  let buffer
+
   if (isStagedOnly) {
     try {
-      return execFileSync('git', ['show', `:${posixRelPath}`], {
+      buffer = execFileSync('git', ['show', `:${posixRelPath}`], {
         cwd: REPO_ROOT,
-        encoding: 'utf8',
-        maxBuffer: 256 * 1024 * 1024,
+        encoding: null,
+        maxBuffer: 1024 * 1024 * 1024,
+        stdio: ['pipe', 'pipe', 'pipe'],
       })
     } catch (err) {
       console.error(
         `Error reading staged blob for ${relPath}: ${err.message}\n` +
-          'Blob may exceed buffer limit or access may be denied. Failing PII check.'
+          'Cannot scan for PII. Failing the check.'
       )
       process.exit(1)
     }
+  } else {
+    const fullPath = path.resolve(REPO_ROOT, relPath)
+    if (!fs.existsSync(fullPath)) return null
+    buffer = fs.readFileSync(fullPath)
   }
 
-  const fullPath = path.resolve(REPO_ROOT, relPath)
-  if (!fs.existsSync(fullPath)) return null
-  return fs.readFileSync(fullPath, 'utf8')
+  if (buffer.length >= 2) {
+    if (
+      (buffer[0] === 0xff && buffer[1] === 0xfe) ||
+      (buffer[0] === 0xfe && buffer[1] === 0xff)
+    ) {
+      if (buffer[0] === 0xfe && buffer[1] === 0xff) {
+        const evenLen = buffer.length - (buffer.length % 2)
+        return Buffer.from(buffer.subarray(0, evenLen))
+          .swap16()
+          .toString('utf16le')
+      } else {
+        return buffer.toString('utf16le')
+      }
+    }
+  }
+  return buffer.toString('utf8')
 }
 
 function scanFile(relPath, { isStagedOnly = false } = {}) {
@@ -296,54 +318,10 @@ function scanFile(relPath, { isStagedOnly = false } = {}) {
   if (!content) return []
 
   if (content.includes('\0')) {
-    if (!isStagedOnly) {
-      const fullPath = path.resolve(REPO_ROOT, relPath)
-      try {
-        const buffer = fs.readFileSync(fullPath)
-        if (buffer.length >= 2) {
-          if (
-            (buffer[0] === 0xff && buffer[1] === 0xfe) ||
-            (buffer[0] === 0xfe && buffer[1] === 0xff)
-          ) {
-            if (buffer[0] === 0xfe && buffer[1] === 0xff) {
-              // UTF-16BE: swap byte order (even-length slice) before LE decode
-              const evenLen = buffer.length - (buffer.length % 2)
-              content = Buffer.from(buffer.subarray(0, evenLen))
-                .swap16()
-                .toString('utf16le')
-            } else {
-              content = buffer.toString('utf16le')
-            }
-            if (content.includes('\0')) {
-              console.error(
-                `Error: ${relPath} contains binary/NUL bytes even after UTF-16 decode; cannot scan for PII`
-              )
-              process.exit(1)
-            }
-          } else {
-            console.error(
-              `Error: ${relPath} contains binary/NUL bytes; cannot scan for PII`
-            )
-            process.exit(1)
-          }
-        } else {
-          console.error(
-            `Error: ${relPath} contains binary/NUL bytes; cannot scan for PII`
-          )
-          process.exit(1)
-        }
-      } catch (_err) {
-        console.error(
-          `Error: ${relPath} cannot be decoded as text; cannot scan for PII`
-        )
-        process.exit(1)
-      }
-    } else {
-      console.error(
-        `Error: ${relPath} contains binary/NUL bytes in staged blob; cannot scan for PII`
-      )
-      process.exit(1)
-    }
+    console.error(
+      `Error: ${relPath} contains binary/NUL bytes; cannot scan for PII`
+    )
+    process.exit(1)
   }
 
   const lines = content.split('\n')

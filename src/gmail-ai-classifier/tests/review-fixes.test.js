@@ -1,4 +1,5 @@
 const mod = require('../code.gs')
+const indexMod = require('../src/index.js')
 
 const DOMAINS = [
   '01_Household',
@@ -622,7 +623,10 @@ describe('processThreadBatch attachment persistence failures', () => {
   })
 })
 
-describe('shared deduplicated attachments during realignment', () => {
+describe.each([
+  ['code.gs', mod],
+  ['src/index.js', indexMod],
+])('shared deduplicated attachments during realignment (%s)', (_n, mod) => {
   test('recordDriveFileCoOwner_ appends a new thread once', () => {
     let desc = 'Thread-ID: a'
     const file = {
