@@ -1332,5 +1332,149 @@ describe.each([
       )
       expect(res && res.subLabel).toBe('Family/School-Student')
     })
+
+    test('PayPal receipt rule excludes outstanding payment requests and money requests', () => {
+      const reqBySubject = classify(
+        'service@paypal.com',
+        'Action required: payment request from Acme',
+        'Please pay $150 by Friday'
+      )
+      expect(reqBySubject).toBeNull()
+
+      const reqBySnippet = classify(
+        'service@paypal.com',
+        'PayPal transaction ($150.00 USD)',
+        'Acme sent you an invoice. Please pay $150 by Friday.'
+      )
+      expect(reqBySnippet).toBeNull()
+
+      const completedReceipt = classify(
+        'service@paypal.com',
+        'Receipt for your payment to Acme',
+        'You sent a payment of $150.00 USD to Acme.'
+      )
+      expect(completedReceipt).toMatchObject({
+        canonicalDomain: '02_Finance_Legal',
+        subLabel: 'Finance/Purchases',
+        category: 'Updates',
+        action: 'archive',
+        reasoning: 'Payment Receipt',
+      })
+    })
+
+    test('previously unclassified replied threads still get semantic filing and Drive persistence while staying in Primary/keep', () => {
+      const pdfBytes = Buffer.from('contractor invoice pdf', 'utf-8')
+      const att = {
+        getName: () => 'contractor-invoice.pdf',
+        getContentType: () => 'application/pdf',
+        getSize: () => pdfBytes.length + 4096,
+        getBytes: () => pdfBytes,
+      }
+      const addedLabels = []
+      const repliedUnfiledThread = {
+        getId: () => 't-contractor-replied',
+        getFirstMessageSubject: () => 'Roof Repair Invoice #402',
+        getMessages: () => [
+          {
+            getFrom: () => 'billing@roofing-contractor.example',
+            getSubject: () => 'Roof Repair Invoice #402',
+            getPlainBody: () => 'Please see attached invoice for roof repair.',
+            getDate: () => new Date('2026-10-01T12:00:00Z'),
+            getAttachments: () => [att],
+          },
+          {
+            getFrom: () => 'Me <me@example.com>',
+            getSubject: () => 'Re: Roof Repair Invoice #402',
+            getPlainBody: () => 'Thanks, received!',
+            getDate: () => new Date('2026-10-01T12:30:00Z'),
+            getAttachments: () => [],
+          },
+        ],
+        getLabels: () => [],
+        addLabel: jest.fn((lb) => addedLabels.push(lb.getName())),
+        removeLabel: jest.fn(),
+        moveToArchive: jest.fn(),
+        moveToTrash: jest.fn(),
+      }
+
+      const cfg = {
+        geminiApiKey: 'k',
+        unprocessedQuery: 'q',
+        processedLabel: 'Processed',
+        userAccountEmail: 'me@example.com',
+        canonicalDomains: DOMAINS,
+      }
+
+      // 1. deterministicRuleClassify_ returns null so unclassified replied thread falls through to Gemini
+      expect(
+        mod.deterministicRuleClassify_(
+          'billing@roofing-contractor.example',
+          'Roof Repair Invoice #402',
+          'Please see attached invoice for roof repair.',
+          repliedUnfiledThread,
+          cfg
+        )
+      ).toBeNull()
+
+      // 2. Canonical deterministic rule on a replied thread keeps its canonical domain and shields to Primary/keep
+      const repliedDeterministic = mod.deterministicRuleClassify_(
+        'service@paypal.com',
+        'Receipt for your payment to Acme',
+        'You sent a payment of $150.00 USD to Acme.',
+        repliedUnfiledThread,
+        cfg
+      )
+      expect(repliedDeterministic).toMatchObject({
+        canonicalDomain: '02_Finance_Legal',
+        subLabel: 'Finance/Purchases',
+        category: 'Primary',
+        action: 'keep',
+        reasoning: 'User-Sent Shield',
+      })
+
+      // 3. processEmailsWithAiClassifier invokes classifyFn, applies canonical label, saves attachment to Drive, and keeps in Primary
+      const createdFile = {
+        getId: () => 'f-invoice-1',
+        getName: () => 'contractor-invoice.pdf',
+        getUrl: () => 'https://drive.example/f-invoice-1',
+        setDescription: jest.fn(),
+      }
+      const folder = {
+        getName: () => 'Property',
+        getFoldersByName: () => ({ hasNext: () => false }),
+        createFolder: () => folder,
+        getFilesByName: () => ({ hasNext: () => false }),
+        createFile: jest.fn(() => createdFile),
+      }
+      const classifyFn = jest.fn(() => ({
+        canonicalDomain: '01_Household',
+        subLabel: 'Household/Property',
+        category: 'Updates',
+        action: 'archive',
+        confidence: 0.96,
+        title: 'Roof Repair Invoice',
+        summary: 'Contractor invoice for roof repair.',
+      }))
+
+      mod.processEmailsWithAiClassifier(cfg, {
+        GmailApp: {
+          search: (q) =>
+            q.includes('in:inbox is:unread') ? [] : [repliedUnfiledThread],
+          getUserLabelByName: (n) => label(n),
+          createLabel: (n) => label(n),
+        },
+        DriveApp: {
+          getRootFolder: () => folder,
+        },
+        classifyFn,
+      })
+
+      expect(classifyFn).toHaveBeenCalledTimes(1)
+      expect(addedLabels).toContain('Household/Property')
+      expect(addedLabels).toContain('Processed')
+      expect(folder.createFile).toHaveBeenCalledTimes(1)
+      expect(repliedUnfiledThread.moveToArchive).not.toHaveBeenCalled()
+      expect(repliedUnfiledThread.moveToTrash).not.toHaveBeenCalled()
+    })
   })
 })

@@ -3273,6 +3273,7 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
         test('shields thread containing user-sent message with plain object fallback', () => {
           const mockThread = {
             getMessages: () => [{ from: 'testuser@example.com' }],
+            getLabels: () => ['Finance/Bills'],
           }
           const config = { userAccountEmail: 'testuser@example.com' }
           const res = fn(
@@ -3283,9 +3284,24 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             config
           )
           expect(res).not.toBeNull()
+          expect(res.canonicalDomain).toBe('02_Finance_Legal')
+          expect(res.subLabel).toBe('Finance/Bills')
           expect(res.category).toBe('Primary')
           expect(res.action).toBe('keep')
           expect(res.reasoning).toBe('User-Sent Shield')
+
+          const unclassifiedThread = {
+            getMessages: () => [{ from: 'testuser@example.com' }],
+          }
+          expect(
+            fn(
+              'other@example.com',
+              'Subject',
+              'Snippet',
+              unclassifiedThread,
+              config
+            )
+          ).toBeNull()
         })
 
         test('classifies authentication 2FA codes and security sign-in alerts into Tech/Security archive', () => {

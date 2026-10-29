@@ -1282,7 +1282,7 @@ const SECURITY_WARNING_SNIPPET_TERMS_ =
   'suspicious activity|suspicious sign-in|suspicious login|unauthorized access|account was compromised|account has been compromised'
 
 const MANUAL_PAYMENT_SNIPPET_TERMS_ =
-  'autopay is disabled|autopay is off|autopay is not enabled|auto-pay is off|not enrolled in autopay|please pay|pay by|pay now|payment is due|amount due|balance due|payment due|to avoid interruption|to avoid a late fee|to avoid late fees|manual payment'
+  'autopay is disabled|autopay is off|autopay is not enabled|auto-pay is off|not enrolled in autopay|please pay|pay by|pay now|payment is due|amount due|balance due|payment due|payment request|money request|sent you an invoice|sent you a money request|to avoid interruption|to avoid a late fee|to avoid late fees|manual payment'
 
 const CAREER_SUBJECT_TERMS_ =
   'employment agreement|employment contract|offer letter|job offer|employment offer|terms of employment|independent contractor agreement|restrictive covenant|confidentiality agreement|interview confirmation|interview invitation|invitation to interview|interview with |schedule an interview|recruiter screen|phone screen'
@@ -1431,7 +1431,7 @@ const DETERMINISTIC_RULE_SPECS_ = [
   'sender+sub::chase.com|discover.com::::creditwise|creditkarma|experian|equifax|transunion|myfico|capitalone::credit score|score went up|score went down|creditwise|score changed|credit alert|credit monitoring|credit report|fico score|new credit inquiry::::02_Finance_Legal::Finance/Banking::Updates::archive::0.99::Credit Score Alert::Automated credit score update or credit monitoring notification routed to Updates.',
   'custom:bankRate::::::::::::02_Finance_Legal::Finance/Banking::Updates::archive::0.99::Bank Rate Update::Automated bank account APY or interest rate change notification routed to Finance/Banking.',
   'any::::::::terms of service|privacy policy|terms and conditions|terms of use|user agreement|privacy notice|policy update|updates to our terms|updates to our privacy|arbitration clause|arbitration terms|consumer privacy::::::::Updates::archive::0.99::Policy / Terms Update::Commercial platform terms of service, privacy policy revision, or user agreement update routed to Updates.',
-  'sender+sub::paypal.com::::::receipt|payment|transaction|you sent|you paid|you received|authorized|usd::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Payment Receipt::Electronic payment transaction receipt or transfer confirmation.',
+  'sender+sub::paypal.com::::::receipt|payment sent|payment received|payment confirmation|payment processed|transaction|you sent|you paid|you received|authorized|usd::request|requested|invoice|bill|due|overdue|past due|action required|action needed|failed|failure|declined|unpaid|dispute|unauthorized|suspicious|late fee|returned payment|insufficient funds::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Payment Receipt::Electronic payment transaction receipt or transfer confirmation.',
   'sender+sub::homedepot.com::::::order|receipt|picked up|ready for pickup::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Home Depot store receipt or order pickup confirmation.',
   'sender+sub::target.com|costco.com|bestbuy.com|walmart.com::::::order|receipt|ready for pickup|picked up|shipped|delivered::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Retail store order confirmation, receipt, or pickup notice.',
   'sender+sub::ereceiptshell.com|autozone.com|advanceautoparts.com|rockauto.com::::shell e-receipt::receipt|purchase|order|fuel::::03_Vehicles::Vehicles/Maintenance::Updates::archive::0.99::Vehicle Fuel/Maintenance Receipt::Automated vehicle fuel purchase receipt or parts order confirmation routed to Vehicles/Maintenance.',
@@ -1445,10 +1445,10 @@ function evaluateDeterministicRuleSpec_(specStr, ctx, subject) {
   if (excludeSubject && containsAny_(ctx.subLower, excludeSubject)) {
     return null
   }
-  // Generic "bill is ready" subjects can hide an outstanding manual payment;
-  // let those fall through to semantic classification.
+  // Generic "bill is ready" or payment subjects can hide an outstanding manual
+  // payment or money request; let those fall through to semantic classification.
   if (
-    parts[7] === 'Finance/Bills' &&
+    (parts[7] === 'Finance/Bills' || parts[7] === 'Finance/Purchases') &&
     containsAny_(ctx.snipLower, MANUAL_PAYMENT_SNIPPET_TERMS_)
   ) {
     return null
@@ -1506,6 +1506,7 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
   ).toLowerCase()
 
   // 1. Safety Shields
+  let userParticipated = false
   if (thread && typeof thread.getMessages === 'function' && userEmail) {
     try {
       const msgs = thread.getMessages() || []
@@ -1516,8 +1517,11 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
             : (msgs[m] && msgs[m].from) || ''
         )
         if (fromA === userEmail.trim()) {
-          // Preserve any existing canonical filing; the shield only governs
-          // inbox/destructive actions, never erases taxonomy labels.
+          userParticipated = true
+          // Preserve any existing canonical filing; if the thread has not yet
+          // been filed under a canonical domain, allow canonical deterministic
+          // rules or Gemini semantic classification to assign one while the
+          // caller keeps category='Primary' and action='keep'.
           const existingNames = (
             typeof thread.getLabels === 'function'
               ? thread.getLabels() || []
@@ -1538,21 +1542,39 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
                   config && config.canonicalDomains
                 ) === existingDomain
             ) || null
-          return makeDeterministicResult_(
-            existingDomain,
-            existingSub,
-            'Primary',
-            'keep',
-            1.0,
-            subject,
-            'User-sent or replied thread preserved in Primary Inbox.',
-            'User-Sent Shield'
-          )
+          if (existingDomain) {
+            return makeDeterministicResult_(
+              existingDomain,
+              existingSub,
+              'Primary',
+              'keep',
+              1.0,
+              subject,
+              'User-sent or replied thread preserved in Primary Inbox.',
+              'User-Sent Shield'
+            )
+          }
+          break
         }
       }
     } catch (e) {
       // ignore thread check errors
     }
+  }
+
+  function applyUserSentShield_(res) {
+    if (!userParticipated) return res
+    if (!res || !res.canonicalDomain) return null
+    return makeDeterministicResult_(
+      res.canonicalDomain,
+      res.subLabel,
+      'Primary',
+      'keep',
+      1.0,
+      subject,
+      'User-sent or replied thread preserved in Primary Inbox.',
+      'User-Sent Shield'
+    )
   }
 
   // Family 1:1 Shield (configurable via config.familyEmails or customPromptRules)
@@ -1566,15 +1588,17 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       return f.trim() && extractSenderAddress_(sender) === f.trim()
     })
   ) {
-    return makeDeterministicResult_(
-      '04_Family_Health',
-      'Family/Correspondence',
-      'Primary',
-      'keep',
-      1.0,
-      subject,
-      'Direct family correspondence preserved in Primary Inbox.',
-      'Family 1:1 Shield'
+    return applyUserSentShield_(
+      makeDeterministicResult_(
+        '04_Family_Health',
+        'Family/Correspondence',
+        'Primary',
+        'keep',
+        1.0,
+        subject,
+        'Direct family correspondence preserved in Primary Inbox.',
+        'Family 1:1 Shield'
+      )
     )
   }
 
@@ -1596,15 +1620,17 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     containsAny_(subLower, SCHOOL_BROADCAST_TERMS_) && !isActionableSchool
 
   if (isSchoolDomain && !isBroadcastSubject && !isBrightArrow) {
-    return makeDeterministicResult_(
-      '04_Family_Health',
-      'Family/School-Student',
-      'Primary',
-      'keep',
-      1.0,
-      subject,
-      'Direct 1:1 teacher or school counselor correspondence preserved in Primary Inbox.',
-      'Teacher 1:1 Shield'
+    return applyUserSentShield_(
+      makeDeterministicResult_(
+        '04_Family_Health',
+        'Family/School-Student',
+        'Primary',
+        'keep',
+        1.0,
+        subject,
+        'Direct 1:1 teacher or school counselor correspondence preserved in Primary Inbox.',
+        'Teacher 1:1 Shield'
+      )
     )
   }
 
@@ -1613,15 +1639,17 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     containsAny_(subLower, CAREER_SUBJECT_TERMS_) ||
     containsAny_(snipLower, CAREER_SNIPPET_TERMS_)
   ) {
-    return makeDeterministicResult_(
-      '06_Work_Career',
-      'Work/Career',
-      'Primary',
-      'keep',
-      0.99,
-      subject,
-      'Employment agreement, offer letter, or career interview communication preserved in Primary Inbox.',
-      'Career / Employment Contract Rule'
+    return applyUserSentShield_(
+      makeDeterministicResult_(
+        '06_Work_Career',
+        'Work/Career',
+        'Primary',
+        'keep',
+        0.99,
+        subject,
+        'Employment agreement, offer letter, or career interview communication preserved in Primary Inbox.',
+        'Career / Employment Contract Rule'
+      )
     )
   }
 
@@ -1631,15 +1659,17 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     containsAny_(subLower, SECURITY_WARNING_SUBJECT_TERMS_) ||
     containsAny_(snipLower, SECURITY_WARNING_SNIPPET_TERMS_)
   ) {
-    return makeDeterministicResult_(
-      '05_Tech_Infrastructure',
-      'Tech/Security',
-      'Primary',
-      'keep',
-      0.99,
-      subject,
-      'Suspicious sign-in or account-security warning preserved in Primary Inbox.',
-      'Security Warning Shield'
+    return applyUserSentShield_(
+      makeDeterministicResult_(
+        '05_Tech_Infrastructure',
+        'Tech/Security',
+        'Primary',
+        'keep',
+        0.99,
+        subject,
+        'Suspicious sign-in or account-security warning preserved in Primary Inbox.',
+        'Security Warning Shield'
+      )
     )
   }
 
@@ -1672,10 +1702,12 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     },
   }
   for (let r = 0; r < DETERMINISTIC_RULE_SPECS_.length; r++) {
-    const ruleHit = evaluateDeterministicRuleSpec_(
-      DETERMINISTIC_RULE_SPECS_[r],
-      ruleContext,
-      subject
+    const ruleHit = applyUserSentShield_(
+      evaluateDeterministicRuleSpec_(
+        DETERMINISTIC_RULE_SPECS_[r],
+        ruleContext,
+        subject
+      )
     )
     if (ruleHit) return ruleHit
   }
@@ -1715,6 +1747,7 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     )
 
   if (
+    !userParticipated &&
     isNonTransactional &&
     (isPromoSubject ||
       (isRetailVendor && isMarketingSender) ||
@@ -5436,6 +5469,11 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
       // Use the label that was actually applied for Drive paths and summaries
       classification = withEffectiveSubLabel_(classification, primaryTag)
       newSubLabel = classification.subLabel || ''
+      const userSent = isThreadSentOrRepliedByUser(thread, cfg.userAccountEmail)
+      if (userSent) {
+        classification.category = 'Primary'
+        classification.action = 'keep'
+      }
       if (
         classification.category &&
         classification.category !== 'Primary' &&
@@ -5447,12 +5485,11 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
         setGmailCategoryTab(thread, classification.category)
       }
 
-      const userSent = isThreadSentOrRepliedByUser(thread, cfg.userAccountEmail)
       const requestedDestructive =
         classification.action === 'archive' || classification.action === 'trash'
       const destructiveOk = isDestructiveActionAllowed_(classification)
 
-      if (requestedDestructive && !userSent && destructiveOk) {
+      if (requestedDestructive && destructiveOk) {
         if (
           classification.action === 'trash' &&
           typeof thread.moveToTrash === 'function'
@@ -6596,8 +6633,17 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
           }
         }
 
+        const userSent = isThreadSentOrRepliedByUser(
+          thread,
+          config.userAccountEmail
+        )
         const wantsMarkRead =
-          classification.action === 'mark_read' || classification.markRead
+          !userSent &&
+          (classification.action === 'mark_read' || classification.markRead)
+        if (userSent) {
+          classification.category = 'Primary'
+          classification.action = 'keep'
+        }
         if (
           classification.category &&
           classification.category !== 'Primary' &&
@@ -6606,15 +6652,11 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
           classification.action = 'archive'
         }
 
-        const userSent = isThreadSentOrRepliedByUser(
-          thread,
-          config.userAccountEmail
-        )
         const requestedDestructive =
           classification.action === 'trash' ||
           classification.action === 'archive'
         const destructiveOk = isDestructiveActionAllowed_(classification)
-        if (requestedDestructive && !userSent && !destructiveOk) {
+        if (requestedDestructive && !destructiveOk) {
           console.warn(
             '[processEmailsWithAiClassifier] Shield: Skipped destructive action "' +
               classification.action +
@@ -6622,7 +6664,7 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
               classification.confidence +
               '); preserved thread in INBOX.'
           )
-        } else if (requestedDestructive && !userSent) {
+        } else if (requestedDestructive) {
           if (classification.action === 'trash') {
             thread.moveToTrash()
             markLeftSweep()
