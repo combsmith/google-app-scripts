@@ -2224,5 +2224,111 @@ describe.each([
       expect(existingDocsFolderA.createFile).not.toHaveBeenCalled()
       expect(newFolder.createFile).not.toHaveBeenCalled()
     })
+
+    test('policy update rule requires broadcast evidence and excludes personal attorney correspondence', () => {
+      expect(
+        mod.deterministicRuleClassify_(
+          'lawyer@example.com',
+          'Please review the arbitration clause',
+          'Attached is the revised settlement agreement. Please reply today with your approval before we file it.',
+          null,
+          { canonicalDomains: DOMAINS }
+        )
+      ).toBeNull()
+      expect(
+        mod.deterministicRuleClassify_(
+          'partner@company.com',
+          'Arbitration clause discussion',
+          'Let us discuss the clause tomorrow morning.',
+          null,
+          { canonicalDomains: DOMAINS }
+        )
+      ).toBeNull()
+      const broadcastPolicy = mod.deterministicRuleClassify_(
+        'no-reply@service.example.com',
+        'Updates to our Terms of Service',
+        'We are updating our terms of service effective next month.',
+        null,
+        { canonicalDomains: DOMAINS }
+      )
+      expect(broadcastPolicy).toMatchObject({
+        canonicalDomain: null,
+        category: 'Updates',
+        action: 'archive',
+      })
+    })
+
+    test('validateOntologicalClassification and classifyWithGemini reject non-string subLabel before caching', () => {
+      expect(
+        mod.validateOntologicalClassification(
+          {
+            canonicalDomain: '02_Finance_Legal',
+            subLabel: ['Finance/Bills'],
+            confidence: 0.95,
+            category: 'Updates',
+            action: 'archive',
+          },
+          DOMAINS
+        )
+      ).toBe(false)
+      expect(
+        mod.validateOntologicalClassification(
+          {
+            canonicalDomain: '02_Finance_Legal',
+            subLabel: { name: 'Finance/Bills' },
+            confidence: 0.95,
+            category: 'Updates',
+            action: 'archive',
+          },
+          DOMAINS
+        )
+      ).toBe(false)
+
+      const cachePut = jest.fn()
+      const res = mod.classifyWithGemini(
+        'billing@vendor.example',
+        'Invoice',
+        'Amount due',
+        {
+          geminiApiKey: 'test-key',
+          canonicalDomains: DOMAINS,
+        },
+        {
+          CacheService: {
+            getScriptCache: () => ({
+              get: () => null,
+              put: cachePut,
+            }),
+          },
+          UrlFetchApp: {
+            fetch: () => ({
+              getResponseCode: () => 200,
+              getContentText: () =>
+                JSON.stringify({
+                  candidates: [
+                    {
+                      content: {
+                        parts: [
+                          {
+                            text: JSON.stringify({
+                              canonicalDomain: '02_Finance_Legal',
+                              subLabel: ['Finance/Bills'],
+                              confidence: 0.95,
+                              category: 'Updates',
+                              action: 'archive',
+                            }),
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                }),
+            }),
+          },
+        }
+      )
+      expect(res).toBeNull()
+      expect(cachePut).not.toHaveBeenCalled()
+    })
   })
 })

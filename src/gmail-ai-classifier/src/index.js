@@ -101,6 +101,14 @@ function validateOntologicalClassification(classification, canonicalDomains) {
       return false
     }
   }
+  const subLabel = classification.subLabel
+  if (
+    subLabel !== null &&
+    subLabel !== undefined &&
+    typeof subLabel !== 'string'
+  ) {
+    return false
+  }
   if (VALID_ONTOLOGICAL_CATEGORIES_.indexOf(classification.category) === -1) {
     return false
   }
@@ -1386,6 +1394,23 @@ const CUSTOM_RULE_MATCHERS_ = {
         containsAny_(ctx.subLower, 'apy|cash|savings|interest'))
     )
   },
+  policyUpdate: function (ctx) {
+    const policySubjects =
+      'terms of service|privacy policy|terms and conditions|terms of use|user agreement|privacy notice|policy update|updates to our terms|updates to our privacy|arbitration clause|arbitration terms|consumer privacy'
+    const legalActionTerms =
+      'please review|for your review|please reply|your approval|please sign|sign and return|attached is|see attached|settlement|retainer|counsel|attorney|lawyer|subpoena|deposition|litigation|petition|decree|redline|draft|action required|urgent'
+    const broadcastTerms =
+      'no-reply|noreply|do-not-reply|donotreply|notifications@|updates@|privacy@|policy@|support@|info@|news@|hello@|notify@|mailer@|updates to our|updating our|we are updating|changes to our|revised terms of service|updated privacy policy|annual privacy notice'
+    return (
+      containsAny_(ctx.subLower, policySubjects) &&
+      !containsAny_(ctx.sLower, 'lawyer|attorney|counsel|esq') &&
+      !containsAny_(ctx.subLower, legalActionTerms) &&
+      !containsAny_(ctx.snipLower, legalActionTerms) &&
+      (containsAny_(ctx.sLower, broadcastTerms) ||
+        containsAny_(ctx.subLower, broadcastTerms) ||
+        containsAny_(ctx.snipLower, broadcastTerms))
+    )
+  },
 }
 
 /**
@@ -1428,7 +1453,7 @@ const DETERMINISTIC_RULE_SPECS_ = [
   'sender+sub::geico.com|progressive.com|statefarm.com::::::auto pay|autopay|payment|bill|statement|policy document|id card::claim|adjuster|settlement|complaint|failed|failure|declined|past due|overdue|action required|unpaid|late fee|returned payment|insufficient funds::02_Finance_Legal::Finance/Bills::Updates::archive::0.99::Auto Insurance Routine Billing::Routine auto insurance billing, AutoPay notice, or policy document routed to Finance/Bills.',
   'sender+sub::chase.com|discover.com::::creditwise|creditkarma|experian|equifax|transunion|myfico|capitalone::credit score|score went up|score went down|creditwise|score changed|credit alert|credit monitoring|credit report|fico score|new credit inquiry::::02_Finance_Legal::Finance/Banking::Updates::archive::0.99::Credit Score Alert::Automated credit score update or credit monitoring notification routed to Updates.',
   'custom:bankRate::::::::::::02_Finance_Legal::Finance/Banking::Updates::archive::0.99::Bank Rate Update::Automated bank account APY or interest rate change notification routed to Finance/Banking.',
-  'any::::::::terms of service|privacy policy|terms and conditions|terms of use|user agreement|privacy notice|policy update|updates to our terms|updates to our privacy|arbitration clause|arbitration terms|consumer privacy::::::::Updates::archive::0.99::Policy / Terms Update::Commercial platform terms of service, privacy policy revision, or user agreement update routed to Updates.',
+  'custom:policyUpdate::::::::::::::::Updates::archive::0.99::Policy / Terms Update::Commercial platform terms of service, privacy policy revision, or user agreement update routed to Updates.',
   'sender+sub::paypal.com::::::receipt|payment sent|payment received|payment confirmation|payment processed|transaction|you sent|you paid|you received|authorized|usd::request|requested|invoice|bill|due|overdue|past due|action required|action needed|failed|failure|declined|unpaid|dispute|unauthorized|suspicious|late fee|returned payment|insufficient funds::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Payment Receipt::Electronic payment transaction receipt or transfer confirmation.',
   'sender+sub::homedepot.com::::::order|receipt|picked up|ready for pickup::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Home Depot store receipt or order pickup confirmation.',
   'sender+sub::target.com|costco.com|bestbuy.com|walmart.com::::::order|receipt|ready for pickup|picked up|shipped|delivered::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Retail store order confirmation, receipt, or pickup notice.',
