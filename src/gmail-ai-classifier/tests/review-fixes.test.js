@@ -1487,5 +1487,48 @@ describe.each([
       expect(repliedUnfiledThread.moveToArchive).not.toHaveBeenCalled()
       expect(repliedUnfiledThread.moveToTrash).not.toHaveBeenCalled()
     })
+
+    test('direct LinkedIn messages and recruiter outreach fall through to semantic classification while routine social alerts archive', () => {
+      const directMessage = classify(
+        'messages-noreply@linkedin.com',
+        'Alice sent you a message',
+        'Hi! Would you be open to discussing an engineering role next Tuesday?'
+      )
+      expect(directMessage).toBeNull()
+
+      const snippetRecruiterOutreach = classify(
+        'notifications@linkedin.com',
+        'Alice via LinkedIn',
+        'Are you available for a quick call with our hiring manager about an open role?'
+      )
+      expect(snippetRecruiterOutreach).toBeNull()
+
+      const routineDigest = classify(
+        'messages-noreply@linkedin.com',
+        'You have 3 new notifications on LinkedIn',
+        'See what your connections are sharing this week'
+      )
+      expect(routineDigest).toMatchObject({
+        canonicalDomain: null,
+        category: 'Social',
+        action: 'archive',
+        reasoning: 'News/Newsletter/Social',
+      })
+    })
+
+    test('Family/Health-Medical maps to canonical Medical_Records subfolder', () => {
+      expect(
+        mod.resolveTaxonomySubfolderName(
+          '04_Family_Health',
+          'Family/Health-Medical'
+        )
+      ).toBe('Medical_Records')
+      expect(
+        mod.resolveTaxonomySubfolderName('04_Family_Health', 'Family/Medical')
+      ).toBe('Medical_Records')
+      expect(
+        mod.resolveTaxonomySubfolderName('01_Household', 'Household/Supplies')
+      ).toBe('Primary_House')
+    })
   })
 })

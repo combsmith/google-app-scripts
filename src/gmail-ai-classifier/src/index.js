@@ -1291,6 +1291,9 @@ const NONPROFIT_ACTIONABLE_TERMS_ =
 const SAAS_ACTIONABLE_TERMS_ =
   'payment failed|payment failure|payment declined|payment method|update your payment|billing issue|past due|suspend|suspension|action required|action needed|urgent'
 
+const SOCIAL_DIRECT_MESSAGE_TERMS_ =
+  'sent you a message|sent you an inmail|new message|messaged you|replied to your|direct message|inmail|discuss a role|engineering role|open role|job opportunity|career opportunity|recruiter|hiring manager|are you available|would you be open|can we chat|schedule a call|quick call|please reply|please respond'
+
 const CUSTOM_RULE_MATCHERS_ = {
   nonprofit: function (ctx) {
     // Sender membership alone is not broadcast evidence: direct, actionable
@@ -1430,7 +1433,7 @@ const DETERMINISTIC_RULE_SPECS_ = [
   'sender+sub::homedepot.com::::::order|receipt|picked up|ready for pickup::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Home Depot store receipt or order pickup confirmation.',
   'sender+sub::target.com|costco.com|bestbuy.com|walmart.com::::::order|receipt|ready for pickup|picked up|shipped|delivered::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Retail store order confirmation, receipt, or pickup notice.',
   'sender+sub::ereceiptshell.com|autozone.com|advanceautoparts.com|rockauto.com::::shell e-receipt::receipt|purchase|order|fuel::::03_Vehicles::Vehicles/Maintenance::Updates::archive::0.99::Vehicle Fuel/Maintenance Receipt::Automated vehicle fuel purchase receipt or parts order confirmation routed to Vehicles/Maintenance.',
-  'any::nytimes.com|nextdoor.com|substack.com|redditmail.com|daily.therundown.ai|therundown.ai|mail.instagram.com|instagram.com|facebookmail.com|linkedin.com|pinterest.com|quora.com|youtube.com|twitter.com|x.com::::the passion translation|aibreakfast::::::::::Social::archive::0.98::News/Newsletter/Social::Routine media newsletter, Substack digest, social media alert, or political appeal.',
+  'any::nytimes.com|nextdoor.com|substack.com|redditmail.com|daily.therundown.ai|therundown.ai|mail.instagram.com|instagram.com|facebookmail.com|linkedin.com|pinterest.com|quora.com|youtube.com|twitter.com|x.com::::the passion translation|aibreakfast::::sent you a message|sent you an inmail|new message|messaged you|replied to your|direct message|inmail|security|verify|verification|password|login|sign-in|action required|urgent::::::Social::archive::0.98::News/Newsletter/Social::Routine media newsletter, Substack digest, social media alert, or political appeal.',
 ]
 
 function evaluateDeterministicRuleSpec_(specStr, ctx, subject) {
@@ -1445,6 +1448,15 @@ function evaluateDeterministicRuleSpec_(specStr, ctx, subject) {
   if (
     (parts[7] === 'Finance/Bills' || parts[7] === 'Finance/Purchases') &&
     containsAny_(ctx.snipLower, MANUAL_PAYMENT_SNIPPET_TERMS_)
+  ) {
+    return null
+  }
+  // Personal/direct messages or recruiter outreach on social platforms must
+  // fall through to semantic classification instead of archiving as social noise.
+  if (
+    parts[8] === 'Social' &&
+    (containsAny_(ctx.subLower, SOCIAL_DIRECT_MESSAGE_TERMS_) ||
+      containsAny_(ctx.snipLower, SOCIAL_DIRECT_MESSAGE_TERMS_))
   ) {
     return null
   }
@@ -3257,6 +3269,7 @@ const SUBLABEL_TO_FOLDER_MAP = {
   'household/shop': 'Shop_Build',
   'household/shop-build': 'Shop_Build',
   'household/travel': 'Primary_House',
+  'household/supplies': 'Primary_House',
 
   // 02_Finance_Legal
   'finance/banking': 'Banking',
@@ -3290,6 +3303,8 @@ const SUBLABEL_TO_FOLDER_MAP = {
   'family/medical-records': 'Medical_Records',
   'family/medical-student': 'Medical_Records',
   'family/health-general': 'Medical_Records',
+  'family/health-medical': 'Medical_Records',
+  'family/health': 'Medical_Records',
   'family/school-student': 'Students',
   'family/parents': 'Family_General',
   'family/kids': 'Students',
