@@ -1406,13 +1406,28 @@ const CUSTOM_RULE_MATCHERS_ = {
     )
   },
   bankRate: function (ctx) {
+    // Generic phrases like "rate increase" need banking evidence, and personal
+    // or actionable requests (e.g. approvals) fall through to Gemini.
+    const bankingContext =
+      'apy|savings|checking|bank|interest rate|annual percentage|cash account|money market|certificate of deposit|yield'
+    const actionableTerms =
+      'please reply|reply today|your approval|approve|action required|please confirm|schedule your|invoice|quote'
+    const hasBankingContext =
+      containsAny_(ctx.subLower, bankingContext) ||
+      containsAny_(ctx.snipLower, bankingContext) ||
+      containsAny_(ctx.sLower, bankingContext)
+    const looksActionable =
+      containsAny_(ctx.subLower, actionableTerms) ||
+      containsAny_(ctx.snipLower, actionableTerms)
     return (
-      containsAny_(
+      hasBankingContext &&
+      !looksActionable &&
+      (containsAny_(
         ctx.subLower,
         'higher apy|apy has increased|apy increased|earns a higher apy|rate increase|rate decrease|rate update|rates are changing|yield update|interest rate increase|savings rate increase|annual percentage yield'
       ) ||
-      (ctx.subLower.indexOf('rate change') !== -1 &&
-        containsAny_(ctx.subLower, 'apy|cash|savings|interest'))
+        (ctx.subLower.indexOf('rate change') !== -1 &&
+          containsAny_(ctx.subLower, 'apy|cash|savings|interest')))
     )
   },
   policyUpdate: function (ctx) {

@@ -2934,6 +2934,26 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(apyRes.reasoning).toBe('Bank Rate Update')
         })
 
+        test('does not fast-path non-banking or actionable rate-change mail', () => {
+          const pool = fn(
+            'service@poolco.example.com',
+            'Rate increase for pool maintenance',
+            'Please reply today to approve the new monthly price before I schedule your next visit.',
+            null,
+            {}
+          )
+          expect(pool).toBeNull()
+
+          const actionableBank = fn(
+            'help@bank.example.com',
+            'Savings rate increase',
+            'Action required: please confirm your preferences.',
+            null,
+            {}
+          )
+          expect(actionableBank).toBeNull()
+        })
+
         test('classifies school travel solicitations (EF Tours) into Family/School-Student Promotions archive', () => {
           const efRes = fn(
             'consultant@ef.com',
