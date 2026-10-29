@@ -1842,5 +1842,183 @@ describe.each([
       )
       expect(destExtractedSubfolder.createFile).toHaveBeenCalledWith(entryBlob)
     })
+
+    test('duplicate renamed ZIP re-extraction uses the saved Drive archive name rather than the original attachment name', () => {
+      const zipBytes = Buffer.from('renamed-zip-bytes', 'utf-8')
+      const pdfBytes = Buffer.from('contract-b-pdf', 'utf-8')
+      const zipAtt = {
+        getName: () => 'documents.zip',
+        getContentType: () => 'application/zip',
+        getSize: () => zipBytes.length,
+        getBytes: () => zipBytes,
+        copyBlob: () => ({
+          getName: () => 'documents.zip',
+          getContentType: () => 'application/zip',
+          getSize: () => zipBytes.length,
+          getBytes: () => zipBytes,
+          setName: jest.fn(),
+        }),
+      }
+      const entryBlob = {
+        getName: () => 'contract-b.pdf',
+        getContentType: () => 'application/pdf',
+        getSize: () => pdfBytes.length + 4096,
+        getBytes: () => pdfBytes,
+        setName: jest.fn(),
+      }
+      const savedRenamedZip = {
+        getId: () => 'zip-renamed-1',
+        getName: () => 'documents_120000111.zip',
+        getUrl: () => 'https://drive.example/zip-renamed-1',
+        getSize: () => zipBytes.length,
+        getBytes: () => zipBytes,
+        getBlob: () => ({ getBytes: () => zipBytes }),
+      }
+      const createdSubfolders = []
+      const targetFolder = {
+        getName: () => 'Career_Interviews',
+        getFilesByName: () => ({ hasNext: () => false }),
+        searchFiles: () => {
+          let done = false
+          return {
+            hasNext: () => !done,
+            next: () => {
+              done = true
+              return savedRenamedZip
+            },
+          }
+        },
+        getFoldersByName: () => ({ hasNext: () => false }),
+        createFolder: jest.fn((n) => {
+          createdSubfolders.push(n)
+          return {
+            getName: () => n,
+            getFilesByName: () => ({ hasNext: () => false }),
+            createFile: jest.fn(() => ({
+              getId: () => 'ext-renamed-1',
+              getName: () => 'contract-b.pdf',
+              getUrl: () => 'https://drive.example/ext-renamed-1',
+              setDescription: jest.fn(),
+            })),
+          }
+        }),
+      }
+      const rootFolder = {
+        getFoldersByName: () => ({
+          hasNext: () => true,
+          next: () => ({
+            getFoldersByName: () => ({
+              hasNext: () => true,
+              next: () => targetFolder,
+            }),
+          }),
+        }),
+      }
+      const thread = {
+        getId: () => 't-dup-renamed-zip',
+        getMessages: () => [
+          {
+            getAttachments: () => [zipAtt],
+          },
+        ],
+      }
+
+      const saved = mod.persistCanonicalAttachmentsToDrive(
+        thread,
+        {
+          canonicalDomain: '06_Work_Career',
+          subLabel: 'Work/Career',
+        },
+        { canonicalDomains: DOMAINS },
+        {
+          DriveApp: { getRootFolder: () => rootFolder },
+          Utilities: { unzip: () => [entryBlob] },
+          getFileHash: () => 'same-zip-hash',
+        }
+      )
+
+      expect(createdSubfolders).toEqual(['documents_120000111'])
+      expect(saved[0].name).toBe('documents_120000111/contract-b.pdf')
+    })
+
+    test('preserves existing canonical labels when replacement label creation fails across main, batch, and realignment paths', () => {
+      const existingBills = label('Finance/Bills')
+      const makeFiledThread = (id) => ({
+        getId: () => id,
+        getFirstMessageSubject: () => 'Employment Offer Letter',
+        getMessages: () => [
+          {
+            getFrom: () => 'hr@company.example',
+            getSubject: () => 'Employment Offer Letter',
+            getPlainBody: () =>
+              'We are pleased to offer you the position of Staff Engineer.',
+            getAttachments: () => [],
+          },
+        ],
+        getLabels: () => [existingBills],
+        addLabel: jest.fn(),
+        removeLabel: jest.fn(),
+      })
+
+      const failingGmail = (threads) => ({
+        search: () => threads,
+        getUserLabelByName: (n) => (n === 'Work/Career' ? null : label(n)),
+        createLabel: (n) => {
+          if (n === 'Work/Career') throw new Error('label quota')
+          return label(n)
+        },
+      })
+
+      // 1. processEmailsWithAiClassifier
+      const tMain = makeFiledThread('t-main-preserve')
+      mod.processEmailsWithAiClassifier(
+        {
+          geminiApiKey: 'k',
+          unprocessedQuery: 'q',
+          processedLabel: 'Processed',
+          retryLabel: 'AI/Needs-Retry',
+          manualReviewLabel: 'AI/Manual-Review',
+          canonicalDomains: DOMAINS,
+        },
+        {
+          GmailApp: failingGmail([tMain]),
+        }
+      )
+      expect(tMain.removeLabel).not.toHaveBeenCalledWith(existingBills)
+
+      // 2. processThreadBatch
+      const tBatch = makeFiledThread('t-batch-preserve')
+      const batchRes = mod.processThreadBatch(
+        [tBatch],
+        {
+          processedLabel: 'Processed',
+          canonicalDomains: DOMAINS,
+        },
+        {
+          GmailApp: failingGmail([tBatch]),
+          UrlFetchApp: { fetch: jest.fn() },
+          Gmail: null,
+        }
+      )
+      expect(batchRes[0].status).toBe('label_creation_failed')
+      expect(tBatch.removeLabel).not.toHaveBeenCalledWith(existingBills)
+
+      // 3. reclassifyThreadsByQuery
+      const tReclass = makeFiledThread('t-reclass-preserve')
+      mod.reclassifyThreadsByQuery(
+        'q',
+        { dryRun: false, maxThreads: 5 },
+        {
+          canonicalDomains: DOMAINS,
+          processedLabel: 'Processed',
+          retryLabel: 'AI/Needs-Retry',
+        },
+        {
+          GmailApp: failingGmail([tReclass]),
+        }
+      )
+      expect(tReclass.removeLabel).not.toHaveBeenCalledWith(existingBills)
+      expect(tReclass.addLabel).toHaveBeenCalled()
+    })
   })
 })

@@ -1872,19 +1872,9 @@ function processThreadBatch(threads, config, services) {
       primaryTag = (dom && DEFAULT_DOMAIN_SUBLABEL_MAP[dom]) || dom || null
     }
 
-    if (typeof cleanConflictingLabels === 'function') {
-      cleanConflictingLabels(
-        thread,
-        classification.canonicalDomain || classification.canonical_label,
-        primaryTag,
-        config
-      )
-    }
-
-    classification = withEffectiveSubLabel_(classification, primaryTag)
-
+    var categoryLabel = null
     if (primaryTag) {
-      const categoryLabel = ensureGmailLabel(
+      categoryLabel = ensureGmailLabel(
         primaryTag,
         services.GmailApp,
         services.Gmail
@@ -1900,6 +1890,20 @@ function processThreadBatch(threads, config, services) {
         })
         return
       }
+    }
+
+    if (typeof cleanConflictingLabels === 'function') {
+      cleanConflictingLabels(
+        thread,
+        classification.canonicalDomain || classification.canonical_label,
+        primaryTag,
+        config
+      )
+    }
+
+    classification = withEffectiveSubLabel_(classification, primaryTag)
+
+    if (categoryLabel) {
       thread.addLabel(categoryLabel)
     }
     thread.addLabel(processedLabel)
@@ -4160,16 +4164,18 @@ function extractZipArchiveToSubfolder(
   if (!utils || typeof utils.unzip !== 'function') return []
 
   let zipBlob = zipBlobOrFile
-  let fileName = ''
+  let fileName = metadata?.sourceFileName || ''
   if (zipBlobOrFile && typeof zipBlobOrFile.getBlob === 'function') {
     zipBlob = zipBlobOrFile.getBlob()
-    fileName =
-      typeof zipBlobOrFile.getName === 'function' ? zipBlobOrFile.getName() : ''
-  } else if (zipBlobOrFile && typeof zipBlobOrFile.getName === 'function') {
+    if (!fileName && typeof zipBlobOrFile.getName === 'function') {
+      fileName = zipBlobOrFile.getName()
+    }
+  } else if (
+    !fileName &&
+    zipBlobOrFile &&
+    typeof zipBlobOrFile.getName === 'function'
+  ) {
     fileName = zipBlobOrFile.getName()
-  }
-  if (!fileName && metadata?.sourceFileName) {
-    fileName = metadata.sourceFileName
   }
   if (!fileName) fileName = 'archive.zip'
 
@@ -4531,6 +4537,9 @@ function persistCanonicalAttachmentsToDrive(
               typeof duplicateFile.getName === 'function'
                 ? duplicateFile.getName()
                 : fileName
+            if (newFileBlob && typeof newFileBlob.setName === 'function') {
+              newFileBlob.setName(dupName)
+            }
             const dupExtracted = extractZipArchiveToSubfolder(
               targetFolder,
               newFileBlob,
@@ -4621,7 +4630,7 @@ function persistCanonicalAttachmentsToDrive(
               canonicalDomain: canonicalDomain,
               subfolderName: subfolderName,
               tagBlock: tagBlock,
-              sourceFileName: fileName,
+              sourceFileName: finalName,
             }
           )
           if (extractedFiles && extractedFiles.length > 0) {
@@ -5497,12 +5506,6 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
     let attachmentsSaved = []
 
     if (!opts.dryRun) {
-      cleanConflictingLabels(
-        thread,
-        classification.canonicalDomain,
-        classification.subLabel,
-        cfg
-      )
       let primaryTag = classification.subLabel
       if (!primaryTag || isRootDomainLabel(primaryTag)) {
         const domainKey =
@@ -5512,8 +5515,32 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
           domainKey ||
           null
       }
+      let targetLabel = null
       if (primaryTag && typeof thread.addLabel === 'function') {
-        const targetLabel = ensureGmailLabel(primaryTag, gmail)
+        targetLabel = ensureGmailLabel(
+          primaryTag,
+          gmail,
+          services && services.Gmail
+        )
+        if (!targetLabel) {
+          const retryObj = ensureGmailLabel(
+            cfg.retryLabel || 'AI/Needs-Retry',
+            gmail,
+            services && services.Gmail
+          )
+          if (retryObj) {
+            thread.addLabel(retryObj)
+          }
+          continue
+        }
+      }
+      cleanConflictingLabels(
+        thread,
+        classification.canonicalDomain,
+        primaryTag || classification.subLabel,
+        cfg
+      )
+      if (targetLabel) {
         thread.addLabel(targetLabel)
       }
       // Use the label that was actually applied for Drive paths and summaries
@@ -6623,13 +6650,6 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
         }
       }
       if (classification) {
-        cleanConflictingLabels(
-          thread,
-          classification.canonicalDomain,
-          classification.subLabel,
-          config
-        )
-
         let primaryTag = classification.subLabel
         if (!primaryTag || isRootDomainLabel(primaryTag)) {
           const domainKey =
@@ -6664,6 +6684,12 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
             )
             continue
           }
+          cleanConflictingLabels(
+            thread,
+            classification.canonicalDomain,
+            primaryTag,
+            config
+          )
           thread.addLabel(targetLabel)
           classification = withEffectiveSubLabel_(classification, primaryTag)
 
@@ -6736,6 +6762,13 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
               )
             }
           }
+        } else {
+          cleanConflictingLabels(
+            thread,
+            classification.canonicalDomain,
+            classification.subLabel,
+            config
+          )
         }
 
         const userSent = isThreadSentOrRepliedByUser(
