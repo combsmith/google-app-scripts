@@ -291,7 +291,15 @@ function readTargetFileContent(relPath, isStagedOnly) {
   } else {
     const fullPath = path.resolve(REPO_ROOT, relPath)
     if (!fs.existsSync(fullPath)) return null
-    buffer = fs.readFileSync(fullPath)
+    try {
+      buffer = fs.readFileSync(fullPath)
+    } catch (err) {
+      console.error(
+        `Error reading file ${relPath}: ${err.message}\n` +
+          'Cannot scan for PII. Failing the check.'
+      )
+      process.exit(1)
+    }
   }
 
   if (buffer.length >= 2) {
