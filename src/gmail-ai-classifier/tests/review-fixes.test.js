@@ -2331,4 +2331,87 @@ describe.each([
       expect(cachePut).not.toHaveBeenCalled()
     })
   })
+
+  describe('review thread follow-ups', () => {
+    test('career/ labels resolve to the work/career domain', () => {
+      expect(mod.resolveCanonicalDomainFromLabels(['Career/Employer'])).toBe(
+        '06_Work_Career'
+      )
+    })
+
+    test('nonprofit matcher is bypassed for actionable correspondence', () => {
+      const result = mod.deterministicRuleClassify_(
+        'updates@charity.example',
+        'Ministry update',
+        'Please confirm your volunteer shift this Saturday. Please reply today so we can finalize staffing.',
+        { getMessages: () => [], getLabels: () => [] },
+        {
+          canonicalDomains: DOMAINS,
+          customRuleMatchers: ['nonprofit'],
+        }
+      )
+      expect(!result || result.category !== 'Updates').toBe(true)
+    })
+
+    test('processThreadBatch processes threads newest first', () => {
+      const mkThread = (id, date) => ({
+        getId: () => id,
+        getLastMessageDate: () => new Date(date),
+        getMessages: () => [],
+      })
+      const results = mod.processThreadBatch(
+        [mkThread('old', '2024-01-01'), mkThread('new', '2025-01-01')],
+        { processedLabel: 'Processed' },
+        { GmailApp: { getUserLabelByName: (n) => ({ getName: () => n }) } }
+      )
+      expect(results.map((r) => r.threadId)).toEqual(['new', 'old'])
+    })
+
+    test('runMissedEmailsSweep builds the recovery query from configured labels', () => {
+      const queries = []
+      const gmail = {
+        search: jest.fn((q) => {
+          queries.push(q)
+          return []
+        }),
+        getUserLabelByName: jest.fn((n) => ({ getName: () => n })),
+      }
+      mod.runMissedEmailsSweep(
+        { retryLabel: 'Ops/Retry', processedLabel: 'Ops Done' },
+        { GmailApp: gmail }
+      )
+      const general = queries.find(
+        (q) => q.indexOf('newer_than:14d -label') > -1
+      )
+      expect(general).toBe(
+        'label:Ops/Retry OR (newer_than:14d -label:"Ops Done" -label:AI/Manual-Review)'
+      )
+    })
+
+    test('realignment restores archived Primary/keep threads to the inbox', () => {
+      const moveToInbox = jest.fn()
+      const thread = {
+        getId: () => 'th-offer-archived',
+        getMessages: () => [
+          {
+            getFrom: () => 'hr@employer.example',
+            getSubject: () => 'Employment Agreement',
+            getPlainBody: () => 'Here is your official employment agreement.',
+            getDate: () => new Date(),
+          },
+        ],
+        getLabels: () => [],
+        addLabel: jest.fn(),
+        removeLabel: jest.fn(),
+        isInInbox: () => false,
+        moveToInbox,
+      }
+      const gmail = {
+        search: jest.fn(() => [thread]),
+        getUserLabelByName: jest.fn((n) => ({ getName: () => n })),
+      }
+      mod.runMissedEmailsSweep({}, { GmailApp: gmail })
+      expect(moveToInbox).toHaveBeenCalled()
+    })
+  })
 })

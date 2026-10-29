@@ -1315,16 +1315,16 @@ const CUSTOM_RULE_MATCHERS_ = {
     const looksActionable =
       containsAny_(ctx.subLower, NONPROFIT_ACTIONABLE_TERMS_) ||
       containsAny_(ctx.snipLower, NONPROFIT_ACTIONABLE_TERMS_)
+    if (looksActionable) return false
     return (
-      (!looksActionable &&
-        (matchesSenderDomain_(
-          ctx.sender,
-          'charitywater.org|compassion.com|worldvision.org'
-        ) ||
-          matchesSenderDomain_(
-            ctx.sender,
-            ctx.configTerms.nonprofitSenderDomains
-          ))) ||
+      matchesSenderDomain_(
+        ctx.sender,
+        'charitywater.org|compassion.com|worldvision.org'
+      ) ||
+      matchesSenderDomain_(
+        ctx.sender,
+        ctx.configTerms.nonprofitSenderDomains
+      ) ||
       containsAny_(ctx.subLower, ctx.configTerms.nonprofitSubjectTerms) ||
       (containsAny_(ctx.sLower, 'newsletter|update|impact') &&
         containsAny_(
@@ -1848,6 +1848,7 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
  * @returns {Object[]} Array of result objects describing outcome per thread
  */
 function processThreadBatch(threads, config, services) {
+  threads = sortThreadsByLastMessageDate_(threads)
   const processedLabel = ensureGmailLabel(
     config.processedLabel,
     services.GmailApp
@@ -4771,7 +4772,8 @@ function resolveCanonicalDomainFromLabels(rawLabels, canonicalDomains) {
     if (lName.startsWith('vehicles/')) return '03_Vehicles'
     if (lName.startsWith('family/')) return '04_Family_Health'
     if (lName.startsWith('tech/')) return '05_Tech_Infrastructure'
-    if (lName.startsWith('work/')) return '06_Work_Career'
+    if (lName.startsWith('work/') || lName.startsWith('career/'))
+      return '06_Work_Career'
     if (
       lName.startsWith('community/') ||
       lName.startsWith('projects/') ||
@@ -5705,6 +5707,18 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
         }
       }
 
+      // Recovered actionable threads must return to the inbox
+      if (
+        classification.category === 'Primary' &&
+        classification.action === 'keep' &&
+        !userSent &&
+        typeof thread.isInInbox === 'function' &&
+        !thread.isInInbox() &&
+        typeof thread.moveToInbox === 'function'
+      ) {
+        thread.moveToInbox()
+      }
+
       if (cfg.processedLabel && typeof thread.addLabel === 'function') {
         const processedLabel = ensureGmailLabel(cfg.processedLabel, gmail)
         thread.addLabel(processedLabel)
@@ -6067,6 +6081,11 @@ function revertAndQueueMissedCareerEmails(gmailApp, config) {
  * Convenience runner for re-evaluating recent emails from the past 14 days
  * or emails tagged with AI/Needs-Retry that may have been missed.
  */
+function gmailLabelSearchTerm_(name) {
+  const clean = String(name).replace(/"/g, '')
+  return /^[A-Za-z0-9_/-]+$/.test(clean) ? clean : '"' + clean + '"'
+}
+
 function runMissedEmailsSweep(config, services) {
   const gmail =
     (services && services.GmailApp) ||
@@ -6089,7 +6108,11 @@ function runMissedEmailsSweep(config, services) {
 
   // 2. Secondary General Recovery: Sweep other unclassified threads
   const query =
-    'label:AI/Needs-Retry OR (newer_than:14d -label:Processed -label:AI/Manual-Review)'
+    'label:' +
+    gmailLabelSearchTerm_(cfg.retryLabel || 'AI/Needs-Retry') +
+    ' OR (newer_than:14d -label:' +
+    gmailLabelSearchTerm_(cfg.processedLabel || 'Processed') +
+    ' -label:AI/Manual-Review)'
   console.log('[runMissedEmailsSweep] Sweeping query: ' + query)
   return reclassifyThreadsByQuery(
     query,
