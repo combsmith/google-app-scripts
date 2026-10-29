@@ -1610,7 +1610,8 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
   const isActionableSchool =
     isSchoolDomain &&
     !isBrightArrow &&
-    containsAny_(subLower, SCHOOL_ACTIONABLE_TERMS_)
+    (containsAny_(subLower, SCHOOL_ACTIONABLE_TERMS_) ||
+      containsAny_(snipLower, SCHOOL_ACTIONABLE_TERMS_))
   const isBroadcastSubject =
     containsAny_(subLower, SCHOOL_BROADCAST_TERMS_) && !isActionableSchool
 

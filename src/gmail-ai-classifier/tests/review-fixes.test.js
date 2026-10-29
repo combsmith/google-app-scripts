@@ -186,6 +186,17 @@ describe.each([
       )
       expect(result.category).toBe('Primary')
       expect(result.action).toBe('keep')
+
+      const snippetActionable = mod.deterministicRuleClassify_(
+        'Teacher <teacher@school.example>',
+        'Attendance update for your child',
+        'Urgent: please reply today to confirm a conference about your child.',
+        null,
+        { ...cfg, schoolDomains: 'school.example' }
+      )
+      expect(snippetActionable.category).toBe('Primary')
+      expect(snippetActionable.action).toBe('keep')
+      expect(snippetActionable.reasoning).toBe('Teacher 1:1 Shield')
     })
   })
 
