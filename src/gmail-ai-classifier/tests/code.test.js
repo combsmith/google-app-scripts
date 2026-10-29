@@ -2950,6 +2950,26 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(efRes.reasoning).toBe('School Travel Solicitation')
         })
 
+        test('does not fast-path actionable booking mail from school travel providers', () => {
+          const res = fn(
+            'travel@ef.com',
+            'Action required: passport details for your booked tour',
+            'Please send passport details by Friday.',
+            null,
+            {}
+          )
+          expect(res).toBeNull()
+
+          const noEvidence = fn(
+            'travel@ef.com',
+            'Hello',
+            'Checking in.',
+            null,
+            {}
+          )
+          expect(noEvidence).toBeNull()
+        })
+
         test('classifies SaaS trial expirations and cloud account plan notices into Tech/Alerts archive', () => {
           const awsPlanRes = fn(
             'billing-subscriptions@aws.com',

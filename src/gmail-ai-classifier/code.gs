@@ -1304,6 +1304,12 @@ const NONPROFIT_ACTIONABLE_TERMS_ =
 const SAAS_ACTIONABLE_TERMS_ =
   'payment failed|payment failure|payment declined|payment method|update your payment|billing issue|past due|suspend|suspension|action required|action needed|urgent'
 
+const SCHOOL_TRAVEL_ACTIONABLE_TERMS_ =
+  'passport|your booking|your booked|booked tour|payment due|balance due|final payment|invoice|itinerary|action required|action needed|please confirm|please reply|please respond|reply required|response required|urgent|by friday|deadline'
+
+const SCHOOL_TRAVEL_SOLICITATION_TERMS_ =
+  'interest meeting|informational meeting|information meeting|enrollment discount|early enrollment|trip to |school travel|educational tour|travel program|join us|learn more|webinar|open house'
+
 const SOCIAL_DIRECT_MESSAGE_TERMS_ =
   'sent you a message|sent you an inmail|new message|messaged you|replied to your|direct message|inmail|discuss a role|engineering role|open role|job opportunity|career opportunity|recruiter|hiring manager|are you available|would you be open|can we chat|schedule a call|quick call|please reply|please respond'
 
@@ -1377,11 +1383,21 @@ const CUSTOM_RULE_MATCHERS_ = {
     )
   },
   schoolTravel: function (ctx) {
+    // Sender membership alone is not solicitation evidence: actionable booking
+    // correspondence (e.g. passport details) falls through to Gemini.
+    const looksActionable =
+      containsAny_(ctx.subLower, SCHOOL_TRAVEL_ACTIONABLE_TERMS_) ||
+      containsAny_(ctx.snipLower, SCHOOL_TRAVEL_ACTIONABLE_TERMS_)
+    const hasSolicitation =
+      containsAny_(ctx.subLower, SCHOOL_TRAVEL_SOLICITATION_TERMS_) ||
+      containsAny_(ctx.snipLower, SCHOOL_TRAVEL_SOLICITATION_TERMS_)
     return (
-      matchesSenderDomain_(
-        ctx.sender,
-        'ef.com|eftours.com|worldstrides.com|explorica.com|acis.com'
-      ) ||
+      (!looksActionable &&
+        hasSolicitation &&
+        matchesSenderDomain_(
+          ctx.sender,
+          'ef.com|eftours.com|worldstrides.com|explorica.com|acis.com'
+        )) ||
       (containsAny_(ctx.subLower, 'trip to |school travel|educational tour') &&
         containsAny_(
           ctx.subLower,
