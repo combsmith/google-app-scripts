@@ -1738,11 +1738,18 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
       (subject || '') + ' ' + (snippet || '')
     )
   const isMarketingSender =
-    /\b(promotions|promo|deals|marketing|offers|newsletter|news)@/i.test(sLower)
-  const isNonTransactional = !containsAny_(
-    subLower,
-    'order|receipt|invoice|statement|autopay|tracking|shipped|delivered|action required|verify|security|support|case|ticket|return|refund|appointment|recall|warranty'
-  )
+    /\b(promotions|promo|deals|marketing|offers|newsletter|news|store|shop|rewards)@/i.test(
+      sLower
+    )
+  const isNonTransactional =
+    !containsAny_(
+      subLower,
+      'order|receipt|invoice|statement|autopay|tracking|shipped|delivered|action required|verify|security|support|case|ticket|return|refund|appointment|recall|warranty|proposal|estimate|quote|contract|agreement'
+    ) &&
+    !containsAny_(
+      snipLower,
+      'proposal|estimate|quote|contract|agreement|please confirm|please reply|please respond|action required|attached is'
+    )
 
   const isRetailVendor =
     matchesSenderDomain_(
@@ -1757,7 +1764,7 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
   if (
     !userParticipated &&
     isNonTransactional &&
-    (isPromoSubject ||
+    (((isRetailVendor || isMarketingSender) && isPromoSubject) ||
       (isRetailVendor && isMarketingSender) ||
       (isConfiguredPromoSender && !isConfiguredPromoOperational))
   ) {
@@ -4470,62 +4477,71 @@ function persistCanonicalAttachmentsToDrive(
 
       const fileName =
         typeof att.getName === 'function' ? att.getName() : att.name
-      const newFileBlob =
-        typeof att.copyBlob === 'function' ? att.copyBlob() : att
-      const existingFiles = collectCandidateDriveFiles_(targetFolder, fileName)
-
-      const duplicateFile = findMatchingDuplicateFile_(
-        existingFiles,
-        newFileBlob,
-        helperFns
-      )
-      if (duplicateFile) {
-        console.log(
-          '[persistCanonicalAttachmentsToDrive] Skipped exact duplicate attachment: ' +
-            fileName
-        )
-        // Record this thread as a co-owner so realigning the original thread
-        // copies rather than moves the shared file.
-        recordDriveFileCoOwner_(
-          duplicateFile,
-          typeof thread.getId === 'function' ? thread.getId() : thread.id || ''
-        )
-        // Still report the already-saved file so retry completion can index every
-        // attachment in the thread, not only newly uploaded ones.
-        const dupId =
-          typeof duplicateFile.getId === 'function' ? duplicateFile.getId() : ''
-        existingSavedFiles.push({
-          name:
-            typeof duplicateFile.getName === 'function'
-              ? duplicateFile.getName()
-              : fileName,
-          url:
-            typeof duplicateFile.getUrl === 'function'
-              ? duplicateFile.getUrl()
-              : 'https://drive.google.com/file/d/' + dupId,
-          id: dupId,
-          domain: canonicalDomain,
-          subfolder: subfolderName,
-        })
-        return
-      }
-
-      const finalName = resolveAttachmentName(
-        targetFolder,
-        fileName,
-        newFileBlob,
-        services
-      )
-      console.log(
-        '[persistCanonicalAttachmentsToDrive] Saving attachment to ' +
-          canonicalDomain +
-          '/' +
-          subfolderName +
-          ': ' +
-          finalName
-      )
+      let finalName = fileName
 
       try {
+        const newFileBlob =
+          typeof att.copyBlob === 'function' ? att.copyBlob() : att
+        const existingFiles = collectCandidateDriveFiles_(
+          targetFolder,
+          fileName
+        )
+
+        const duplicateFile = findMatchingDuplicateFile_(
+          existingFiles,
+          newFileBlob,
+          helperFns
+        )
+        if (duplicateFile) {
+          console.log(
+            '[persistCanonicalAttachmentsToDrive] Skipped exact duplicate attachment: ' +
+              fileName
+          )
+          // Record this thread as a co-owner so realigning the original thread
+          // copies rather than moves the shared file.
+          recordDriveFileCoOwner_(
+            duplicateFile,
+            typeof thread.getId === 'function'
+              ? thread.getId()
+              : thread.id || ''
+          )
+          // Still report the already-saved file so retry completion can index every
+          // attachment in the thread, not only newly uploaded ones.
+          const dupId =
+            typeof duplicateFile.getId === 'function'
+              ? duplicateFile.getId()
+              : ''
+          existingSavedFiles.push({
+            name:
+              typeof duplicateFile.getName === 'function'
+                ? duplicateFile.getName()
+                : fileName,
+            url:
+              typeof duplicateFile.getUrl === 'function'
+                ? duplicateFile.getUrl()
+                : 'https://drive.google.com/file/d/' + dupId,
+            id: dupId,
+            domain: canonicalDomain,
+            subfolder: subfolderName,
+          })
+          return
+        }
+
+        finalName = resolveAttachmentName(
+          targetFolder,
+          fileName,
+          newFileBlob,
+          services
+        )
+        console.log(
+          '[persistCanonicalAttachmentsToDrive] Saving attachment to ' +
+            canonicalDomain +
+            '/' +
+            subfolderName +
+            ': ' +
+            finalName
+        )
+
         const file = targetFolder.createFile(newFileBlob)
         const fileId = typeof file.getId === 'function' ? file.getId() : ''
         const fileUrl =

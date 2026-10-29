@@ -1530,5 +1530,65 @@ describe.each([
         mod.resolveTaxonomySubfolderName('01_Household', 'Household/Supplies')
       ).toBe('Primary_House')
     })
+
+    test('promo fast path requires retail/marketing sender evidence and excludes personal proposals', () => {
+      const contractorProposal = classify(
+        'contractor@example.com',
+        'Revised kitchen proposal',
+        'Attached is the revised proposal. I can offer a discount if you approve it by Friday. Please confirm whether to proceed.'
+      )
+      expect(contractorProposal).toBeNull()
+
+      const retailPromo = classify(
+        'deals@store.example.com',
+        'Flash Sale: 40% Off Limited Time Offer!',
+        'Shop now and save on all clearance items'
+      )
+      expect(retailPromo).toMatchObject({
+        canonicalDomain: null,
+        category: 'Promotions',
+        action: 'archive',
+        reasoning: 'Retail Promo',
+      })
+    })
+
+    test('persistCanonicalAttachmentsToDrive catches duplicate-lookup failures and marks hadErrors', () => {
+      const att = {
+        getName: () => 'proposal.pdf',
+        getContentType: () => 'application/pdf',
+        getSize: () => 8192,
+        getBytes: () => Buffer.from('pdf', 'utf-8'),
+      }
+      const thread = {
+        getId: () => 't-dup-throw',
+        getMessages: () => [
+          {
+            getAttachments: () => [att],
+          },
+        ],
+      }
+      const throwingFolder = {
+        getName: () => 'Primary_House',
+        getFoldersByName: () => ({ hasNext: () => false }),
+        createFolder: () => throwingFolder,
+        getFilesByName: () => {
+          throw new Error('Drive getFilesByName failed')
+        },
+      }
+      const res = mod.persistCanonicalAttachmentsToDrive(
+        thread,
+        {
+          canonicalDomain: '01_Household',
+          subLabel: 'Household/Property',
+        },
+        { canonicalDomains: DOMAINS },
+        {
+          DriveApp: {
+            getRootFolder: () => throwingFolder,
+          },
+        }
+      )
+      expect(res.hadErrors).toBe(true)
+    })
   })
 })
