@@ -1960,15 +1960,12 @@ function processThreadBatch(threads, config, services) {
       )
     }
 
-    let savedAttachments = []
-    if (services && services.DriveApp) {
-      savedAttachments = persistCanonicalAttachmentsToDrive(
-        thread,
-        classification,
-        config,
-        services
-      )
-    }
+    const savedAttachments = persistCanonicalAttachmentsToDrive(
+      thread,
+      classification,
+      config,
+      services
+    )
 
     if (savedAttachments && savedAttachments.hadErrors) {
       // Persistence failed: withhold Processed and queue a durable retry
@@ -4529,6 +4526,27 @@ function persistCanonicalAttachmentsToDrive(
             domain: canonicalDomain,
             subfolder: subfolderName,
           })
+          if (fileName.toLowerCase().endsWith('.zip')) {
+            const dupName =
+              typeof duplicateFile.getName === 'function'
+                ? duplicateFile.getName()
+                : fileName
+            const dupExtracted = extractZipArchiveToSubfolder(
+              targetFolder,
+              newFileBlob,
+              services,
+              {
+                canonicalDomain: canonicalDomain,
+                subfolderName: subfolderName,
+                sourceFileName: dupName,
+              }
+            )
+            if (dupExtracted && dupExtracted.length > 0) {
+              for (let de = 0; de < dupExtracted.length; de++) {
+                savedFiles.push(dupExtracted[de])
+              }
+            }
+          }
           return
         }
 
@@ -5610,15 +5628,69 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
                       helperFns
                     )
                   ) {
-                    if (
+                    const isShared =
                       typeof fileToMove.makeCopy === 'function' &&
                       isDriveFileSharedWithOtherThreads_(fileToMove, threadId)
-                    ) {
+                    if (isShared) {
                       // Shared via cross-thread dedup: keep the source for the
                       // other thread(s) and place a copy in the new folder.
                       fileToMove.makeCopy(attName, newFolder)
                     } else {
                       fileToMove.moveTo(newFolder)
+                    }
+                    if (attName.toLowerCase().endsWith('.zip')) {
+                      const movedZipName =
+                        typeof fileToMove.getName === 'function'
+                          ? fileToMove.getName()
+                          : attName
+                      const zipStem = movedZipName.replace(/\.zip$/i, '')
+                      if (
+                        zipStem &&
+                        typeof oldFolder.getFoldersByName === 'function'
+                      ) {
+                        const oldSubIter = oldFolder.getFoldersByName(zipStem)
+                        if (
+                          oldSubIter &&
+                          typeof oldSubIter.hasNext === 'function' &&
+                          oldSubIter.hasNext()
+                        ) {
+                          const oldExtractedFolder = oldSubIter.next()
+                          if (
+                            !isShared &&
+                            typeof oldExtractedFolder.moveTo === 'function'
+                          ) {
+                            oldExtractedFolder.moveTo(newFolder)
+                          } else if (
+                            typeof oldExtractedFolder.getFiles === 'function'
+                          ) {
+                            const destExtractedFolder = getOrCreateChildFolder_(
+                              newFolder,
+                              zipStem
+                            )
+                            const extFiles = oldExtractedFolder.getFiles()
+                            while (
+                              extFiles &&
+                              typeof extFiles.hasNext === 'function' &&
+                              extFiles.hasNext()
+                            ) {
+                              const ef = extFiles.next()
+                              if (
+                                isShared &&
+                                typeof ef.makeCopy === 'function'
+                              ) {
+                                ef.makeCopy(
+                                  typeof ef.getName === 'function'
+                                    ? ef.getName()
+                                    : '',
+                                  destExtractedFolder
+                                )
+                              } else if (typeof ef.moveTo === 'function') {
+                                ef.moveTo(destExtractedFolder)
+                              }
+                            }
+                          }
+                        }
+                      }
                     }
                     attachmentsMoved.push({
                       name: attName,

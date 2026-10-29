@@ -1590,5 +1590,257 @@ describe.each([
       )
       expect(res.hadErrors).toBe(true)
     })
+
+    test('processThreadBatch resolves runtime DriveApp and queues retry when Drive is unavailable for eligible attachments', () => {
+      const att = {
+        getName: () => 'receipt.pdf',
+        getContentType: () => 'application/pdf',
+        getSize: () => 8192,
+        getBytes: () => Buffer.from('pdf', 'utf-8'),
+      }
+      const makeBatchThread = () => ({
+        getId: () => 't-batch-drive',
+        getMessages: () => [
+          {
+            getFrom: () => 'service@paypal.com',
+            getSubject: () => 'Receipt for your payment to Acme',
+            getPlainBody: () => 'You sent a payment of $25.00 USD',
+            getAttachments: () => [att],
+          },
+        ],
+        addLabel: jest.fn(),
+        removeLabel: jest.fn(),
+        moveToArchive: jest.fn(),
+      })
+
+      const prevDrive = global.DriveApp
+      try {
+        // 1. When global DriveApp is absent and services.DriveApp is omitted, queues retry
+        delete global.DriveApp
+        const tNoDrive = makeBatchThread()
+        const rNoDrive = mod.processThreadBatch(
+          [tNoDrive],
+          {
+            processedLabel: 'Processed',
+            retryLabel: 'AI/Needs-Retry',
+            canonicalDomains: DOMAINS,
+            autoFilterConfidenceThreshold: 0.99,
+          },
+          {
+            GmailApp: {
+              getUserLabelByName: (n) => label(n),
+              createLabel: (n) => label(n),
+            },
+            UrlFetchApp: { fetch: jest.fn() },
+            Gmail: null,
+          }
+        )
+        expect(rNoDrive[0].status).toBe('attachment_persistence_failed')
+        expect(tNoDrive.removeLabel).toHaveBeenCalled()
+
+        // 2. When global DriveApp is available and services.DriveApp is omitted, persists attachment
+        const createdFile = {
+          getId: () => 'f-global-1',
+          getName: () => 'receipt.pdf',
+          getUrl: () => 'https://drive.example/f-global-1',
+          setDescription: jest.fn(),
+        }
+        const folder = {
+          getName: () => 'Purchases',
+          getFoldersByName: () => ({ hasNext: () => false }),
+          createFolder: () => folder,
+          getFilesByName: () => ({ hasNext: () => false }),
+          createFile: jest.fn(() => createdFile),
+        }
+        global.DriveApp = {
+          getRootFolder: () => folder,
+        }
+        const tGlobalDrive = makeBatchThread()
+        const rGlobalDrive = mod.processThreadBatch(
+          [tGlobalDrive],
+          {
+            processedLabel: 'Processed',
+            retryLabel: 'AI/Needs-Retry',
+            canonicalDomains: DOMAINS,
+            autoFilterConfidenceThreshold: 0.99,
+          },
+          {
+            GmailApp: {
+              getUserLabelByName: (n) => label(n),
+              createLabel: (n) => label(n),
+            },
+            UrlFetchApp: { fetch: jest.fn() },
+            Gmail: null,
+          }
+        )
+        expect(rGlobalDrive[0].status).toBe('classified')
+        expect(folder.createFile).toHaveBeenCalledTimes(1)
+      } finally {
+        global.DriveApp = prevDrive
+      }
+    })
+
+    test('reclassifyThreadsByQuery realigns extracted ZIP folders/files and re-extracts relocated duplicate ZIP archives', () => {
+      const zipBytes = Buffer.from('zip-bytes', 'utf-8')
+      const pdfBytes = Buffer.from('agreement-pdf', 'utf-8')
+      const zipAtt = {
+        getName: () => 'documents.zip',
+        getContentType: () => 'application/zip',
+        getSize: () => zipBytes.length,
+        getBytes: () => zipBytes,
+      }
+      const entryBlob = {
+        getName: () => 'agreement.pdf',
+        getContentType: () => 'application/pdf',
+        getSize: () => pdfBytes.length + 4096,
+        getBytes: () => pdfBytes,
+        setName: jest.fn(),
+      }
+      const zipFileInDrive = {
+        getId: () => 'zip-1',
+        getName: () => 'documents.zip',
+        getUrl: () => 'https://drive.example/zip-1',
+        getSize: () => zipBytes.length,
+        getBytes: () => zipBytes,
+        getBlob: () => ({ getBytes: () => zipBytes }),
+        getDescription: () => 'Thread-ID: t-zip-realign',
+        moveTo: jest.fn(),
+      }
+      const extractedFileInOld = {
+        getId: () => 'ext-1',
+        getName: () => 'agreement.pdf',
+        moveTo: jest.fn(),
+        makeCopy: jest.fn(),
+      }
+      const oldExtractedSubfolder = {
+        getName: () => 'documents',
+        getFiles: () => {
+          let done = false
+          return {
+            hasNext: () => !done,
+            next: () => {
+              done = true
+              return extractedFileInOld
+            },
+          }
+        },
+      }
+      const destExtractedSubfolder = {
+        getName: () => 'documents',
+        getFilesByName: () => ({ hasNext: () => false }),
+        createFile: jest.fn(() => ({
+          getId: () => 'ext-new-1',
+          getName: () => 'agreement.pdf',
+          getUrl: () => 'https://drive.example/ext-new-1',
+          setDescription: jest.fn(),
+        })),
+      }
+      let zipMovedToNew = false
+      zipFileInDrive.moveTo = jest.fn(() => {
+        zipMovedToNew = true
+      })
+      const oldFolder = {
+        getName: () => 'Bills',
+        getFilesByName: () => {
+          let done = false
+          return {
+            hasNext: () => !done,
+            next: () => {
+              done = true
+              return zipFileInDrive
+            },
+          }
+        },
+        getFoldersByName: (n) => {
+          let done = false
+          return {
+            hasNext: () => n === 'documents' && !done,
+            next: () => {
+              done = true
+              return oldExtractedSubfolder
+            },
+          }
+        },
+      }
+      const newFolder = {
+        getName: () => 'Career_Interviews',
+        getFilesByName: (n) => {
+          let done = false
+          return {
+            hasNext: () => zipMovedToNew && n === 'documents.zip' && !done,
+            next: () => {
+              done = true
+              return zipFileInDrive
+            },
+          }
+        },
+        getFoldersByName: () => ({ hasNext: () => false }),
+        createFolder: () => destExtractedSubfolder,
+        createFile: jest.fn(),
+      }
+      const rootFolder = {
+        getFoldersByName: (n) => ({
+          hasNext: () => true,
+          next: () => ({
+            getFoldersByName: () => ({
+              hasNext: () => true,
+              next: () => (n === '06_Work_Career' ? newFolder : oldFolder),
+            }),
+            createFolder: () =>
+              n === '06_Work_Career' ? newFolder : oldFolder,
+          }),
+        }),
+        createFolder: () => rootFolder,
+      }
+      const thread = {
+        getId: () => 't-zip-realign',
+        getMessages: () => [
+          {
+            getFrom: () => 'hr@company.example',
+            getSubject: () => 'Offer Package',
+            getPlainBody: () => 'Attached documents.zip',
+            getAttachments: () => [zipAtt],
+          },
+        ],
+        getLabels: () => [label('02_Finance_Legal'), label('Finance/Bills')],
+        addLabel: jest.fn(),
+        removeLabel: jest.fn(),
+      }
+
+      mod.reclassifyThreadsByQuery(
+        'q',
+        { dryRun: false, maxThreads: 5 },
+        {
+          canonicalDomains: DOMAINS,
+          processedLabel: 'Processed',
+        },
+        {
+          GmailApp: {
+            search: () => [thread],
+            getUserLabelByName: (n) => label(n),
+            createLabel: (n) => label(n),
+          },
+          DriveApp: {
+            getRootFolder: () => rootFolder,
+          },
+          Utilities: {
+            unzip: () => [entryBlob],
+          },
+          classifyFn: () => ({
+            canonicalDomain: '06_Work_Career',
+            subLabel: 'Work/Career',
+            category: 'Primary',
+            action: 'keep',
+          }),
+          getFileHash: () => 'same-hash',
+        }
+      )
+
+      expect(zipFileInDrive.moveTo).toHaveBeenCalledWith(newFolder)
+      expect(extractedFileInOld.moveTo).toHaveBeenCalledWith(
+        destExtractedSubfolder
+      )
+      expect(destExtractedSubfolder.createFile).toHaveBeenCalledWith(entryBlob)
+    })
   })
 })
