@@ -2982,7 +2982,7 @@ function auditEmailClassifications(customConfig, customServices) {
   try {
     const stored =
       props && typeof props.getProperty === 'function'
-        ? parseInt(props.getProperty(cursorKey), 10)
+        ? Number.parseInt(props.getProperty(cursorKey), 10)
         : 0
     offset = Number.isFinite(stored) && stored > 0 ? stored : 0
   } catch (e) {
@@ -5663,24 +5663,25 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
                               zipStem
                             )
                             const extFiles = oldExtractedFolder.getFiles()
-                            while (
+                            if (
                               extFiles &&
-                              typeof extFiles.hasNext === 'function' &&
-                              extFiles.hasNext()
+                              typeof extFiles.hasNext === 'function'
                             ) {
-                              const ef = extFiles.next()
-                              if (
-                                isShared &&
-                                typeof ef.makeCopy === 'function'
-                              ) {
-                                ef.makeCopy(
-                                  typeof ef.getName === 'function'
-                                    ? ef.getName()
-                                    : '',
-                                  destExtractedFolder
-                                )
-                              } else if (typeof ef.moveTo === 'function') {
-                                ef.moveTo(destExtractedFolder)
+                              while (extFiles.hasNext()) {
+                                const ef = extFiles.next()
+                                if (
+                                  isShared &&
+                                  typeof ef.makeCopy === 'function'
+                                ) {
+                                  ef.makeCopy(
+                                    typeof ef.getName === 'function'
+                                      ? ef.getName()
+                                      : '',
+                                    destExtractedFolder
+                                  )
+                                } else if (typeof ef.moveTo === 'function') {
+                                  ef.moveTo(destExtractedFolder)
+                                }
                               }
                             }
                           }
@@ -6065,7 +6066,7 @@ function isWholeThreadRetentionEligible_(thread, services) {
   try {
     if (typeof thread.getLastMessageDate === 'function') {
       const lastDate = thread.getLastMessageDate()
-      const lastMs = lastDate instanceof Date ? lastDate.getTime() : NaN
+      const lastMs = lastDate instanceof Date ? lastDate.getTime() : Number.NaN
       const cutoffMs = Date.now() - 2 * 365 * 24 * 60 * 60 * 1000
       if (!Number.isNaN(lastMs) && lastMs > cutoffMs) return false
     }
@@ -6177,7 +6178,7 @@ function purgeExpiredEmailsByRetentionPolicy(customConfig, customServices) {
   try {
     const stored =
       props && typeof props.getProperty === 'function'
-        ? parseInt(props.getProperty(cursorKey), 10)
+        ? Number.parseInt(props.getProperty(cursorKey), 10)
         : 0
     offset = Number.isFinite(stored) && stored > 0 ? stored : 0
   } catch (e) {
