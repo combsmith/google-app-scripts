@@ -3959,6 +3959,17 @@ function extractFileSize_(file) {
   return 0
 }
 
+const FOLDER_FILENAME_ALIASES_ = new WeakMap()
+
+function registerFolderFileNameAlias_(folder, originalName, resolvedName) {
+  const key = String(originalName).trim().toLowerCase()
+  const map = FOLDER_FILENAME_ALIASES_.get(folder) || new Map()
+  FOLDER_FILENAME_ALIASES_.set(folder, map)
+  const list = map.get(key) || []
+  if (list.indexOf(resolvedName) === -1) list.push(resolvedName)
+  map.set(key, list)
+}
+
 /**
  * Collects candidate existing Drive files for duplicate comparison, including both
  * exact filename matches (`getFilesByName(fileName)`) and conflict-renamed variants
@@ -3985,6 +3996,17 @@ function collectCandidateDriveFiles_(folder, fileName) {
 
   if (folder && typeof folder.getFilesByName === 'function') {
     addFromIterator(folder.getFilesByName(fileName))
+    if (FOLDER_FILENAME_ALIASES_ && fileName) {
+      const aliasMap = FOLDER_FILENAME_ALIASES_.get(folder)
+      const aliases = aliasMap
+        ? aliasMap.get(String(fileName).trim().toLowerCase())
+        : null
+      if (aliases) {
+        for (let a = 0; a < aliases.length; a++) {
+          addFromIterator(folder.getFilesByName(aliases[a]))
+        }
+      }
+    }
   }
 
   const canSearch = folder && typeof folder.searchFiles === 'function'
@@ -4139,6 +4161,7 @@ function resolveAttachmentName(folder, fileName, newFileBlob, options) {
   if (newFileBlob && typeof newFileBlob.setName === 'function') {
     newFileBlob.setName(finalName)
   }
+  registerFolderFileNameAlias_(folder, fileName, finalName)
   return finalName
 }
 
@@ -5372,6 +5395,57 @@ function doesDriveFileMatchThreadAttachment_(
   return false
 }
 
+function renameDriveEntityForRelocation_(entity, newName) {
+  if (typeof entity.setName === 'function') entity.setName(newName)
+  if (typeof entity.getName === 'function' && entity.getName() !== newName) {
+    entity.name = newName
+    entity.getName = function () {
+      return newName
+    }
+  }
+}
+
+function relocateZipExtractedFolder_(
+  oldFolder,
+  newFolder,
+  oldZipStem,
+  destZipStem,
+  isShared
+) {
+  if (!oldZipStem || typeof oldFolder.getFoldersByName !== 'function') return
+  const oldSubIter = oldFolder.getFoldersByName(oldZipStem)
+  if (
+    !oldSubIter ||
+    typeof oldSubIter.hasNext !== 'function' ||
+    !oldSubIter.hasNext()
+  ) {
+    return
+  }
+  const oldExtractedFolder = oldSubIter.next()
+  if (!isShared && typeof oldExtractedFolder.moveTo === 'function') {
+    if (destZipStem !== oldZipStem) {
+      renameDriveEntityForRelocation_(oldExtractedFolder, destZipStem)
+    }
+    oldExtractedFolder.moveTo(newFolder)
+  } else if (typeof oldExtractedFolder.getFiles === 'function') {
+    const destExtractedFolder = getOrCreateChildFolder_(newFolder, destZipStem)
+    const extFiles = oldExtractedFolder.getFiles()
+    if (extFiles && typeof extFiles.hasNext === 'function') {
+      while (extFiles.hasNext()) {
+        const ef = extFiles.next()
+        if (isShared && typeof ef.makeCopy === 'function') {
+          ef.makeCopy(
+            typeof ef.getName === 'function' ? ef.getName() : '',
+            destExtractedFolder
+          )
+        } else if (typeof ef.moveTo === 'function') {
+          ef.moveTo(destExtractedFolder)
+        }
+      }
+    }
+  }
+}
+
 /**
  * Reclassifies historical threads matching a custom Gmail search query.
  * Useful for retroactive alignment of misclassified or misattributed threads.
@@ -5655,79 +5729,58 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
                       helperFns
                     )
                   ) {
+                    const oldFileName =
+                      typeof fileToMove.getName === 'function'
+                        ? fileToMove.getName()
+                        : attName
                     const isShared =
                       typeof fileToMove.makeCopy === 'function' &&
                       isDriveFileSharedWithOtherThreads_(fileToMove, threadId)
+                    const destFileName = resolveAttachmentName(
+                      newFolder,
+                      oldFileName,
+                      !isShared ? fileToMove : null,
+                      services
+                    )
+                    if (destFileName !== attName) {
+                      registerFolderFileNameAlias_(
+                        newFolder,
+                        attName,
+                        destFileName
+                      )
+                    }
                     if (isShared) {
                       // Shared via cross-thread dedup: keep the source for the
                       // other thread(s) and place a copy in the new folder.
-                      fileToMove.makeCopy(attName, newFolder)
+                      fileToMove.makeCopy(destFileName, newFolder)
                     } else {
+                      if (destFileName !== oldFileName) {
+                        renameDriveEntityForRelocation_(
+                          fileToMove,
+                          destFileName
+                        )
+                      }
                       fileToMove.moveTo(newFolder)
                     }
                     if (attName.toLowerCase().endsWith('.zip')) {
-                      const movedZipName =
-                        typeof fileToMove.getName === 'function'
-                          ? fileToMove.getName()
-                          : attName
-                      const zipStem = movedZipName.replace(/\.zip$/i, '')
-                      if (
-                        zipStem &&
-                        typeof oldFolder.getFoldersByName === 'function'
-                      ) {
-                        const oldSubIter = oldFolder.getFoldersByName(zipStem)
-                        if (
-                          oldSubIter &&
-                          typeof oldSubIter.hasNext === 'function' &&
-                          oldSubIter.hasNext()
-                        ) {
-                          const oldExtractedFolder = oldSubIter.next()
-                          if (
-                            !isShared &&
-                            typeof oldExtractedFolder.moveTo === 'function'
-                          ) {
-                            oldExtractedFolder.moveTo(newFolder)
-                          } else if (
-                            typeof oldExtractedFolder.getFiles === 'function'
-                          ) {
-                            const destExtractedFolder = getOrCreateChildFolder_(
-                              newFolder,
-                              zipStem
-                            )
-                            const extFiles = oldExtractedFolder.getFiles()
-                            if (
-                              extFiles &&
-                              typeof extFiles.hasNext === 'function'
-                            ) {
-                              while (extFiles.hasNext()) {
-                                const ef = extFiles.next()
-                                if (
-                                  isShared &&
-                                  typeof ef.makeCopy === 'function'
-                                ) {
-                                  ef.makeCopy(
-                                    typeof ef.getName === 'function'
-                                      ? ef.getName()
-                                      : '',
-                                    destExtractedFolder
-                                  )
-                                } else if (typeof ef.moveTo === 'function') {
-                                  ef.moveTo(destExtractedFolder)
-                                }
-                              }
-                            }
-                          }
-                        }
-                      }
+                      const oldZipStem = oldFileName.replace(/\.zip$/i, '')
+                      const destZipStem = destFileName.replace(/\.zip$/i, '')
+                      relocateZipExtractedFolder_(
+                        oldFolder,
+                        newFolder,
+                        oldZipStem,
+                        destZipStem,
+                        isShared
+                      )
                     }
                     attachmentsMoved.push({
-                      name: attName,
+                      name: destFileName,
                       from: oldDomain + '/' + oldSubfolder,
                       to: newDomain + '/' + newSubfolder,
                     })
                     console.log(
                       '[reclassifyThreadsByQuery] Relocated attachment "' +
-                        attName +
+                        destFileName +
                         '" from ' +
                         oldDomain +
                         '/' +
@@ -5755,7 +5808,7 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
           thread,
           classification,
           cfg,
-          {
+          Object.assign({}, services || {}, {
             DriveApp: drive,
             Utilities:
               services && services.Utilities
@@ -5763,7 +5816,7 @@ function reclassifyThreadsByQuery(searchQuery, options, config, services) {
                 : typeof Utilities !== 'undefined'
                   ? Utilities
                   : null,
-          }
+          })
         )
         if (saved && saved.length > 0) {
           attachmentsSaved = saved

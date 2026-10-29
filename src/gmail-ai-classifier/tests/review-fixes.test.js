@@ -2020,5 +2020,209 @@ describe.each([
       expect(tReclass.removeLabel).not.toHaveBeenCalledWith(existingBills)
       expect(tReclass.addLabel).toHaveBeenCalled()
     })
+
+    test('reclassifyThreadsByQuery resolves destination filename conflicts before relocating ZIP archives and extracted folders', () => {
+      const entryBytesB = Buffer.alloc(4096, 2)
+      const zipBytesB = Buffer.alloc(8192, 2)
+      const zipBytesA = Buffer.alloc(8192, 1)
+      const entryB = {
+        getName: () => 'b.pdf',
+        getContentType: () => 'application/pdf',
+        getSize: () => entryBytesB.length,
+        getBytes: () => entryBytesB,
+        setName: jest.fn(),
+      }
+      const zipAttB = {
+        getName: () => 'documents.zip',
+        getContentType: () => 'application/zip',
+        getSize: () => zipBytesB.length,
+        getBytes: () => zipBytesB,
+        copyBlob: () => ({
+          getName: () => 'documents.zip',
+          getContentType: () => 'application/zip',
+          getSize: () => zipBytesB.length,
+          getBytes: () => zipBytesB,
+          setName: jest.fn(),
+        }),
+      }
+      const existingZipA = {
+        getId: () => 'zip-a-id',
+        getName: () => 'documents.zip',
+        getUrl: () => 'https://drive.google.com/file/d/zip-a-id',
+        getSize: () => zipBytesA.length,
+        getDescription: () => 'Thread-ID: t-other',
+        getBlob: () => ({
+          getBytes: () => zipBytesA,
+        }),
+      }
+      const existingDocsFolderA = {
+        getName: () => 'documents',
+        getFilesByName: () => ({ hasNext: () => false }),
+        createFile: jest.fn(),
+      }
+      let movedFolderName = 'documents'
+      let movedFolderInNew = false
+      const oldExtractedFolderB = {
+        getName: () => movedFolderName,
+        setName: (n) => {
+          movedFolderName = n
+        },
+        moveTo: jest.fn(() => {
+          movedFolderInNew = true
+        }),
+        getFilesByName: (n) => {
+          let done = false
+          return {
+            hasNext: () => n === 'b.pdf' && !done,
+            next: () => {
+              done = true
+              return {
+                getName: () => 'b.pdf',
+                getSize: () => entryBytesB.length,
+                getBlob: () => entryB,
+              }
+            },
+          }
+        },
+        createFile: jest.fn(),
+      }
+      let movedZipInNew = false
+      const zipFileB = {
+        getId: () => 'zip-b-id',
+        getName: () => 'documents.zip',
+        getUrl: () => 'https://drive.google.com/file/d/zip-b-id',
+        getSize: () => zipBytesB.length,
+        getDescription: () => 'Thread-ID: t-zip-collide',
+        setDescription: jest.fn(),
+        getBlob: () => zipAttB,
+        moveTo: jest.fn(() => {
+          movedZipInNew = true
+        }),
+      }
+      const oldFolder = {
+        getName: () => 'Bills',
+        getFilesByName: (n) => {
+          let done = false
+          return {
+            hasNext: () => !movedZipInNew && n === 'documents.zip' && !done,
+            next: () => {
+              done = true
+              return zipFileB
+            },
+          }
+        },
+        getFoldersByName: (n) => {
+          let done = false
+          return {
+            hasNext: () => !movedFolderInNew && n === 'documents' && !done,
+            next: () => {
+              done = true
+              return oldExtractedFolderB
+            },
+          }
+        },
+      }
+      const newFolder = {
+        getName: () => 'Career_Interviews',
+        getFilesByName: (n) => {
+          const matches = []
+          if (n === 'documents.zip') matches.push(existingZipA)
+          if (movedZipInNew && zipFileB.getName() === n) matches.push(zipFileB)
+          let idx = 0
+          return {
+            hasNext: () => idx < matches.length,
+            next: () => matches[idx++],
+          }
+        },
+        getFoldersByName: (n) => {
+          const matches = []
+          if (n === 'documents') matches.push(existingDocsFolderA)
+          if (movedFolderInNew && oldExtractedFolderB.getName() === n) {
+            matches.push(oldExtractedFolderB)
+          }
+          let idx = 0
+          return {
+            hasNext: () => idx < matches.length,
+            next: () => matches[idx++],
+          }
+        },
+        createFolder: jest.fn(),
+        createFile: jest.fn(),
+      }
+      const rootFolder = {
+        getFoldersByName: (n) => ({
+          hasNext: () => true,
+          next: () => ({
+            getFoldersByName: () => ({
+              hasNext: () => true,
+              next: () => (n === '06_Work_Career' ? newFolder : oldFolder),
+            }),
+            createFolder: () =>
+              n === '06_Work_Career' ? newFolder : oldFolder,
+          }),
+        }),
+        createFolder: () => rootFolder,
+      }
+      const thread = {
+        getId: () => 't-zip-collide',
+        getMessages: () => [
+          {
+            getFrom: () => 'hr@company.example',
+            getSubject: () => 'Offer Package B',
+            getPlainBody: () => 'Attached documents.zip',
+            getAttachments: () => [zipAttB],
+          },
+        ],
+        getLabels: () => [label('02_Finance_Legal'), label('Finance/Bills')],
+        addLabel: jest.fn(),
+        removeLabel: jest.fn(),
+      }
+
+      mod.reclassifyThreadsByQuery(
+        'q',
+        { dryRun: false, maxThreads: 5 },
+        {
+          canonicalDomains: DOMAINS,
+          processedLabel: 'Processed',
+        },
+        {
+          GmailApp: {
+            search: () => [thread],
+            getUserLabelByName: (n) => label(n),
+            createLabel: (n) => label(n),
+          },
+          DriveApp: {
+            getRootFolder: () => rootFolder,
+          },
+          Utilities: {
+            formatDate: () => '_091500222',
+            unzip: () => [entryB],
+          },
+          Session: {
+            getScriptTimeZone: () => 'GMT',
+          },
+          classifyFn: () => ({
+            canonicalDomain: '06_Work_Career',
+            subLabel: 'Work/Career',
+            category: 'Primary',
+            action: 'keep',
+          }),
+          getFileHash: (blob) => {
+            const bytes =
+              typeof blob.getBytes === 'function' ? blob.getBytes() : []
+            return bytes[0] === 1
+              ? 'hash-a'
+              : bytes.length === 8192
+                ? 'hash-b'
+                : 'hash-entry-b'
+          },
+        }
+      )
+
+      expect(zipFileB.getName()).toBe('documents_091500222.zip')
+      expect(oldExtractedFolderB.getName()).toBe('documents_091500222')
+      expect(existingDocsFolderA.createFile).not.toHaveBeenCalled()
+      expect(newFolder.createFile).not.toHaveBeenCalled()
+    })
   })
 })
