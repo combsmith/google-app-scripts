@@ -216,11 +216,11 @@ function getTrackedRepoFiles() {
             return false
           }
           return true
-        } catch (_err) {
+        } catch {
           return false
         }
       })
-  } catch (_err) {
+  } catch {
     return null
   }
 }
