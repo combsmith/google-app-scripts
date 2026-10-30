@@ -2438,5 +2438,30 @@ describe.each([
       ).toThrow('Unable to acquire script lock to create Drive folder')
       expect(createFolder).not.toHaveBeenCalled()
     })
+
+    test('developer monitoring fast path excludes actionable billing failures while routing routine alerts', () => {
+      expect(
+        mod.deterministicRuleClassify_(
+          'billing@vercel.com',
+          'Action required: payment failed',
+          'Please update your payment method to prevent service suspension.',
+          null,
+          { canonicalDomains: DOMAINS }
+        )
+      ).toBeNull()
+      const routineDeploy = mod.deterministicRuleClassify_(
+        'notifications@vercel.com',
+        'Deployment ready for google-app-scripts',
+        'Production deployment completed in 42s.',
+        null,
+        { canonicalDomains: DOMAINS }
+      )
+      expect(routineDeploy).toMatchObject({
+        canonicalDomain: '05_Tech_Infrastructure',
+        subLabel: 'Tech/Alerts',
+        category: 'Updates',
+        action: 'archive',
+      })
+    })
   })
 })

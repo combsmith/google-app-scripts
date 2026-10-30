@@ -1334,14 +1334,6 @@ const CUSTOM_RULE_MATCHERS_ = {
     )
   },
   saasPlan: function (ctx) {
-    // Actionable failures (e.g. payment problems) must reach semantic
-    // classification so they stay in Primary.
-    if (
-      containsAny_(ctx.subLower, SAAS_ACTIONABLE_TERMS_) ||
-      containsAny_(ctx.snipLower, SAAS_ACTIONABLE_TERMS_)
-    ) {
-      return false
-    }
     return (
       containsAny_(
         ctx.subLower,
@@ -1513,6 +1505,15 @@ function evaluateDeterministicRuleSpec_(specStr, ctx, subject) {
     parts[8] === 'Social' &&
     (containsAny_(ctx.subLower, SOCIAL_DIRECT_MESSAGE_TERMS_) ||
       containsAny_(ctx.snipLower, SOCIAL_DIRECT_MESSAGE_TERMS_))
+  ) {
+    return null
+  }
+  // Actionable billing/payment failures or suspension warnings on tech/monitoring
+  // platforms must fall through to semantic classification so they stay in Primary.
+  if (
+    parts[7] === 'Tech/Alerts' &&
+    (containsAny_(ctx.subLower, SAAS_ACTIONABLE_TERMS_) ||
+      containsAny_(ctx.snipLower, SAAS_ACTIONABLE_TERMS_))
   ) {
     return null
   }
