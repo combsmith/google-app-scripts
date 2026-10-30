@@ -3833,8 +3833,13 @@ function getOrCreateChildFolder_(parentFolder, folderName, lockService) {
   }
   if (!alreadyHeld && lock && typeof lock.tryLock === 'function') {
     try {
-      acquired = lock.tryLock(5000)
+      acquired = Boolean(lock.tryLock(5000))
     } catch {}
+    if (!acquired) {
+      throw new Error(
+        'Unable to acquire script lock to create Drive folder: ' + folderName
+      )
+    }
   }
   try {
     return (

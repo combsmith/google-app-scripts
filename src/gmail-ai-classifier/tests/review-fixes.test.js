@@ -2413,5 +2413,30 @@ describe.each([
       mod.runMissedEmailsSweep({}, { GmailApp: gmail })
       expect(moveToInbox).toHaveBeenCalled()
     })
+
+    test('ensureDriveTaxonomyFolder aborts folder creation when script lock cannot be acquired', () => {
+      const createFolder = jest.fn()
+      const rootFolder = {
+        getFoldersByName: () => ({ hasNext: () => false }),
+        createFolder,
+      }
+      expect(() =>
+        mod.ensureDriveTaxonomyFolder(
+          '02_Finance_Legal',
+          'Bills',
+          { getRootFolder: () => rootFolder },
+          {
+            lockService: {
+              getScriptLock: () => ({
+                hasLock: () => false,
+                tryLock: () => false,
+                releaseLock: jest.fn(),
+              }),
+            },
+          }
+        )
+      ).toThrow('Unable to acquire script lock to create Drive folder')
+      expect(createFolder).not.toHaveBeenCalled()
+    })
   })
 })
