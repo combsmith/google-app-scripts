@@ -1,62 +1,142 @@
-/* istanbul ignore file */
-/* sonar.javascript.skipCoverage */
 /**
  * Native Google Apps Script GitHub Sync Module (Auto-Create & Long Document Aware)
- * Calls GitHub REST API via UrlFetchApp to commit Markdown entries directly to self-private repo.
+ * Calls GitHub REST API via UrlFetchApp to commit Markdown entries directly to a configured GitHub repository.
  *
  * Features:
  * - Auto-creates missing target markdown files on GitHub (HTTP 404 handling)
  * - SHA Collision & Retry Guard (catches HTTP 409 API conflicts & retries)
  * - Section-Aware Targeted Insertion (inserts entries into Section 3 log blocks)
  * - Idempotency Guard (skips duplicate entries)
- * NOSONAR — contains multiple similar error-handling blocks across API operations, intentional for robustness
  */
 
-var GITHUB_REPO_OWNER = 'user-org'
-var GITHUB_REPO_NAME = 'self-private'
+var GITHUB_SYNC_RULE6_PATTERNS_ = [
+  [/\S \? \S/, "' ? ' between words (was an em dash or a · separator)"],
+  [/\?\?/, "'??' (was a multi-codepoint emoji)"],
+  [/[A-Za-z]\?[A-Za-z]/, "'?' inside a word (was a curly apostrophe)"],
+  [/\uFFFD/, 'U+FFFD replacement character'],
+]
 
-function getGitHubApiUrl_(filePath) {
-  return (
-    'https://api.github.com/repos/' +
-    GITHUB_REPO_OWNER +
-    '/' +
-    GITHUB_REPO_NAME +
-    '/contents/' +
-    filePath
-  )
-}
-
-function getGitHubHeaders_(token) {
-  return {
-    Authorization: 'token ' + token,
-    Accept: 'application/vnd.github.v3+json',
-    'User-Agent': 'Google-Apps-Script',
+/** Refuse to write an entry that already shows mojibake. */
+function assertClean_(text, what) {
+  if (!text) return
+  var stripped = String(text).replace(/https?:\/\/\S+/g, '')
+  for (var i = 0; i < GITHUB_SYNC_RULE6_PATTERNS_.length; i++) {
+    if (GITHUB_SYNC_RULE6_PATTERNS_[i][0].test(stripped)) {
+      throw new Error(
+        'Rule 6: refusing to write ' +
+          what +
+          ' — ' +
+          GITHUB_SYNC_RULE6_PATTERNS_[i][1]
+      )
+    }
   }
 }
 
-function getGitHubToken_(overrideToken) {
-  return (
-    overrideToken ||
-    PropertiesService.getScriptProperties().getProperty('GITHUB_PAT')
-  )
-}
-
-function decodeBase64Content(encodedContent) {
-  return Utilities.newBlob(
-    Utilities.base64Decode(encodedContent)
-  ).getDataAsString()
-}
-
-function encodeBase64Content(content) {
-  return Utilities.base64Encode(content)
+/** Refuse to write when a non-ASCII char in the source text became '?' on the way out. */
+function assertNoAsciiReplacement_(source, rendered) {
+  if (!source || !rendered) return
+  if (rendered.indexOf('?') === -1) return
+  var lost = []
+  for (var i = 0; i < source.length; i++) {
+    var c = source.charAt(i)
+    if (
+      c.charCodeAt(0) > 127 &&
+      rendered.indexOf(c) === -1 &&
+      lost.indexOf(c) === -1
+    ) {
+      lost.push(c)
+    }
+  }
+  if (lost.length) {
+    throw new Error(
+      'Rule 6: refusing to write text that flattened non-ASCII to "?": ' +
+        lost.join(' ') +
+        ' — encode as UTF-8, not ASCII.'
+    )
+  }
 }
 
 /**
- * Appends a Progressive Disclosure entry to a target markdown file in self-private via GitHub REST API.
+ * Resolves GitHub repository owner and name lazily from services, ScriptProperties, config, or environment.
+ */
+function resolveGitHubRepoTarget_(services) {
+  var propsService =
+    (services && services.PropertiesService) ||
+    (typeof PropertiesService !== 'undefined' ? PropertiesService : null)
+  var scriptProps =
+    propsService && typeof propsService.getScriptProperties === 'function'
+      ? propsService.getScriptProperties()
+      : null
+  var getProp = function (key) {
+    return scriptProps && typeof scriptProps.getProperty === 'function'
+      ? scriptProps.getProperty(key)
+      : null
+  }
+
+  var cfgOwner = ''
+  var cfgName = ''
+  try {
+    if (typeof getAiClassifierConfig === 'function') {
+      var cfg = getAiClassifierConfig()
+      cfgOwner = (cfg && cfg.githubRepoOwner) || ''
+      cfgName = (cfg && cfg.githubRepoName) || ''
+    }
+  } catch (e) {
+    // Ignore config resolution errors in restricted scopes
+  }
+
+  var envOwner =
+    typeof process !== 'undefined' &&
+    process &&
+    process.env &&
+    process.env.GITHUB_REPO_OWNER
+      ? process.env.GITHUB_REPO_OWNER
+      : ''
+  var envName =
+    typeof process !== 'undefined' &&
+    process &&
+    process.env &&
+    process.env.GITHUB_REPO_NAME
+      ? process.env.GITHUB_REPO_NAME
+      : ''
+
+  var repoOwner =
+    (services && services.githubRepoOwner) ||
+    getProp('GITHUB_REPO_OWNER') ||
+    cfgOwner ||
+    envOwner ||
+    ''
+  var repoName =
+    (services && services.githubRepoName) ||
+    getProp('GITHUB_REPO_NAME') ||
+    cfgName ||
+    envName ||
+    ''
+
+  return { repoOwner: repoOwner.trim(), repoName: repoName.trim() }
+}
+
+/**
+ * Appends a Progressive Disclosure entry to a target markdown file via GitHub REST API.
  * Automatically creates the file with valid front-matter if it does not exist yet (HTTP 404).
  */
-function appendMarkdownEntryToGitHubRepo(filePath, entryMd, commitMessage) {
-  var githubToken = getGitHubToken_()
+function appendMarkdownEntryToGitHubRepo(
+  filePath,
+  entryMd,
+  commitMessage,
+  services
+) {
+  var props =
+    (services && services.PropertiesService) ||
+    (typeof PropertiesService !== 'undefined' ? PropertiesService : null)
+  var scriptProps =
+    props && typeof props.getScriptProperties === 'function'
+      ? props.getScriptProperties()
+      : null
+  var githubToken =
+    scriptProps && typeof scriptProps.getProperty === 'function'
+      ? scriptProps.getProperty('GITHUB_PAT')
+      : null
   if (!githubToken) {
     console.log(
       '[gitHubSync] GITHUB_PAT ScriptProperty not set. Skipping GitHub commit.'
@@ -64,13 +144,26 @@ function appendMarkdownEntryToGitHubRepo(filePath, entryMd, commitMessage) {
     return false
   }
 
+  var sleepFn =
+    (services && services.sleepFn) ||
+    function (ms) {
+      if (
+        typeof Utilities !== 'undefined' &&
+        Utilities &&
+        typeof Utilities.sleep === 'function'
+      ) {
+        Utilities.sleep(ms)
+      }
+    }
+
   var maxRetries = 3
   for (var attempt = 1; attempt <= maxRetries; attempt++) {
     var result = executeGitHubCommit(
       filePath,
       entryMd,
       commitMessage,
-      githubToken
+      githubToken,
+      services
     )
     if (result === true || result === 'IDEMPOTENT_SKIP') {
       return true
@@ -83,7 +176,7 @@ function appendMarkdownEntryToGitHubRepo(filePath, entryMd, commitMessage) {
       'for',
       filePath
     )
-    Utilities.sleep(1000 * attempt)
+    sleepFn(1000 * attempt)
   }
 
   console.error(
@@ -98,9 +191,51 @@ function appendMarkdownEntryToGitHubRepo(filePath, entryMd, commitMessage) {
 /**
  * Performs a single commit transaction via GitHub REST API with 404 Auto-Create & 409 SHA retry handling.
  */
-function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
-  var url = getGitHubApiUrl_(filePath)
-  var headers = getGitHubHeaders_(githubToken)
+function executeGitHubCommit(
+  filePath,
+  entryMd,
+  commitMessage,
+  githubToken,
+  services
+) {
+  if (!filePath || !entryMd) {
+    console.warn('[gitHubSync] Missing filePath or entryMd for GitHub commit.')
+    return false
+  }
+
+  var target = resolveGitHubRepoTarget_(services)
+  if (!target.repoOwner || !target.repoName) {
+    console.warn(
+      '[gitHubSync] GITHUB_REPO_OWNER or GITHUB_REPO_NAME not configured. Skipping GitHub commit.'
+    )
+    return false
+  }
+
+  var urlFetchApp =
+    (services && services.UrlFetchApp) ||
+    (typeof UrlFetchApp !== 'undefined' ? UrlFetchApp : null)
+  var utils =
+    (services && services.Utilities) ||
+    (typeof Utilities !== 'undefined' ? Utilities : null)
+
+  var encodedPath = String(filePath)
+    .split('/')
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join('/')
+  var url =
+    'https://api.github.com/repos/' +
+    encodeURIComponent(target.repoOwner) +
+    '/' +
+    encodeURIComponent(target.repoName) +
+    '/contents/' +
+    encodedPath
+  var headers = {
+    Authorization: 'Bearer ' + githubToken,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'Google-Apps-Script',
+  }
 
   try {
     var getOptions = {
@@ -108,7 +243,7 @@ function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
       headers: headers,
       muteHttpExceptions: true,
     }
-    var res = UrlFetchApp.fetch(url, getOptions)
+    var res = urlFetchApp.fetch(url, getOptions)
     var statusCode = res.getResponseCode()
 
     var sha = null
@@ -121,12 +256,16 @@ function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
         filePath
       )
       var topicTitle = extractTopicTitleFromPath(filePath)
+      var dateStr =
+        utils && typeof utils.formatDate === 'function'
+          ? utils.formatDate(new Date(), 'GMT', 'yyyy-MM-dd')
+          : new Date().toISOString().slice(0, 10)
       rawContent =
         '---\ntitle: ' +
         topicTitle +
         '\ncreated: ' +
-        Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd') +
-        '\nnotebook: household-vault\nsection: general\n---\n\n' +
+        dateStr +
+        '\nnotebook: household\nsection: general\n---\n\n' +
         '# ' +
         topicTitle +
         '\n\n' +
@@ -136,7 +275,13 @@ function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
     } else if (statusCode === 200) {
       var fileData = JSON.parse(res.getContentText())
       sha = fileData.sha
-      rawContent = decodeBase64Content(fileData.content)
+      // GitHub Contents API wraps Base64 in newlines every 60 chars; strip them
+      // before decoding since some decoders reject embedded whitespace.
+      rawContent = utils
+        .newBlob(
+          utils.base64Decode((fileData.content || '').replace(/[\r\n]/g, ''))
+        )
+        .getDataAsString()
 
       // Idempotency Check: Skip if entry already present
       if (
@@ -161,7 +306,21 @@ function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
 
     // 2. Section-Aware Insertion
     var updatedContent = insertEntryIntoLogSection(rawContent, entryMd)
-    var base64Updated = encodeBase64Content(updatedContent)
+
+    // Rule 6 Guards: Refuse to commit if mojibake is detected in new entry or non-ASCII chars were flattened
+    assertClean_(entryMd, 'new entry for ' + filePath)
+
+    var base64Updated = utils.base64Encode(
+      utils.newBlob(updatedContent).getBytes()
+    )
+
+    // Validate the ACTUAL Base64 round trip at the payload boundary: decode what
+    // we are about to PUT and confirm no non-ASCII character was flattened to
+    // '?'.
+    var renderedContent = utils
+      .newBlob(utils.base64Decode(base64Updated))
+      .getDataAsString()
+    assertNoAsciiReplacement_(updatedContent, renderedContent)
 
     // 3. Commit updated content back to GitHub main branch
     var putPayload = {
@@ -183,7 +342,7 @@ function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
       muteHttpExceptions: true,
     }
 
-    var putRes = UrlFetchApp.fetch(url, putOptions)
+    var putRes = urlFetchApp.fetch(url, putOptions)
     var putStatus = putRes.getResponseCode()
 
     if (putStatus === 200 || putStatus === 201) {
@@ -209,16 +368,42 @@ function executeGitHubCommit(filePath, entryMd, commitMessage, githubToken) {
 }
 
 function extractTopicTitleFromPath(filePath) {
-  var parts = filePath.split('/')
+  if (!filePath || typeof filePath !== 'string') {
+    return 'Ingested Records'
+  }
+  var trimmed = filePath.trim()
+  if (!trimmed || trimmed === '/') {
+    return 'Ingested Records'
+  }
+  var parts = trimmed.split('/').filter(Boolean)
+  if (parts.length === 0) {
+    return 'Ingested Records'
+  }
   var topic = parts.length > 1 ? parts[parts.length - 2] : parts[0]
-  return topic.replace(/-/g, ' ').replace(/\b\w/g, function (l) {
+  // Strip any trailing file extension (e.g. ".md") before title-casing so a
+  // single-segment path like "digital-backups.md" becomes "Digital Backups".
+  var cleaned = topic.replace(/\.[^.]+$/, '').replace(/-/g, ' ')
+  if (!cleaned) return 'Ingested Records'
+  return cleaned.replace(/\b\w/g, function (l) {
     return l.toUpperCase()
   })
 }
 
 function insertEntryIntoLogSection(fullContent, newEntry) {
+  if (!fullContent && !newEntry) return ''
+  if (!fullContent) return String(newEntry)
+  if (!newEntry) return String(fullContent)
+
+  var section3Marker = '## 3. Ingested Activity'
+  var section3Index = fullContent.indexOf(section3Marker)
   var detailsMarker = '</details>'
-  var detailsIndex = fullContent.indexOf(detailsMarker)
+  // Scope the </details> search to the Activity Log section so earlier
+  // collapsible blocks (Layer 1/2 summaries) are never targeted. Fall back to
+  // the first </details> only when the note has no Section 3 marker.
+  var detailsIndex =
+    section3Index !== -1
+      ? fullContent.indexOf(detailsMarker, section3Index)
+      : fullContent.indexOf(detailsMarker)
 
   if (detailsIndex !== -1) {
     return (
@@ -228,9 +413,6 @@ function insertEntryIntoLogSection(fullContent, newEntry) {
       fullContent.substring(detailsIndex)
     )
   }
-
-  var section3Marker = '## 3. Ingested Activity'
-  var section3Index = fullContent.indexOf(section3Marker)
 
   if (section3Index !== -1) {
     var lineBreakIndex = fullContent.indexOf('\n', section3Index)
@@ -245,236 +427,15 @@ function insertEntryIntoLogSection(fullContent, newEntry) {
   return fullContent + '\n' + newEntry
 }
 
-/**
- * 2-Way Sync Engine: Fetches rules.json from self-private via GitHub REST API.
- */
-function fetchRulesFromGitHub(filePath, githubToken) {
-  var targetPath =
-    filePath ||
-    '05_Tech_Infrastructure/gmail-cleanup-and-label-taxonomy/rules.json'
-  var token = getGitHubToken_(githubToken)
-  if (!token) {
-    console.log(
-      '[gitHubSync] GITHUB_PAT not set. Skipping fetchRulesFromGitHub.'
-    )
-    return null
-  }
-
-  var url = getGitHubApiUrl_(targetPath)
-  var headers = getGitHubHeaders_(token)
-
-  try {
-    // NOSONAR — intentional error-handling block duplication for robustness
-    var res = UrlFetchApp.fetch(url, {
-      method: 'get',
-      headers: headers,
-      muteHttpExceptions: true,
-    })
-    var status = res.getResponseCode()
-    if (status === 200) {
-      var data = JSON.parse(res.getContentText())
-      var decoded = decodeBase64Content(data.content)
-      var parsed = JSON.parse(decoded)
-      parsed._sha = data.sha
-      return parsed
-    } else if (status !== 404) {
-      throw new Error(
-        'GitHub API returned status ' + status + ': ' + res.getContentText()
-      )
-    }
-  } catch (e) {
-    // NOSONAR — intentional error-handling block duplication for robustness
-    console.error(
-      '[gitHubSync] Exception fetching rules from GitHub:',
-      e.message
-    )
-    throw e
-  }
-  return null
-}
-
-/**
- * 2-Way Sync Engine: Commits rules object back to self-private via GitHub REST API.
- * @param {Object} rulesObj - Rules to commit (mutated in-place: _sha deleted, updatedAt set)
- * @param {string} [commitMessage] - Git commit message
- * @param {string} [githubToken] - GitHub PAT; falls back to script property GITHUB_PAT
- * @param {string} [knownSha] - SHA of the current remote file; skips an extra GET when provided
- */
-function commitRulesToGitHub(rulesObj, commitMessage, githubToken, knownSha) {
-  var targetPath =
-    '05_Tech_Infrastructure/gmail-cleanup-and-label-taxonomy/rules.json'
-  var token = getGitHubToken_(githubToken)
-  if (!token) {
-    console.log(
-      '[gitHubSync] GITHUB_PAT not set. Skipping commitRulesToGitHub.'
-    )
-    return false
-  }
-
-  var sha = knownSha
-  if (!sha) {
-    try {
-      var currentRemote = fetchRulesFromGitHub(targetPath, token)
-      sha = currentRemote ? currentRemote._sha : null
-    } catch (e) {
-      console.error('[gitHubSync] Failed to fetch SHA for commit:', e.message)
-      return false
-    }
-  }
-  delete rulesObj._sha
-  rulesObj.updatedAt = Utilities.formatDate(
-    new Date(),
-    'GMT',
-    "yyyy-MM-dd'T'HH:mm:ss'Z'"
-  )
-
-  var rawJson = JSON.stringify(rulesObj, null, 2)
-  var base64Content = encodeBase64Content(rawJson)
-
-  var url = getGitHubApiUrl_(targetPath)
-  var headers = getGitHubHeaders_(token)
-  var commitMsg =
-    commitMessage ||
-    'feat(taxonomy): update rules.json via 2-way Apps Script sync engine'
-
-  function buildPayload(currentSha) {
-    var p = { message: commitMsg, content: base64Content, branch: 'main' }
-    if (currentSha) p.sha = currentSha
-    return p
-  }
-
-  function executePut_(shaToUse) {
-    return UrlFetchApp.fetch(url, {
-      method: 'put',
-      headers: headers,
-      contentType: 'application/json',
-      payload: JSON.stringify(buildPayload(shaToUse)),
-      muteHttpExceptions: true,
-    })
-  }
-
-  try {
-    // NOSONAR — intentional error-handling block duplication for robustness
-    var putRes = executePut_(sha)
-    var status = putRes.getResponseCode()
-    if (status === 200 || status === 201) return true
-    if (status === 409) {
-      // SHA conflict: refresh and retry once
-      var refreshed = fetchRulesFromGitHub(targetPath, token)
-      var freshSha = refreshed ? refreshed._sha : null
-      var retryRes = executePut_(freshSha)
-      var retryStatus = retryRes.getResponseCode()
-      return retryStatus === 200 || retryStatus === 201
-    }
-    console.error(
-      '[gitHubSync] Unexpected PUT status:',
-      status,
-      putRes.getContentText()
-    )
-    return false
-  } catch (e) {
-    // NOSONAR — intentional error-handling block duplication for robustness
-    console.error(
-      '[gitHubSync] Exception committing rules to GitHub:',
-      e.message
-    )
-    return false
-  }
-}
-
-/**
- * Perform bi-directional 2-Way Synchronization between GAS Script Properties & GitHub rules.json.
- */
-function syncTwoWayRules() {
-  var props = PropertiesService.getScriptProperties()
-
-  var remoteRules
-  try {
-    remoteRules = fetchRulesFromGitHub()
-  } catch (e) {
-    console.error('[gitHubSync] Failed to fetch remote rules:', e.message)
-    return false
-  }
-  if (!remoteRules) return false
-
-  var localJsonStr = props.getProperty('CLASSIFICATION_RULES_JSON')
-  if (!localJsonStr) {
-    // Initial GAS setup: Store remote rules locally
-    props.setProperty('CLASSIFICATION_RULES_JSON', JSON.stringify(remoteRules))
-    console.log('[gitHubSync] Local rules initialized from GitHub rules.json.')
-    return true
-  }
-
-  var localRules
-  try {
-    localRules = JSON.parse(localJsonStr)
-  } catch (e) {
-    console.error(
-      '[gitHubSync] Invalid local rules JSON, skipping sync:',
-      e.message
-    )
-    return false
-  }
-
-  var remoteTs = new Date(remoteRules.updatedAt).getTime()
-  var localTs = new Date(localRules.updatedAt).getTime()
-  var remoteDate = isNaN(remoteTs) ? 0 : remoteTs
-  var localDate = isNaN(localTs) ? 0 : localTs
-
-  if (remoteDate > localDate) {
-    // GitHub rules are newer -> Update GAS Script Property
-    props.setProperty('CLASSIFICATION_RULES_JSON', JSON.stringify(remoteRules))
-    console.log(
-      '[gitHubSync] Pulled newer rules from GitHub into GAS Script Properties.'
-    )
-    return true
-  } else if (localDate > remoteDate) {
-    // GAS rules were tuned online -> Push back to GitHub
-    var success = commitRulesToGitHub(
-      localRules,
-      'feat(taxonomy): push live Apps Script rule tuning to GitHub rules.json',
-      null,
-      remoteRules._sha
-    )
-    if (success)
-      console.log(
-        '[gitHubSync] Pushed live GAS rule tuning to GitHub rules.json.'
-      )
-    return success
-  }
-
-  // Equal timestamps: use content comparison as tie-breaker (exclude internal _sha field)
-  var remoteForCompare = JSON.parse(JSON.stringify(remoteRules))
-  delete remoteForCompare._sha
-  var localForCompare = JSON.parse(JSON.stringify(localRules))
-  delete localForCompare._sha
-  if (JSON.stringify(remoteForCompare) !== JSON.stringify(localForCompare)) {
-    props.setProperty('CLASSIFICATION_RULES_JSON', JSON.stringify(remoteRules))
-    console.log(
-      '[gitHubSync] Equal timestamps but content differed — pulled remote as canonical.'
-    )
-    return true
-  }
-
-  console.log('[gitHubSync] 2-Way Rules Sync is up-to-date.')
-  return true
-}
-
-// NOSONAR — Jest interop guard for test environment, not executed in GAS runtime
-/* istanbul ignore if */
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     appendMarkdownEntryToGitHubRepo: appendMarkdownEntryToGitHubRepo,
     executeGitHubCommit: executeGitHubCommit,
     extractTopicTitleFromPath: extractTopicTitleFromPath,
     insertEntryIntoLogSection: insertEntryIntoLogSection,
-    fetchRulesFromGitHub: fetchRulesFromGitHub,
-    commitRulesToGitHub: commitRulesToGitHub,
-    syncTwoWayRules: syncTwoWayRules,
-    getGitHubApiUrl_: getGitHubApiUrl_,
-    getGitHubHeaders_: getGitHubHeaders_,
-    getGitHubToken_: getGitHubToken_,
-    decodeBase64Content: decodeBase64Content,
-    encodeBase64Content: encodeBase64Content,
+    resolveGitHubRepoTarget_: resolveGitHubRepoTarget_,
+    assertClean_: assertClean_,
+    assertNoAsciiReplacement_: assertNoAsciiReplacement_,
+    RULE6_PATTERNS: GITHUB_SYNC_RULE6_PATTERNS_,
   }
 }

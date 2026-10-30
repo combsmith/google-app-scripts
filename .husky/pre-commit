@@ -1,4 +1,5 @@
 #!/bin/sh
 set -e
+node scripts/check-no-pii.js --staged
 npx lint-staged
 npm run typecheck
