@@ -92,15 +92,15 @@ The `Gmail.Users.Settings.Filters.create` call additionally requires the **Advan
 
 The classifier operates against a standardized, mutually exclusive, collectively exhaustive (MECE) 7-domain taxonomy:
 
-| 7 Canonical Domains           | Standard PARA Area            | Scope & Contents                                                                       |
-| :---------------------------- | :---------------------------- | :------------------------------------------------------------------------------------- |
-| **`01_Household`**            | Real Estate & Living Space    | Primary residence, secondary properties, rental properties, property archives          |
-| **`02_Finance_Legal`**        | Financial & Legal Protections | Taxes, banking, insurance policies, court records, custody, estate planning            |
-| **`03_Vehicles`**             | Transportation & Assets       | Vehicle searches, vehicle titles, maintenance logs                                     |
-| **`04_Family_Health_School`** | Family Welfare & Health       | Children, school records, medical appointments, therapy sessions, educational programs |
-| **`05_Tech_Infrastructure`**  | IT & Home Automation          | Home automation, NAS backups, scripting tools, network gear, software licenses         |
-| **`06_Work_Career`**          | Professional Life & Income    | Employment records, resumes, interview materials, expense reports, admin notes         |
-| **`07_Community_NonProfit`**  | Civic Duty & Service          | Charity organizations, community board roles, faith outreach                           |
+| 7 Canonical Domains          | Standard PARA Area            | Scope & Contents                                                                       |
+| :--------------------------- | :---------------------------- | :------------------------------------------------------------------------------------- |
+| **`01_Household`**           | Real Estate & Living Space    | Primary residence, secondary properties, rental properties, property archives          |
+| **`02_Finance_Legal`**       | Financial & Legal Protections | Taxes, banking, insurance policies, court records, custody, estate planning            |
+| **`03_Vehicles`**            | Transportation & Assets       | Vehicle searches, vehicle titles, maintenance logs                                     |
+| **`04_Family_Health`**       | Family Welfare & Health       | Children, school records, medical appointments, therapy sessions, educational programs |
+| **`05_Tech_Infrastructure`** | IT & Home Automation          | Home automation, NAS backups, scripting tools, network gear, software licenses         |
+| **`06_Work_Career`**         | Professional Life & Income    | Employment records, resumes, interview materials, expense reports, admin notes         |
+| **`07_Community_NonProfit`** | Civic Duty & Service          | Charity organizations, community board roles, faith outreach                           |
 
 ---
 
@@ -137,7 +137,7 @@ When Gemini classifies a new sender with high confidence (>= 95%), the script au
 **Confidence calibration and staged approval:**
 
 - Only classifications with `confidence >= autoFilterConfidenceThreshold` (default: `0.95`) trigger filter creation.
-- Senders categorized under sensitive domains (e.g., `02_Finance_Legal`, `04_Family_Health_School`) should be reviewed manually before trusting auto-generated filters in production.
+- Senders categorized under sensitive domains (e.g., `02_Finance_Legal`, `04_Family_Health`) should be reviewed manually before trusting auto-generated filters in production.
 
 **Duplicate filter detection:**
 
@@ -188,6 +188,6 @@ src/gmail-ai-classifier/
 
 ## Discussion & Tracking
 
-- Issue Tracked: [#491](https://github.com/open-source-projects/google-app-scripts/issues/491)
-- Pull Request Tracked: [#492](https://github.com/open-source-projects/google-app-scripts/pull/492)
-- Repository: `open-source-projects/google-app-scripts`
+- Issue Tracked: [#491](https://github.com/petry-projects/google-app-scripts/issues/491)
+- Pull Request Tracked: [#492](https://github.com/petry-projects/google-app-scripts/pull/492)
+- Repository: `petry-projects/google-app-scripts`
