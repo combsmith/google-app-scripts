@@ -4363,6 +4363,54 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
       })
     })
 
+    describe('deterministicRuleClassify_ for 02_Finance_Legal', () => {
+      implementations.forEach(({ name, mod }) => {
+        describe(name, () => {
+          test('classifies docusign signature request into 02_Finance_Legal Primary keep', () => {
+            const res = mod.deterministicRuleClassify_(
+              'dse@docusign.net',
+              'Please DocuSign: Consulting Agreement.pdf',
+              'Jane Doe has sent you a document to review and sign.'
+            )
+            expect(res).not.toBeNull()
+            expect(res.canonicalDomain).toBe('02_Finance_Legal')
+            expect(res.subLabel).toBe('Legal/Legal_Court')
+            expect(res.category).toBe('Primary')
+            expect(res.action).toBe('keep')
+            expect(res.confidence).toBe(1.0)
+          })
+
+          test('classifies completed signature notification into 02_Finance_Legal Updates archive', () => {
+            const res = mod.deterministicRuleClassify_(
+              'dse@docusign.net',
+              'Completed: DocuSign Consulting Agreement.pdf',
+              'All parties have completed signing the document. View completed document.'
+            )
+            expect(res).not.toBeNull()
+            expect(res.canonicalDomain).toBe('02_Finance_Legal')
+            expect(res.subLabel).toBe('Legal/Legal_Court')
+            expect(res.category).toBe('Updates')
+            expect(res.action).toBe('archive')
+            expect(res.confidence).toBe(0.99)
+          })
+
+          test('classifies official tax authority correspondence into 02_Finance_Legal Primary keep', () => {
+            const res = mod.deterministicRuleClassify_(
+              'support@myalabamataxes.alabama.gov',
+              'Notice of Assessment / Tax Return Update',
+              'Alabama Department of Revenue has issued a notice regarding your state tax return.'
+            )
+            expect(res).not.toBeNull()
+            expect(res.canonicalDomain).toBe('02_Finance_Legal')
+            expect(res.subLabel).toBe('Finance/Taxes')
+            expect(res.category).toBe('Primary')
+            expect(res.action).toBe('keep')
+            expect(res.confidence).toBe(1.0)
+          })
+        })
+      })
+    })
+
     describe('Circuit Breaker Helpers', () => {
       implementations.forEach(({ name, mod }) => {
         describe(name, () => {
