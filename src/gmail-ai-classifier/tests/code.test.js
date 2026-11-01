@@ -3128,6 +3128,22 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
           expect(shellRes.reasoning).toBe('Vehicle Fuel/Maintenance Receipt')
         })
 
+        test('classifies vehicle tire purchase or appointment (Discount Tire) into Vehicles/Maintenance archive', () => {
+          const tireRes = fn(
+            'orders@discounttire.com',
+            'Your Discount Tire Order Confirmation & Installation Appointment',
+            'Thank you for your order. Your 4 tires and installation appointment are confirmed.',
+            null,
+            {}
+          )
+          expect(tireRes).not.toBeNull()
+          expect(tireRes.canonicalDomain).toBe('03_Vehicles')
+          expect(tireRes.subLabel).toBe('Vehicles/Maintenance')
+          expect(tireRes.category).toBe('Updates')
+          expect(tireRes.action).toBe('archive')
+          expect(tireRes.reasoning).toBe('Vehicle Fuel/Maintenance Receipt')
+        })
+
         test('classifies healthcare claim notices and EOBs into Finance/Insurance archive', () => {
           const eobRes = fn(
             'ClaimNotifications@bcbsal.org',
