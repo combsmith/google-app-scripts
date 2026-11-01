@@ -1814,6 +1814,9 @@ describe('Drive Attachment Persistence along Taxonomy Path', () => {
       expect(resolveCanonicalDomainFromLabels(['Finance/Banking'])).toBe(
         '02_Finance_Legal'
       )
+      expect(resolveCanonicalDomainFromLabels(['Legal/Legal_Court'])).toBe(
+        '02_Finance_Legal'
+      )
       expect(resolveCanonicalDomainFromLabels(['Vehicles/Maintenance'])).toBe(
         '03_Vehicles'
       )
