@@ -1298,6 +1298,18 @@ const CAREER_SUBJECT_TERMS_ =
 const CAREER_SNIPPET_TERMS_ =
   'employment agreement|offer of employment|terms of employment|pleased to offer you the position|pleased to offer you|pleased to confirm our offer|congratulations on your offer|employment document|restrictive covenants agreement'
 
+const DOCUMENT_SIGNATURE_COMPLETED_TERMS_ =
+  'completed: docusign|docusign: completed|has completed signing|all parties have signed|document is completed|signed copy'
+
+const DOCUMENT_SIGNATURE_REQUEST_TERMS_ =
+  'please docusign|docusign:|signature requested|sign your document|review & sign|review and sign|document for signature|ready for signature|action required: please sign|document signature required'
+
+const DOCUMENT_SIGNATURE_REQUEST_SNIPPET_TERMS_ =
+  'please docusign|docusign has sent you|invited you to sign|view and sign|signature is requested|action required: please sign|has requested your signature'
+
+const TAX_AUTHORITY_SUBJECT_TERMS_ =
+  'notice from the alabama department of revenue|alabama department of revenue|my alabama taxes|department of revenue|state tax notice|irs notice|tax correspondence|notice of deficiency|notice of assessment|tax assessment|cp2000|cp504|1099-g notice'
+
 const NONPROFIT_ACTIONABLE_TERMS_ =
   'please confirm|confirm your|please reply|please respond|reply required|response required|rsvp|action required|action needed|your shift|volunteer shift|can you attend|are you able|need your|urgent'
 
@@ -1719,6 +1731,80 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
         subject,
         'Employment agreement, offer letter, or career interview communication preserved in Primary Inbox.',
         'Career / Employment Contract Rule'
+      )
+    )
+  }
+
+  // 02_Finance_Legal: Document Signature Shield (DocuSign, HelloSign, Adobe Sign)
+  const isDocuSignSender = matchesSenderDomain_(
+    sender,
+    'docusign.net|docusign.com|hellosign.com|adobesign.com|echosign.com'
+  )
+  const isDocuSignCompleted =
+    containsAny_(subLower, DOCUMENT_SIGNATURE_COMPLETED_TERMS_) ||
+    containsAny_(snipLower, DOCUMENT_SIGNATURE_COMPLETED_TERMS_)
+  const isDocuSignRequest =
+    containsAny_(subLower, DOCUMENT_SIGNATURE_REQUEST_TERMS_) ||
+    containsAny_(snipLower, DOCUMENT_SIGNATURE_REQUEST_SNIPPET_TERMS_)
+
+  if (isDocuSignSender && isDocuSignCompleted) {
+    return applyUserSentShield_(
+      makeDeterministicResult_(
+        '02_Finance_Legal',
+        'Legal/Legal_Court',
+        'Updates',
+        'archive',
+        0.99,
+        subject,
+        'Completed/executed legal or financial document notification routed to Updates.',
+        'Document Signature Completed'
+      )
+    )
+  }
+
+  if ((isDocuSignSender && isDocuSignRequest) || isDocuSignRequest) {
+    return applyUserSentShield_(
+      makeDeterministicResult_(
+        '02_Finance_Legal',
+        'Legal/Legal_Court',
+        'Primary',
+        'keep',
+        1.0,
+        subject,
+        'Legal agreement or financial document signature request preserved in Primary Inbox.',
+        'Document Signature Shield'
+      )
+    )
+  }
+
+  // 02_Finance_Legal: Official Tax Authority Correspondence Shield
+  const isTaxAuthoritySender =
+    matchesSenderDomain_(
+      sender,
+      'irs.gov|treasury.gov|revenue.alabama.gov|myalabamataxes.alabama.gov'
+    ) ||
+    (matchesSenderDomain_(sender, 'alabama.gov') &&
+      containsAny_(sLower, 'revenue|dor|tax')) ||
+    containsAny_(sLower, 'myalabamataxes|department of revenue|tax commission')
+
+  const hasTaxNoticeContent =
+    containsAny_(subLower, TAX_AUTHORITY_SUBJECT_TERMS_) ||
+    containsAny_(
+      snipLower,
+      'alabama department of revenue|internal revenue service|tax assessment|notice of deficiency|my alabama taxes'
+    )
+
+  if (isTaxAuthoritySender && hasTaxNoticeContent) {
+    return applyUserSentShield_(
+      makeDeterministicResult_(
+        '02_Finance_Legal',
+        'Finance/Taxes',
+        'Primary',
+        'keep',
+        1.0,
+        subject,
+        'Official government tax authority correspondence or filing notice preserved in Primary Inbox.',
+        'Tax Authority Correspondence Shield'
       )
     )
   }
@@ -4779,7 +4865,8 @@ function resolveCanonicalDomainFromLabels(rawLabels, canonicalDomains) {
   for (let j = 0; j < rawLabels.length; j++) {
     const lName = (rawLabels[j] || '').toLowerCase()
     if (lName.startsWith('household/')) return '01_Household'
-    if (lName.startsWith('finance/')) return '02_Finance_Legal'
+    if (lName.startsWith('finance/') || lName.startsWith('legal/'))
+      return '02_Finance_Legal'
     if (lName.startsWith('vehicles/')) return '03_Vehicles'
     if (lName.startsWith('family/')) return '04_Family_Health'
     if (lName.startsWith('tech/')) return '05_Tech_Infrastructure'
