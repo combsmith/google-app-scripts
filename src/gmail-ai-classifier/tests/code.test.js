@@ -4427,6 +4427,102 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
       })
     })
 
+    describe('deterministicRuleClassify_ for 01_Household Event Invitation Shield', () => {
+      implementations.forEach(({ name, mod }) => {
+        describe(name, () => {
+          test('classifies Evite event invitation into 01_Household Primary keep', () => {
+            const res = mod.deterministicRuleClassify_(
+              'invitations@mail.evite.com',
+              "You're invited to Holiday Open House",
+              "You're invited to a celebration! View details and RSVP."
+            )
+            expect(res).not.toBeNull()
+            expect(res.canonicalDomain).toBe('01_Household')
+            expect(res.subLabel).toBe('Household/General')
+            expect(res.category).toBe('Primary')
+            expect(res.action).toBe('keep')
+            expect(res.confidence).toBe(1.0)
+          })
+
+          test('classifies Evite guest RSVP confirmation into 01_Household Primary keep', () => {
+            const res = mod.deterministicRuleClassify_(
+              'notifications@mail.evite.com',
+              "Alex Smith has RSVP'd to Annual Gathering",
+              'Alex Smith will attend the event on Saturday.'
+            )
+            expect(res).not.toBeNull()
+            expect(res.canonicalDomain).toBe('01_Household')
+            expect(res.subLabel).toBe('Household/General')
+            expect(res.category).toBe('Primary')
+            expect(res.action).toBe('keep')
+            expect(res.confidence).toBe(1.0)
+          })
+
+          test('classifies Paperless Post event invitation into 01_Household Primary keep', () => {
+            const res = mod.deterministicRuleClassify_(
+              'invitations@paperlesspost.com',
+              'Invitation: Neighborhood Block Party',
+              'Please RSVP by Friday for the neighborhood block party.'
+            )
+            expect(res).not.toBeNull()
+            expect(res.canonicalDomain).toBe('01_Household')
+            expect(res.subLabel).toBe('Household/General')
+            expect(res.category).toBe('Primary')
+            expect(res.action).toBe('keep')
+            expect(res.confidence).toBe(1.0)
+          })
+
+          test('classifies Punchbowl and Partiful event invitations into 01_Household Primary keep', () => {
+            const punchbowlRes = mod.deterministicRuleClassify_(
+              'invitations@punchbowl.com',
+              'Join us for Summer BBQ!',
+              'You are invited to join us for our annual BBQ. RSVP today.'
+            )
+            expect(punchbowlRes).not.toBeNull()
+            expect(punchbowlRes.canonicalDomain).toBe('01_Household')
+            expect(punchbowlRes.subLabel).toBe('Household/General')
+            expect(punchbowlRes.category).toBe('Primary')
+            expect(punchbowlRes.action).toBe('keep')
+            expect(punchbowlRes.confidence).toBe(1.0)
+
+            const partifulRes = mod.deterministicRuleClassify_(
+              'party@partiful.com',
+              'New message on invitation: Birthday Gathering',
+              'The host posted a guest list update. View invitation details.'
+            )
+            expect(partifulRes).not.toBeNull()
+            expect(partifulRes.canonicalDomain).toBe('01_Household')
+            expect(partifulRes.subLabel).toBe('Household/General')
+            expect(partifulRes.category).toBe('Primary')
+            expect(partifulRes.action).toBe('keep')
+            expect(partifulRes.confidence).toBe(1.0)
+          })
+
+          test('routes event platform promotional marketing to Promotions archive', () => {
+            const promoRes = mod.deterministicRuleClassify_(
+              'news@mail.evite.com',
+              'Save 20% on custom invitation designs and holiday cards collection',
+              'Check out our holiday collection templates and get a special discount.'
+            )
+            expect(promoRes).not.toBeNull()
+            expect(promoRes.canonicalDomain).toBeNull()
+            expect(promoRes.category).toBe('Promotions')
+            expect(promoRes.action).toBe('archive')
+            expect(promoRes.confidence).toBe(0.98)
+          })
+
+          test('falls through for non-invitation non-promotional event platform notices', () => {
+            const generalRes = mod.deterministicRuleClassify_(
+              'service@mail.evite.com',
+              'Account Profile Update Notice',
+              'Your contact email address was updated in your profile.'
+            )
+            expect(generalRes).toBeNull()
+          })
+        })
+      })
+    })
+
     describe('Circuit Breaker Helpers', () => {
       implementations.forEach(({ name, mod }) => {
         describe(name, () => {
