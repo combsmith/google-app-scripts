@@ -1293,10 +1293,10 @@ const MANUAL_PAYMENT_SNIPPET_TERMS_ =
   'autopay is disabled|autopay is off|autopay is not enabled|auto-pay is off|not enrolled in autopay|please pay|pay by|pay now|payment is due|amount due|balance due|payment due|payment request|money request|sent you an invoice|sent you a money request|to avoid interruption|to avoid a late fee|to avoid late fees|manual payment'
 
 const CAREER_SUBJECT_TERMS_ =
-  'employment agreement|employment contract|offer letter|job offer|employment offer|terms of employment|independent contractor agreement|restrictive covenant|confidentiality agreement|interview confirmation|interview invitation|invitation to interview|interview with |schedule an interview|recruiter screen|phone screen'
+  'employment agreement|employment contract|offer letter|job offer|employment offer|terms of employment|independent contractor agreement|restrictive covenant|confidentiality agreement|interview confirmation|interview invitation|invitation to interview|interview with |schedule an interview|recruiter screen|phone screen|interview schedule|schedule your interview|interview availability|next round of interview|next round of interviews|round 2 interview|interview debrief|next steps in the interview|update on your candidacy|update on your application|your application for|application status:'
 
 const CAREER_SNIPPET_TERMS_ =
-  'employment agreement|offer of employment|terms of employment|pleased to offer you the position|pleased to offer you|pleased to confirm our offer|congratulations on your offer|employment document|restrictive covenants agreement'
+  'employment agreement|offer of employment|terms of employment|pleased to offer you the position|pleased to offer you|pleased to confirm our offer|congratulations on your offer|employment document|restrictive covenants agreement|interview schedule|schedule your interview|schedule an interview|interview availability|next round of interview|next round of interviews|next steps in the interview|interview with our team|speak with our team|discuss the role|candidacy for the position|your application for the position|invitation to interview'
 
 const DOCUMENT_SIGNATURE_COMPLETED_TERMS_ =
   'completed: docusign|docusign: completed|has completed signing|all parties have signed|document is completed|signed copy'
@@ -1724,10 +1724,19 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
   }
 
   // 06_Work_Career: Employment Agreements, Offer Letters, Employment Contracts, Recruiter Screens & Interviews
-  if (
+  const isAtsPlatformSender = matchesSenderDomain_(
+    sender,
+    'greenhouse.io|lever.co|myworkday.com|workday.com|avature.net|icims.com|smartrecruiters.com|ashbyhq.com|taleo.net'
+  )
+  const isCareerContent =
     containsAny_(subLower, CAREER_SUBJECT_TERMS_) ||
     containsAny_(snipLower, CAREER_SNIPPET_TERMS_)
-  ) {
+  const isJobAlertSpam = containsAny_(
+    subLower,
+    'job alert|job recommendations|recommended jobs|new jobs matching|jobs you might like'
+  )
+
+  if (isCareerContent || (isAtsPlatformSender && !isJobAlertSpam)) {
     return applyUserSentShield_(
       makeDeterministicResult_(
         '06_Work_Career',
