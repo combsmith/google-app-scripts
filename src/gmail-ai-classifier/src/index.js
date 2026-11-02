@@ -1305,6 +1305,12 @@ const DOCUMENT_SIGNATURE_REQUEST_SNIPPET_TERMS_ =
 const TAX_AUTHORITY_SUBJECT_TERMS_ =
   'notice from the alabama department of revenue|alabama department of revenue|my alabama taxes|department of revenue|state tax notice|irs notice|tax correspondence|notice of deficiency|notice of assessment|tax assessment|cp2000|cp504|1099-g notice'
 
+const EVENT_INVITATION_TERMS_ =
+  "you're invited|you are invited|invitation to|invitation:|invited you to|join us for|rsvp to|please rsvp|rsvp by|your invitation|has rsvp'd|has rsvpd|rsvpd|rsvp update|rsvp confirmation|will attend|attending|guest list update|responded to your invitation|new message on invitation|cannot attend|declined invitation|accepted invitation|view invitation|view your invitation"
+
+const EVENT_INVITATION_SNIPPET_TERMS_ =
+  "you're invited|you are invited|invited you to|invitation to|has invited you|rsvp to|please rsvp|has rsvp'd|has rsvpd|will attend|cannot attend|attending|guest list|responded to your invitation|view invitation|view details & rsvp|view details and rsvp|see invitation"
+
 const NONPROFIT_ACTIONABLE_TERMS_ =
   'please confirm|confirm your|please reply|please respond|reply required|response required|rsvp|action required|action needed|your shift|volunteer shift|can you attend|are you able|need your|urgent'
 
@@ -1493,6 +1499,7 @@ const DETERMINISTIC_RULE_SPECS_ = [
   'sender+sub::homedepot.com::::::order|receipt|picked up|ready for pickup::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Home Depot store receipt or order pickup confirmation.',
   'sender+sub::target.com|costco.com|bestbuy.com|walmart.com::::::order|receipt|ready for pickup|picked up|shipped|delivered::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Retail store order confirmation, receipt, or pickup notice.',
   'sender+sub::ereceiptshell.com|autozone.com|advanceautoparts.com|rockauto.com|discounttire.com|tirerack.com::::shell e-receipt::receipt|purchase|order|fuel|tire|tires|appointment::::03_Vehicles::Vehicles/Maintenance::Updates::archive::0.99::Vehicle Fuel/Maintenance Receipt::Automated vehicle fuel purchase receipt or parts order confirmation routed to Vehicles/Maintenance.',
+  'sender+sub::evite.com|paperlesspost.com|punchbowl.com|partiful.com::::::sale|deal|discount|% off|promo|templates|browse|ideas|invitation designs|holiday collection|cards collection::::::::Promotions::archive::0.98::Event Platform Promo::Event platform promotional marketing or card template sale routed to Promotions.',
   'any::nytimes.com|nextdoor.com|substack.com|redditmail.com|daily.therundown.ai|therundown.ai|mail.instagram.com|instagram.com|facebookmail.com|linkedin.com|pinterest.com|quora.com|youtube.com|twitter.com|x.com::::the passion translation|aibreakfast::::sent you a message|sent you an inmail|new message|messaged you|replied to your|direct message|inmail|security|verify|verification|password|login|sign-in|action required|urgent::::::Social::archive::0.98::News/Newsletter/Social::Routine media newsletter, Substack digest, social media alert, or political appeal.',
 ]
 
@@ -1800,6 +1807,34 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
         subject,
         'Official government tax authority correspondence or filing notice preserved in Primary Inbox.',
         'Tax Authority Correspondence Shield'
+      )
+    )
+  }
+
+  // 01_Household: Event Invitation & RSVP Shield (Evite, Paperless Post, Punchbowl, Partiful)
+  const isEventPlatformSender = matchesSenderDomain_(
+    sender,
+    'evite.com|paperlesspost.com|punchbowl.com|partiful.com'
+  )
+  const isInvitationOrRsvp =
+    containsAny_(subLower, EVENT_INVITATION_TERMS_) ||
+    containsAny_(snipLower, EVENT_INVITATION_SNIPPET_TERMS_)
+  const isEventPromo = containsAny_(
+    subLower,
+    'sale|discount|% off|promo|special offer|holiday collection|cards collection'
+  )
+
+  if (isEventPlatformSender && isInvitationOrRsvp && !isEventPromo) {
+    return applyUserSentShield_(
+      makeDeterministicResult_(
+        '01_Household',
+        'Household/General',
+        'Primary',
+        'keep',
+        1.0,
+        subject,
+        'Personal event invitation or guest RSVP notification preserved in Primary Inbox.',
+        'Event Invitation Shield'
       )
     )
   }
