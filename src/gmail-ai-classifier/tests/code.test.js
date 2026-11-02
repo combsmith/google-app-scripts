@@ -4375,6 +4375,51 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             expect(res.canonicalDomain).toBe('06_Work_Career')
             expect(res.category).toBe('Primary')
           })
+
+          test('classifies interview schedule, availability, and next round requests into 06_Work_Career Primary keep', () => {
+            const schedRes = mod.deterministicRuleClassify_(
+              'recruiting@enterprise.example',
+              'Interview Schedule: Technical Leadership Role',
+              'Please find the interview schedule with the engineering directors.'
+            )
+            expect(schedRes).not.toBeNull()
+            expect(schedRes.canonicalDomain).toBe('06_Work_Career')
+            expect(schedRes.subLabel).toBe('Work/Career')
+            expect(schedRes.category).toBe('Primary')
+            expect(schedRes.action).toBe('keep')
+
+            const nextRoundRes = mod.deterministicRuleClassify_(
+              'talent@consulting.example',
+              'Next Steps: Round 2 Interview',
+              'We enjoyed speaking with you and would like to invite you to the next round of interviews.'
+            )
+            expect(nextRoundRes).not.toBeNull()
+            expect(nextRoundRes.canonicalDomain).toBe('06_Work_Career')
+            expect(nextRoundRes.subLabel).toBe('Work/Career')
+            expect(nextRoundRes.category).toBe('Primary')
+            expect(nextRoundRes.action).toBe('keep')
+          })
+
+          test('classifies recruiting ATS platform messages (Avature, Greenhouse, Lever) into 06_Work_Career while excluding job alerts', () => {
+            const atsRes = mod.deterministicRuleClassify_(
+              'notifications@avature.net',
+              'Update regarding your application',
+              'Thank you for your application. Our talent team is reviewing your materials.'
+            )
+            expect(atsRes).not.toBeNull()
+            expect(atsRes.canonicalDomain).toBe('06_Work_Career')
+            expect(atsRes.subLabel).toBe('Work/Career')
+            expect(atsRes.category).toBe('Primary')
+            expect(atsRes.action).toBe('keep')
+
+            // Job alert marketing from ATS platform must not match career interview rule
+            const alertRes = mod.deterministicRuleClassify_(
+              'alerts@greenhouse.io',
+              'New Job Alert: Recommended Jobs You Might Like',
+              'Here are 5 new jobs matching your search preferences.'
+            )
+            expect(alertRes).toBeNull()
+          })
         })
       })
     })
