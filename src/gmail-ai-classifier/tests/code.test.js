@@ -4420,6 +4420,30 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             )
             expect(alertRes).toBeNull()
           })
+
+          test('classifies direct recruiter outreach and interview scheduling into 06_Work_Career', () => {
+            const recruiterRes = mod.deterministicRuleClassify_(
+              'recruiter@firm.example',
+              'Connecting on Leadership Opportunities',
+              'Our talent acquisition team reached out regarding your resume and application. Are you open for an introductory phone call this week?'
+            )
+            expect(recruiterRes).not.toBeNull()
+            expect(recruiterRes.canonicalDomain).toBe('06_Work_Career')
+            expect(recruiterRes.subLabel).toBe('Work/Career')
+            expect(recruiterRes.category).toBe('Primary')
+            expect(recruiterRes.action).toBe('keep')
+
+            const followUpRes = mod.deterministicRuleClassify_(
+              'interviewer@techcorp.example',
+              'Interview Follow-up: Senior Technical Lead',
+              'Thank you for speaking with our leadership team. We would like to schedule a next step interview.'
+            )
+            expect(followUpRes).not.toBeNull()
+            expect(followUpRes.canonicalDomain).toBe('06_Work_Career')
+            expect(followUpRes.subLabel).toBe('Work/Career')
+            expect(followUpRes.category).toBe('Primary')
+            expect(followUpRes.action).toBe('keep')
+          })
         })
       })
     })
@@ -4554,6 +4578,45 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             expect(promoRes.category).toBe('Promotions')
             expect(promoRes.action).toBe('archive')
             expect(promoRes.confidence).toBe(0.98)
+
+            const ebPromoRes = mod.deterministicRuleClassify_(
+              'updates@eventbrite.com',
+              'Trending events near you this weekend',
+              'Discover events and popular things to do in your area.'
+            )
+            expect(ebPromoRes).not.toBeNull()
+            expect(ebPromoRes.canonicalDomain).toBeNull()
+            expect(ebPromoRes.category).toBe('Promotions')
+            expect(ebPromoRes.action).toBe('archive')
+            expect(ebPromoRes.confidence).toBe(0.98)
+          })
+
+          test('classifies Eventbrite event invitation into 01_Household Primary keep', () => {
+            const res = mod.deterministicRuleClassify_(
+              'invitations@eventbrite.com',
+              "You're invited to Annual Community Dinner",
+              'You are invited to join us for dinner. RSVP today.'
+            )
+            expect(res).not.toBeNull()
+            expect(res.canonicalDomain).toBe('01_Household')
+            expect(res.subLabel).toBe('Household/General')
+            expect(res.category).toBe('Primary')
+            expect(res.action).toBe('keep')
+            expect(res.confidence).toBe(1.0)
+          })
+
+          test('routes Eventbrite tickets and order confirmation to Household/General Updates archive', () => {
+            const ticketRes = mod.deterministicRuleClassify_(
+              'orders@eventbrite.com',
+              'Your tickets for Tech Leadership Summit 2026',
+              'Order confirmation for 2 general admission tickets.'
+            )
+            expect(ticketRes).not.toBeNull()
+            expect(ticketRes.canonicalDomain).toBe('01_Household')
+            expect(ticketRes.subLabel).toBe('Household/General')
+            expect(ticketRes.category).toBe('Updates')
+            expect(ticketRes.action).toBe('archive')
+            expect(ticketRes.confidence).toBe(0.99)
           })
 
           test('falls through for non-invitation non-promotional event platform notices', () => {
