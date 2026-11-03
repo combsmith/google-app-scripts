@@ -74,8 +74,8 @@ on:
         required: false
         default: ''
         type: string
-  # Auto-enhance a freshly-created idea: when a new Discussion is opened in the
-  # Ideas category, the `redispatch` job bridges it to workflow_dispatch (see below)
+  # Auto-enhance a freshly-created idea: when someone with write access opens a new
+  # Discussion in the Ideas category, the `redispatch` job bridges it to workflow_dispatch (see below)
   # so the analyst refines it in single-idea mode under a supported event.
   discussion:
     types: [created]
@@ -95,30 +95,38 @@ jobs:
   # Mirrors initiative-planner.yml's redispatch (#618). The `ideate` reusable call
   # then runs only on workflow_dispatch/schedule.
   redispatch:
+    # Only a new Idea by someone with write access starts a run. The event's
+    # author_association is not used: it does not mark private org members as
+    # maintainers. The reusable re-checks the author before the model runs.
     if: >-
       github.event_name == 'discussion' &&
       github.event.discussion.category.slug == 'ideas' &&
       github.event.discussion.user.type != 'Bot'
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions: {}
+    # workflow_dispatch and repository_dispatch are the two events the job token
+    # can start runs with, so no personal token is needed here.
+    permissions:
+      actions: write
     steps:
-      - name: Guard — PAT present
-        # A workflow_dispatch fired with GITHUB_TOKEN is accepted but never starts
-        # a run (loop prevention), so a PAT is required (same as initiative-planner).
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT_DON_PETRY || secrets.GH_PAT_WORKFLOWS }}
-        run: |
-          if [ -z "${GH_TOKEN}" ]; then
-            echo "::error::GH_PAT_WORKFLOWS is required — a workflow_dispatch fired with GITHUB_TOKEN will not start a run."
-            exit 1
-          fi
       - name: Re-dispatch under workflow_dispatch
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT_DON_PETRY || secrets.GH_PAT_WORKFLOWS }}
+          GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          AUTHOR: ${{ github.event.discussion.user.login }}
           DISCUSSION_NUMBER: ${{ github.event.discussion.number }}
         run: |
+          permission=none
+          if [[ "${AUTHOR}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
+            permission=$(gh api "repos/${REPO}/collaborators/${AUTHOR}/permission" --jq '.permission')
+          fi
+          case "${permission}" in
+            admin | write) ;;
+            *)
+              echo "::notice title=Feature ideation::Discussion ${DISCUSSION_NUMBER} not enhanced: author does not have write access."
+              exit 0
+              ;;
+          esac
           gh workflow run feature-ideation.yml --repo "${REPO}" \
             -f target_discussion="${DISCUSSION_NUMBER}"
 
