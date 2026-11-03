@@ -1288,10 +1288,10 @@ const MANUAL_PAYMENT_SNIPPET_TERMS_ =
   'autopay is disabled|autopay is off|autopay is not enabled|auto-pay is off|not enrolled in autopay|please pay|pay by|pay now|payment is due|amount due|balance due|payment due|payment request|money request|sent you an invoice|sent you a money request|to avoid interruption|to avoid a late fee|to avoid late fees|manual payment'
 
 const CAREER_SUBJECT_TERMS_ =
-  'employment agreement|employment contract|offer letter|job offer|employment offer|terms of employment|independent contractor agreement|restrictive covenant|confidentiality agreement|interview confirmation|interview invitation|invitation to interview|interview with |schedule an interview|recruiter screen|phone screen|interview schedule|schedule your interview|interview availability|next round of interview|next round of interviews|round 2 interview|interview debrief|next steps in the interview|update on your candidacy|update on your application|your application for|application status:'
+  'employment agreement|employment contract|offer letter|job offer|employment offer|terms of employment|independent contractor agreement|restrictive covenant|confidentiality agreement|interview confirmation|interview invitation|invitation to interview|interview with |schedule an interview|recruiter screen|phone screen|interview schedule|schedule your interview|interview availability|next round of interview|next round of interviews|round 1 interview|round 2 interview|round 3 interview|final round interview|panel interview|leadership interview|interview follow up|interview follow-up|interview debrief|next steps in the interview|connecting on |opportunities at |introductory phone call|introductory call|time to connect regarding|update on your candidacy|update on your application|your application for|application status:'
 
 const CAREER_SNIPPET_TERMS_ =
-  'employment agreement|offer of employment|terms of employment|pleased to offer you the position|pleased to offer you|pleased to confirm our offer|congratulations on your offer|employment document|restrictive covenants agreement|interview schedule|schedule your interview|schedule an interview|interview availability|next round of interview|next round of interviews|next steps in the interview|interview with our team|speak with our team|discuss the role|candidacy for the position|your application for the position|invitation to interview'
+  'employment agreement|offer of employment|terms of employment|pleased to offer you the position|pleased to offer you|pleased to confirm our offer|congratulations on your offer|employment document|restrictive covenants agreement|interview schedule|schedule your interview|schedule an interview|interview availability|next round of interview|next round of interviews|next steps in the interview|interview with our team|speak with our team|discuss the role|candidacy for the position|your application for the position|invitation to interview|talent acquisition|reaching out regarding your application|reaching out regarding your resume|regarding your resume and application|introductory phone call|introductory call|schedule a next step interview|scheduling a next step interview|discuss opportunities at|discuss the opportunity'
 
 const DOCUMENT_SIGNATURE_COMPLETED_TERMS_ =
   'completed: docusign|docusign: completed|has completed signing|all parties have signed|document is completed|signed copy'
@@ -1499,7 +1499,8 @@ const DETERMINISTIC_RULE_SPECS_ = [
   'sender+sub::homedepot.com::::::order|receipt|picked up|ready for pickup::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Home Depot store receipt or order pickup confirmation.',
   'sender+sub::target.com|costco.com|bestbuy.com|walmart.com::::::order|receipt|ready for pickup|picked up|shipped|delivered::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Retail store order confirmation, receipt, or pickup notice.',
   'sender+sub::ereceiptshell.com|autozone.com|advanceautoparts.com|rockauto.com|discounttire.com|tirerack.com::::shell e-receipt::receipt|purchase|order|fuel|tire|tires|appointment::::03_Vehicles::Vehicles/Maintenance::Updates::archive::0.99::Vehicle Fuel/Maintenance Receipt::Automated vehicle fuel purchase receipt or parts order confirmation routed to Vehicles/Maintenance.',
-  'sender+sub::evite.com|paperlesspost.com|punchbowl.com|partiful.com::::::sale|deal|discount|% off|promo|templates|browse|ideas|invitation designs|holiday collection|cards collection::::::::Promotions::archive::0.98::Event Platform Promo::Event platform promotional marketing or card template sale routed to Promotions.',
+  'sender+sub::evite.com|paperlesspost.com|punchbowl.com|partiful.com|eventbrite.com::::::sale|deal|discount|% off|promo|templates|browse|ideas|invitation designs|holiday collection|cards collection|trending events|popular events|events near you|events in |recommended for you|events you may like|top picks for you|discover events|things to do::::::::Promotions::archive::0.98::Event Platform Promo::Event platform promotional marketing or card template sale routed to Promotions.',
+  "sender+sub::eventbrite.com::::::your tickets for|order confirmation for|you're going to|you are going to|registration confirmation|ticket confirmation|tickets for your upcoming::::01_Household::Household/General::Updates::archive::0.99::Event Registration / Tickets::Event ticket or registration confirmation notice routed to Updates.",
   'any::nytimes.com|nextdoor.com|substack.com|redditmail.com|daily.therundown.ai|therundown.ai|mail.instagram.com|instagram.com|facebookmail.com|linkedin.com|pinterest.com|quora.com|youtube.com|twitter.com|x.com::::the passion translation|aibreakfast::::sent you a message|sent you an inmail|new message|messaged you|replied to your|direct message|inmail|security|verify|verification|password|login|sign-in|action required|urgent::::::Social::archive::0.98::News/Newsletter/Social::Routine media newsletter, Substack digest, social media alert, or political appeal.',
 ]
 
@@ -1820,10 +1821,10 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     )
   }
 
-  // 01_Household: Event Invitation & RSVP Shield (Evite, Paperless Post, Punchbowl, Partiful)
+  // 01_Household: Event Invitation & RSVP Shield (Evite, Paperless Post, Punchbowl, Partiful, Eventbrite)
   const isEventPlatformSender = matchesSenderDomain_(
     sender,
-    'evite.com|paperlesspost.com|punchbowl.com|partiful.com'
+    'evite.com|paperlesspost.com|punchbowl.com|partiful.com|eventbrite.com'
   )
   const isInvitationOrRsvp =
     containsAny_(subLower, EVENT_INVITATION_TERMS_) ||
