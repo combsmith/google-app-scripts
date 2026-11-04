@@ -1144,10 +1144,22 @@ function extractSenderAddress_(sender) {
   return ''
 }
 
+/**
+ * Checks if a character is an ASCII lowercase letter.
+ *
+ * @param {string} ch - Single character to test
+ * @returns {boolean} True if ch is in [a-z]
+ */
 function isAsciiLetter_(ch) {
   return ch >= 'a' && ch <= 'z'
 }
 
+/**
+ * Checks if a character is valid in a domain name (letter, digit, dot, or hyphen).
+ *
+ * @param {string} ch - Single character to test
+ * @returns {boolean} True if ch is [a-z0-9.-]
+ */
 function isDomainChar_(ch) {
   return (
     isAsciiLetter_(ch) || (ch >= '0' && ch <= '9') || ch === '.' || ch === '-'
