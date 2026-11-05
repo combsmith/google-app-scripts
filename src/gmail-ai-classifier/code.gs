@@ -1136,8 +1136,72 @@ function extractSenderAddress_(sender) {
     .toLowerCase()
   const angleMatch = /<([^<>@\s]+@[^<>@\s]+)>/.exec(raw)
   if (angleMatch) return angleMatch[1]
-  const plainMatch = /([^\s<>,"']+@[a-z0-9.-]+\.[a-z]{2,})/i.exec(raw)
-  return plainMatch ? plainMatch[1].toLowerCase() : ''
+  const tokens = raw.split(/[\s<>,"']+/)
+  for (let i = 0; i < tokens.length; i++) {
+    const found = findPlainEmailInToken_(tokens[i])
+    if (found) return found
+  }
+  return ''
+}
+
+/**
+ * Checks if a character is an ASCII lowercase letter.
+ *
+ * @param {string} ch - Single character to test
+ * @returns {boolean} True if ch is in [a-z]
+ */
+function isAsciiLetter_(ch) {
+  return ch >= 'a' && ch <= 'z'
+}
+
+/**
+ * Checks if a character is valid in a domain name (letter, digit, dot, or hyphen).
+ *
+ * @param {string} ch - Single character to test
+ * @returns {boolean} True if ch is [a-z0-9.-]
+ */
+function isDomainChar_(ch) {
+  return (
+    isAsciiLetter_(ch) || (ch >= '0' && ch <= '9') || ch === '.' || ch === '-'
+  )
+}
+
+/**
+ * Returns the end index of the longest `[a-z0-9.-]+\.[a-z]{2,}` match
+ * anchored at `start`, or -1 if none. Linear-time replacement for the regex.
+ */
+function plainDomainMatchEnd_(token, start) {
+  let domainEnd = start
+  while (domainEnd < token.length && isDomainChar_(token[domainEnd]))
+    domainEnd++
+  for (let dot = domainEnd - 1; dot > start; dot--) {
+    if (
+      token[dot] === '.' &&
+      isAsciiLetter_(token[dot + 1]) &&
+      isAsciiLetter_(token[dot + 2])
+    ) {
+      let end = dot + 1
+      while (end < domainEnd && isAsciiLetter_(token[end])) end++
+      return end
+    }
+  }
+  return -1
+}
+
+/**
+ * Finds the leftmost-longest `local@domain.tld` prefix of a delimiter-free
+ * token (same semantics as the former greedy regex, without backtracking).
+ */
+function findPlainEmailInToken_(token) {
+  for (
+    let at = token.lastIndexOf('@');
+    at > 0;
+    at = token.lastIndexOf('@', at - 1)
+  ) {
+    const end = plainDomainMatchEnd_(token, at + 1)
+    if (end !== -1) return token.slice(0, end)
+  }
+  return ''
 }
 
 /**
@@ -7307,5 +7371,6 @@ if (typeof module !== 'undefined' && module.exports) {
     isTriggerEventObject_,
     resolveEffectiveConfig_,
     sortThreadsByLastMessageDate_,
+    extractSenderAddress_,
   }
 }
