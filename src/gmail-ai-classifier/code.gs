@@ -1374,6 +1374,12 @@ const DOCUMENT_SIGNATURE_REQUEST_SNIPPET_TERMS_ =
 const TAX_AUTHORITY_SUBJECT_TERMS_ =
   'notice from the alabama department of revenue|alabama department of revenue|my alabama taxes|department of revenue|state tax notice|irs notice|tax correspondence|notice of deficiency|notice of assessment|tax assessment|cp2000|cp504|1099-g notice'
 
+const WEALTH_ADVISORY_SUBJECT_TERMS_ =
+  'donor-advised|donor advised|fidelity charitable|appreciated shares|stock gift|in-kind stock|backdoor roth|roth ira|ira contribution|brokerage statement|holding report|gain/loss report|unrealized gain|tax-loss harvesting|personal strategy|financial strategy|wealth management'
+
+const WEALTH_ADVISORY_SNIPPET_TERMS_ =
+  'donor-advised|donor advised|fidelity charitable|pershing|unrealized gain|appreciated shares|holding report|backdoor roth|roth ira|personal strategy|wealth management|financial advisor|shares to give|in-kind contribution'
+
 const EVENT_INVITATION_TERMS_ =
   "you're invited|you are invited|invitation to|invitation:|invited you to|join us for|rsvp to|please rsvp|rsvp by|your invitation|has rsvp'd|has rsvpd|rsvpd|rsvp update|rsvp confirmation|will attend|attending|guest list update|responded to your invitation|new message on invitation|cannot attend|declined invitation|accepted invitation|view invitation|view your invitation"
 
@@ -1886,6 +1892,50 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
         subject,
         'Official government tax authority correspondence or filing notice preserved in Primary Inbox.',
         'Tax Authority Correspondence Shield'
+      )
+    )
+  }
+
+  // 02_Finance_Legal: Wealth Management & Investment Advisory Shield (Empower, Fidelity, Vanguard, Schwab, Pershing)
+  const isWealthMgmtSender = matchesSenderDomain_(
+    sender,
+    'empower.com|fidelity.com|vanguard.com|schwab.com|pershing.com|morganstanley.com|merrilledge.com'
+  )
+  const isWealthAdvisorySubject = containsAny_(
+    subLower,
+    WEALTH_ADVISORY_SUBJECT_TERMS_
+  )
+  const isWealthAdvisorySnippet = containsAny_(
+    snipLower,
+    WEALTH_ADVISORY_SNIPPET_TERMS_
+  )
+  const isWealthBroadcast = containsAny_(
+    subLower,
+    'market recap|weekly market|daily market|market update|market insights|webinar|newsletter'
+  )
+
+  if (
+    isWealthMgmtSender &&
+    (isWealthAdvisorySubject || isWealthAdvisorySnippet) &&
+    !isWealthBroadcast
+  ) {
+    const isDonationOrGift = containsAny_(
+      subLower + ' ' + snipLower,
+      'charitable|donor-advised|donor advised|appreciated shares|stock gift'
+    )
+    const subLabel = isDonationOrGift
+      ? 'Finance/Charitable-Donations'
+      : 'Finance/Banking'
+    return applyUserSentShield_(
+      makeDeterministicResult_(
+        '02_Finance_Legal',
+        subLabel,
+        'Primary',
+        'keep',
+        1.0,
+        subject,
+        'Direct wealth management or investment advisory communication preserved in Primary Inbox.',
+        'Wealth Management Advisory Shield'
       )
     )
   }
