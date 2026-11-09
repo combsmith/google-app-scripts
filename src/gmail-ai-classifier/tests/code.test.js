@@ -4492,6 +4492,61 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             expect(res.action).toBe('keep')
             expect(res.confidence).toBe(1.0)
           })
+
+          test('classifies stock gift to donor-advised fund from wealth management into 02_Finance_Legal Finance/Charitable-Donations Primary keep', () => {
+            const res = mod.deterministicRuleClassify_(
+              'grace.smith@empower.com',
+              'Re: Donating appreciated shares to Fidelity Charitable',
+              'Here is the unrealized gain/loss report and account statement for the stock gift to your donor advised fund.'
+            )
+            expect(res).not.toBeNull()
+            expect(res.canonicalDomain).toBe('02_Finance_Legal')
+            expect(res.subLabel).toBe('Finance/Charitable-Donations')
+            expect(res.category).toBe('Primary')
+            expect(res.action).toBe('keep')
+            expect(res.confidence).toBe(1.0)
+          })
+
+          test('classifies backdoor roth / investment strategy from wealth management into 02_Finance_Legal Finance/Banking Primary keep', () => {
+            const res = mod.deterministicRuleClassify_(
+              'shane.conway@empower.com',
+              'RE: Backdoor Roth IRA?',
+              'Attached is the personal strategy team overview regarding your annual Roth IRA contribution and investment strategy.'
+            )
+            expect(res).not.toBeNull()
+            expect(res.canonicalDomain).toBe('02_Finance_Legal')
+            expect(res.subLabel).toBe('Finance/Banking')
+            expect(res.category).toBe('Primary')
+            expect(res.action).toBe('keep')
+            expect(res.confidence).toBe(1.0)
+          })
+
+          test('does not classify general market recap from wealth management into advisory shield', () => {
+            const res = mod.deterministicRuleClassify_(
+              'news@empower.com',
+              'Weekly Market Insights & Economic Outlook',
+              'Join our quarterly webinar to discuss the market update and economic trends.'
+            )
+            expect(res).toBeNull()
+          })
+
+          test('excludes broadcast subject even when advisory term is present', () => {
+            const res = mod.deterministicRuleClassify_(
+              'news@empower.com',
+              'Weekly Market Update',
+              'Learn about the backdoor roth strategy in our webinar.'
+            )
+            expect(res).toBeNull()
+          })
+
+          test('excludes broadcast snippet even when subject has no broadcast term', () => {
+            const res = mod.deterministicRuleClassify_(
+              'news@empower.com',
+              'Your wealth management invitation',
+              'Join our wealth management webinar this week.'
+            )
+            expect(res).toBeNull()
+          })
         })
       })
     })
