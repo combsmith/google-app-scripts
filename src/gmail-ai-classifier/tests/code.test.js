@@ -4529,6 +4529,24 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             )
             expect(res).toBeNull()
           })
+
+          test('excludes broadcast subject even when advisory term is present', () => {
+            const res = mod.deterministicRuleClassify_(
+              'news@empower.com',
+              'Weekly Market Update',
+              'Learn about the backdoor roth strategy in our webinar.'
+            )
+            expect(res).toBeNull()
+          })
+
+          test('excludes broadcast snippet even when subject has no broadcast term', () => {
+            const res = mod.deterministicRuleClassify_(
+              'news@empower.com',
+              'Your wealth management invitation',
+              'Join our wealth management webinar this week.'
+            )
+            expect(res).toBeNull()
+          })
         })
       })
     })

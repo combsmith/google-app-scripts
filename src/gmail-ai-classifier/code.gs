@@ -1910,7 +1910,7 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     WEALTH_ADVISORY_SNIPPET_TERMS_
   )
   const isWealthBroadcast = containsAny_(
-    subLower,
+    subLower + ' ' + snipLower,
     'market recap|weekly market|daily market|market update|market insights|webinar|newsletter'
   )
 
