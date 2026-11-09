@@ -99,6 +99,10 @@ jobs:
       - name: Export auto-fixes as patch
         id: patch
         run: |
+          if git diff --cached --name-only -z | tr '\0' '\n' | grep -Eiq '^(\./)?\.github/workflows/'; then
+            echo "::error::workflow files are already staged; refusing to proceed."
+            exit 1
+          fi
           git add -u -- . ':(exclude).github/workflows'
           git diff --cached --binary > "${RUNNER_TEMP}/autofix.patch"
           git checkout -- .
