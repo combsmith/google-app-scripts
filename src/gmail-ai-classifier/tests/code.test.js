@@ -6573,6 +6573,65 @@ describe('PR #649 owner review regressions', () => {
           ).reasoning
         ).toBe('Teacher 1:1 Shield')
       })
+
+      test('classifies developer platform subscription and payment receipts into Finance/Purchases', () => {
+        const githubReceipt = mod.deterministicRuleClassify_(
+          'GitHub <noreply@github.com>',
+          '[GitHub] Payment Receipt for combsmith',
+          'Your payment receipt for subscription'
+        )
+        expect(githubReceipt).toEqual(
+          expect.objectContaining({
+            canonical_label: '02_Finance_Legal',
+            category: 'Updates',
+            action: 'archive',
+            reasoning: 'Developer Platform Payment Receipt',
+          })
+        )
+
+        const stripeReceipt = mod.deterministicRuleClassify_(
+          'Stripe <receipts@stripe.com>',
+          'Your receipt from OpenAI #1234',
+          'Amount paid: $20.00'
+        )
+        expect(stripeReceipt).toEqual(
+          expect.objectContaining({
+            canonical_label: '02_Finance_Legal',
+            category: 'Updates',
+            action: 'archive',
+            reasoning: 'Developer Platform Payment Receipt',
+          })
+        )
+
+        const cloudflareReceipt = mod.deterministicRuleClassify_(
+          'Cloudflare <billing@cloudflare.com>',
+          'Your receipt for Cloudflare Workers Paid',
+          'Thank you for your payment'
+        )
+        expect(cloudflareReceipt).toEqual(
+          expect.objectContaining({
+            canonical_label: '02_Finance_Legal',
+            category: 'Updates',
+            action: 'archive',
+            reasoning: 'Developer Platform Payment Receipt',
+          })
+        )
+
+        // Non-receipt alerts still route to Tech/Alerts
+        const githubAlert = mod.deterministicRuleClassify_(
+          'GitHub <notifications@github.com>',
+          '[combsmith/software-factory] Run failed: factory',
+          'Workflow failed'
+        )
+        expect(githubAlert).toEqual(
+          expect.objectContaining({
+            canonical_label: '05_Tech_Infrastructure',
+            category: 'Updates',
+            action: 'archive',
+            reasoning: 'GitHub Alert',
+          })
+        )
+      })
     })
   })
 })
