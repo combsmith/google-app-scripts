@@ -3987,11 +3987,14 @@ function getMessageAttachments_(msg) {
       // Check for inline documents/receipts (e.g. PDFs or spreadsheets with inline disposition)
       const all = msg.getAttachments() || []
       if (all.length > nonInline.length) {
-        const seenNames = new Set(
-          nonInline.map((a) =>
-            typeof a.getName === 'function' ? a.getName() : a.name || ''
-          )
-        )
+        // Multiset of names already returned as regular attachments. Same-name
+        // inline documents are distinct attachments, so each regular entry
+        // only "consumes" one matching entry from the full list.
+        const remaining = new Map()
+        nonInline.forEach((a) => {
+          const n = typeof a.getName === 'function' ? a.getName() : a.name || ''
+          remaining.set(n, (remaining.get(n) || 0) + 1)
+        })
         const DOCUMENT_EXTENSIONS = new Set([
           'pdf',
           'docx',
@@ -4016,9 +4019,13 @@ function getMessageAttachments_(msg) {
             typeof a.getName === 'function' ? a.getName() : a.name || ''
           const dot = name.lastIndexOf('.')
           const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
-          if (name && !seenNames.has(name) && DOCUMENT_EXTENSIONS.has(ext)) {
+          const left = remaining.get(name) || 0
+          if (left > 0) {
+            remaining.set(name, left - 1)
+            continue
+          }
+          if (name && DOCUMENT_EXTENSIONS.has(ext)) {
             nonInline.push(a)
-            seenNames.add(name)
           }
         }
       }
