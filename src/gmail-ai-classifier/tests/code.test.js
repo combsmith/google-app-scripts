@@ -6631,6 +6631,52 @@ describe('PR #649 owner review regressions', () => {
             reasoning: 'GitHub Alert',
           })
         )
+
+        // AI & developer platform product updates and release notes
+        const claudeCodeUpdate = mod.deterministicRuleClassify_(
+          'Lydia from Claude Code <no-reply@email.claude.com>',
+          'What’s new in Claude Code: Fable 5.2, easier cloud setup, and more',
+          "Plus: free up disk space, fix what's using your plan, and ultrathink is back"
+        )
+        expect(claudeCodeUpdate).toEqual(
+          expect.objectContaining({
+            canonical_label: '05_Tech_Infrastructure',
+            subLabel: 'Tech/Alerts',
+            category: 'Updates',
+            action: 'archive',
+            reasoning: 'AI Platform Product Update',
+          })
+        )
+
+        const anthropicUpdate = mod.deterministicRuleClassify_(
+          'Anthropic <updates@anthropic.com>',
+          'Introducing Claude 3.5 Sonnet',
+          'We are excited to share our latest model updates'
+        )
+        expect(anthropicUpdate).toEqual(
+          expect.objectContaining({
+            canonical_label: '05_Tech_Infrastructure',
+            subLabel: 'Tech/Alerts',
+            category: 'Updates',
+            action: 'archive',
+            reasoning: 'AI Platform Product Update',
+          })
+        )
+
+        const openaiUpdate = mod.deterministicRuleClassify_(
+          'OpenAI <news@openai.com>',
+          "What's new in ChatGPT",
+          'Explore the newest features and improvements'
+        )
+        expect(openaiUpdate).toEqual(
+          expect.objectContaining({
+            canonical_label: '05_Tech_Infrastructure',
+            subLabel: 'Tech/Alerts',
+            category: 'Updates',
+            action: 'archive',
+            reasoning: 'AI Platform Product Update',
+          })
+        )
       })
     })
   })
