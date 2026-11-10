@@ -1574,6 +1574,7 @@ const DETERMINISTIC_RULE_SPECS_ = [
   'sender+sub::homedepot.com::::::order|receipt|picked up|ready for pickup::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Home Depot store receipt or order pickup confirmation.',
   'sender+sub::target.com|costco.com|bestbuy.com|walmart.com::::::order|receipt|ready for pickup|picked up|shipped|delivered::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Retail store order confirmation, receipt, or pickup notice.',
   'sender+sub::github.com|stripe.com|cloudflare.com|digitalocean.com|anthropic.com|openai.com::::::payment receipt|payment received|billing receipt|subscription receipt|receipt for|your receipt::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Developer Platform Payment Receipt::Developer platform or cloud service subscription payment receipt routed to Finance/Purchases.',
+  "sender+sub::email.claude.com|claude.ai|anthropic.com|openai.com::::::what’s new|whats new|what's new|release notes|introducing|new in claude|changelog|product update::security|verify|verification|password|login|sign-in|invoice|receipt|billing|payment::05_Tech_Infrastructure::Tech/Alerts::Updates::archive::0.98::AI Platform Product Update::AI platform product release notes, changelog, or feature announcement routed to Tech/Alerts.",
   'sender+sub::ereceiptshell.com|autozone.com|advanceautoparts.com|rockauto.com|discounttire.com|tirerack.com::::shell e-receipt::receipt|purchase|order|fuel|tire|tires|appointment::::03_Vehicles::Vehicles/Maintenance::Updates::archive::0.99::Vehicle Fuel/Maintenance Receipt::Automated vehicle fuel purchase receipt or parts order confirmation routed to Vehicles/Maintenance.',
   'sender+sub::evite.com|paperlesspost.com|punchbowl.com|partiful.com|eventbrite.com::::::sale|deal|discount|% off|promo|templates|browse|ideas|invitation designs|holiday collection|cards collection|trending events|popular events|events near you|events in |recommended for you|events you may like|top picks for you|discover events|things to do::::::::Promotions::archive::0.98::Event Platform Promo::Event platform promotional marketing or card template sale routed to Promotions.',
   "sender+sub::eventbrite.com::::::your tickets for|order confirmation for|you're going to|you are going to|registration confirmation|ticket confirmation|tickets for your upcoming::::01_Household::Household/General::Updates::archive::0.99::Event Registration / Tickets::Event ticket or registration confirmation notice routed to Updates.",
@@ -3979,12 +3980,57 @@ function getMessageAttachments_(msg) {
   if (!msg) return []
   if (typeof msg.getAttachments === 'function') {
     try {
-      return (
+      const nonInline =
         msg.getAttachments({
           includeInlineImages: false,
           includeAttachments: true,
         }) || []
-      )
+      // Check for inline documents/receipts (e.g. PDFs or spreadsheets with inline disposition)
+      const all = msg.getAttachments() || []
+      if (all.length > nonInline.length) {
+        // Multiset of names already returned as regular attachments. Same-name
+        // inline documents are distinct attachments, so each regular entry
+        // only "consumes" one matching entry from the full list.
+        const remaining = new Map()
+        nonInline.forEach((a) => {
+          const n = typeof a.getName === 'function' ? a.getName() : a.name || ''
+          remaining.set(n, (remaining.get(n) || 0) + 1)
+        })
+        const DOCUMENT_EXTENSIONS = new Set([
+          'pdf',
+          'docx',
+          'doc',
+          'rtf',
+          'odt',
+          'pages',
+          'xlsx',
+          'xls',
+          'csv',
+          'tsv',
+          'ods',
+          'numbers',
+          'pptx',
+          'ppt',
+          'key',
+          'zip',
+        ])
+        for (let i = 0; i < all.length; i++) {
+          const a = all[i]
+          const name =
+            typeof a.getName === 'function' ? a.getName() : a.name || ''
+          const dot = name.lastIndexOf('.')
+          const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
+          const left = remaining.get(name) || 0
+          if (left > 0) {
+            remaining.set(name, left - 1)
+            continue
+          }
+          if (name && DOCUMENT_EXTENSIONS.has(ext)) {
+            nonInline.push(a)
+          }
+        }
+      }
+      return nonInline
     } catch {
       return msg.getAttachments() || []
     }
