@@ -3974,12 +3974,57 @@ function getMessageAttachments_(msg) {
   if (!msg) return []
   if (typeof msg.getAttachments === 'function') {
     try {
-      return (
+      const nonInline =
         msg.getAttachments({
           includeInlineImages: false,
           includeAttachments: true,
         }) || []
-      )
+      // Check for inline documents/receipts (e.g. PDFs or spreadsheets with inline disposition)
+      const all = msg.getAttachments() || []
+      if (all.length > nonInline.length) {
+        // Multiset of names already returned as regular attachments. Same-name
+        // inline documents are distinct attachments, so each regular entry
+        // only "consumes" one matching entry from the full list.
+        const remaining = new Map()
+        nonInline.forEach((a) => {
+          const n = typeof a.getName === 'function' ? a.getName() : a.name || ''
+          remaining.set(n, (remaining.get(n) || 0) + 1)
+        })
+        const DOCUMENT_EXTENSIONS = new Set([
+          'pdf',
+          'docx',
+          'doc',
+          'rtf',
+          'odt',
+          'pages',
+          'xlsx',
+          'xls',
+          'csv',
+          'tsv',
+          'ods',
+          'numbers',
+          'pptx',
+          'ppt',
+          'key',
+          'zip',
+        ])
+        for (let i = 0; i < all.length; i++) {
+          const a = all[i]
+          const name =
+            typeof a.getName === 'function' ? a.getName() : a.name || ''
+          const dot = name.lastIndexOf('.')
+          const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
+          const left = remaining.get(name) || 0
+          if (left > 0) {
+            remaining.set(name, left - 1)
+            continue
+          }
+          if (name && DOCUMENT_EXTENSIONS.has(ext)) {
+            nonInline.push(a)
+          }
+        }
+      }
+      return nonInline
     } catch {
       return msg.getAttachments() || []
     }
