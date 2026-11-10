@@ -474,6 +474,45 @@ describe('Drive Attachment Persistence along Taxonomy Path', () => {
       expect(atts).toHaveLength(1)
       expect(atts[0].name).toBe('real_doc.pdf')
     })
+
+    test('getMessageAttachments_ captures canonical documents with inline disposition while filtering inline images', () => {
+      const mockMsg = {
+        getAttachments: jest.fn((options) => {
+          if (options && options.includeInlineImages === false) {
+            return []
+          }
+          return [
+            { name: 'Receipt-5095320920.pdf' },
+            { name: 'inline_document.html' },
+            { name: 'inline_logo.png' },
+            { name: 'footer_badge.gif' },
+          ]
+        }),
+      }
+
+      const atts = getMessageAttachments_(mockMsg)
+      expect(mockMsg.getAttachments).toHaveBeenCalledWith({
+        includeInlineImages: false,
+        includeAttachments: true,
+      })
+      expect(atts).toHaveLength(1)
+      expect(atts[0].name).toBe('Receipt-5095320920.pdf')
+    })
+
+    test('getMessageAttachments_ keeps same-name inline documents distinct from regular attachments', () => {
+      const regular = { name: 'invoice.pdf' }
+      const inlineA = { name: 'invoice.pdf' }
+      const inlineB = { name: 'invoice.pdf' }
+      const mockMsg = {
+        getAttachments: jest.fn((options) =>
+          options && options.includeInlineImages === false
+            ? [regular]
+            : [regular, inlineA, inlineB]
+        ),
+      }
+      const atts = getMessageAttachments_(mockMsg)
+      expect(atts).toHaveLength(3)
+    })
   })
 
   describe('ensureDriveTaxonomyFolder', () => {
