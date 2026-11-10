@@ -474,6 +474,29 @@ describe('Drive Attachment Persistence along Taxonomy Path', () => {
       expect(atts).toHaveLength(1)
       expect(atts[0].name).toBe('real_doc.pdf')
     })
+
+    test('getMessageAttachments_ captures canonical documents with inline disposition while filtering inline images', () => {
+      const mockMsg = {
+        getAttachments: jest.fn((options) => {
+          if (options && options.includeInlineImages === false) {
+            return []
+          }
+          return [
+            { name: 'Receipt-5095320920.pdf' },
+            { name: 'inline_logo.png' },
+            { name: 'footer_badge.gif' },
+          ]
+        }),
+      }
+
+      const atts = getMessageAttachments_(mockMsg)
+      expect(mockMsg.getAttachments).toHaveBeenCalledWith({
+        includeInlineImages: false,
+        includeAttachments: true,
+      })
+      expect(atts).toHaveLength(1)
+      expect(atts[0].name).toBe('Receipt-5095320920.pdf')
+    })
   })
 
   describe('ensureDriveTaxonomyFolder', () => {

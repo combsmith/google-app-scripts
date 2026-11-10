@@ -3974,12 +3974,50 @@ function getMessageAttachments_(msg) {
   if (!msg) return []
   if (typeof msg.getAttachments === 'function') {
     try {
-      return (
+      const nonInline =
         msg.getAttachments({
           includeInlineImages: false,
           includeAttachments: true,
         }) || []
-      )
+      // Check for inline documents/receipts (e.g. PDFs or spreadsheets with inline disposition)
+      const all = msg.getAttachments() || []
+      if (all.length > nonInline.length) {
+        const seenNames = new Set(
+          nonInline.map((a) =>
+            typeof a.getName === 'function' ? a.getName() : a.name || ''
+          )
+        )
+        const DOCUMENT_EXTENSIONS = new Set([
+          'pdf',
+          'docx',
+          'doc',
+          'rtf',
+          'odt',
+          'pages',
+          'xlsx',
+          'xls',
+          'csv',
+          'tsv',
+          'ods',
+          'numbers',
+          'pptx',
+          'ppt',
+          'key',
+          'zip',
+        ])
+        for (let i = 0; i < all.length; i++) {
+          const a = all[i]
+          const name =
+            typeof a.getName === 'function' ? a.getName() : a.name || ''
+          const dot = name.lastIndexOf('.')
+          const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
+          if (name && !seenNames.has(name) && DOCUMENT_EXTENSIONS.has(ext)) {
+            nonInline.push(a)
+            seenNames.add(name)
+          }
+        }
+      }
+      return nonInline
     } catch {
       return msg.getAttachments() || []
     }
