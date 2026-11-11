@@ -21,13 +21,18 @@ const workflowPath = path.join(
 // `jobs:`) up to the next top-level job or end of file.
 function extractJob(workflow, jobId) {
   const lines = workflow.split(/\r?\n/)
-  const start = lines.findIndex((l) => l === `  ${jobId}:`)
+  const keyRe = /^ {2}(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+)):\s*(?:#.*)?$/
+  const start = lines.findIndex((l) => {
+    const m = keyRe.exec(l)
+    return m !== null && (m[1] || m[2] || m[3]) === jobId
+  })
   if (start === -1) {
     throw new Error(`Job "${jobId}" not found in ci.yml`)
   }
   let end = lines.length
   for (let i = start + 1; i < lines.length; i++) {
-    if (/^ {2}[A-Za-z0-9_-]+:\s*$/.test(lines[i]) || /^\S/.test(lines[i])) {
+    // Next job key, or a new top-level YAML key; column-0 comments are ignored.
+    if (keyRe.test(lines[i]) || /^[A-Za-z0-9_-]+:/.test(lines[i])) {
       end = i
       break
     }
@@ -64,7 +69,7 @@ describe('ci.yml secret-scan job (#679)', () => {
   })
 
   it('requests only contents: read', () => {
-    expect(job).toMatch(/permissions:\n\s+contents: read\n/)
+    expect(job).toMatch(/permissions:\s*\n\s+contents:\s*read\b/)
     expect(job).not.toMatch(/security-events:/)
   })
 })
