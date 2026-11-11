@@ -1568,8 +1568,8 @@ const DETERMINISTIC_RULE_SPECS_ = [
   'sender+sub::paypal.com::::::receipt|payment sent|payment received|payment confirmation|payment processed|transaction|you sent|you paid|you received|authorized|usd::request|requested|invoice|bill|due|overdue|past due|action required|action needed|failed|failure|declined|unpaid|dispute|unauthorized|suspicious|late fee|returned payment|insufficient funds::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Payment Receipt::Electronic payment transaction receipt or transfer confirmation.',
   'sender+sub::homedepot.com::::::order|receipt|picked up|ready for pickup::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Home Depot store receipt or order pickup confirmation.',
   'sender+sub::target.com|costco.com|bestbuy.com|walmart.com::::::order|receipt|ready for pickup|picked up|shipped|delivered::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Retail Order / Receipt::Retail store order confirmation, receipt, or pickup notice.',
-  'sender+sub::github.com|stripe.com|cloudflare.com|digitalocean.com|anthropic.com|openai.com::::::payment receipt|payment received|billing receipt|subscription receipt|receipt for|your receipt::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Developer Platform Payment Receipt::Developer platform or cloud service subscription payment receipt routed to Finance/Purchases.',
-  "sender+sub::email.claude.com|claude.ai|anthropic.com|openai.com::::::what’s new|whats new|what's new|release notes|introducing|new in claude|changelog|product update::security|verify|verification|password|login|sign-in|invoice|receipt|billing|payment::05_Tech_Infrastructure::Tech/Alerts::Updates::archive::0.98::AI Platform Product Update::AI platform product release notes, changelog, or feature announcement routed to Tech/Alerts.",
+  'sender+sub::github.com|stripe.com|cloudflare.com|digitalocean.com|anthropic.com|openai.com::::::payment receipt|payment received|billing receipt|subscription receipt|receipt for|your receipt::failed|failure|declined|past due|overdue|action required|action needed|unpaid|dispute|unauthorized|suspicious|late fee|returned payment|insufficient funds::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Developer Platform Payment Receipt::Developer platform or cloud service subscription payment receipt routed to Finance/Purchases.',
+  "sender+sub::email.claude.com|claude.ai|anthropic.com|openai.com::::::what’s new|whats new|what's new|release notes|introducing claude|introducing chatgpt|introducing gpt|introducing o1|introducing canvas|introducing projects|introducing models|introducing feature|introducing new|new in claude|changelog|product update::security|verify|verification|password|login|sign-in|invoice|receipt|billing|payment::05_Tech_Infrastructure::Tech/Alerts::Updates::archive::0.98::AI Platform Product Update::AI platform product release notes, changelog, or feature announcement routed to Tech/Alerts.",
   'sender+sub::ereceiptshell.com|autozone.com|advanceautoparts.com|rockauto.com|discounttire.com|tirerack.com::::shell e-receipt::receipt|purchase|order|fuel|tire|tires|appointment::::03_Vehicles::Vehicles/Maintenance::Updates::archive::0.99::Vehicle Fuel/Maintenance Receipt::Automated vehicle fuel purchase receipt or parts order confirmation routed to Vehicles/Maintenance.',
   'sender+sub::evite.com|paperlesspost.com|punchbowl.com|partiful.com|eventbrite.com::::::sale|deal|discount|% off|promo|templates|browse|ideas|invitation designs|holiday collection|cards collection|trending events|popular events|events near you|events in |recommended for you|events you may like|top picks for you|discover events|things to do::::::::Promotions::archive::0.98::Event Platform Promo::Event platform promotional marketing or card template sale routed to Promotions.',
   "sender+sub::eventbrite.com::::::your tickets for|order confirmation for|you're going to|you are going to|registration confirmation|ticket confirmation|tickets for your upcoming::::01_Household::Household/General::Updates::archive::0.99::Event Registration / Tickets::Event ticket or registration confirmation notice routed to Updates.",
@@ -1579,8 +1579,12 @@ const DETERMINISTIC_RULE_SPECS_ = [
 function evaluateDeterministicRuleSpec_(specStr, ctx, subject) {
   const parts = specStr.split('::')
   const mode = parts[0]
-  const excludeSubject = parts[5]
-  if (excludeSubject && containsAny_(ctx.subLower, excludeSubject)) {
+  const excludeTerms = parts[5]
+  if (
+    excludeTerms &&
+    (containsAny_(ctx.subLower, excludeTerms) ||
+      containsAny_(ctx.snipLower, excludeTerms))
+  ) {
     return null
   }
   // Generic "bill is ready" or payment subjects can hide an outstanding manual
