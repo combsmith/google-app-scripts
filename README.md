@@ -3,11 +3,13 @@
 [![Contributing](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](https://github.com/combsmith/.github/blob/main/CONTRIBUTING.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-![googleappscripts](header.jpg)
+![googleappscripts](docs/assets/header.jpg)
 
 A collection of personal productivity scripts built on Google Apps Script. These tools are designed to automate repetitive tasks across Gmail, Google Drive, and Google Docs, helping you reclaim your time and keep your digital workspace organized.
 
 Open sourced under the MIT License to help others build their own automation workflows.
+
+> **🚀 Deploy in your browser:** [combsmith.github.io/google-app-scripts/deploy/](https://combsmith.github.io/google-app-scripts/deploy/) — sign in with Google, pick a script, and deploy it to your account in a few clicks.
 
 ## 📂 Script Catalog
 
@@ -22,7 +24,7 @@ Open sourced under the MIT License to help others build their own automation wor
 
 Deploy and configure any script directly from your browser — no command line or manual ID-hunting required.
 
-1. **Open the deployment page** — `deploy/index.html` (or the hosted GitHub Pages version if available).
+1. **Open the deployment page** — use the hosted version at [combsmith.github.io/google-app-scripts/deploy/](https://combsmith.github.io/google-app-scripts/deploy/), or open `deploy/index.html` locally.
 2. **Review authentication details** — the deployment page uses a preconfigured OAuth Client ID defined in `deploy/index.html`. If you are using this repository as-is, you do not need to create or enter your own client ID. If you fork this repo and want to use your own, see the GCP setup section below and [deploy/index.html](./deploy/index.html) for details.
 3. **Sign in with Google** — authorise the page to create Apps Script projects and read your Gmail labels, calendars, and Drive resources on your behalf.
 4. **Select a script and click Deploy** — the page fetches the latest source files from this repository, uploads them to your account, and creates a new Apps Script project with an auto-generated name. A direct link to the new project is shown on success.
