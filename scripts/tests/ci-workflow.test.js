@@ -66,6 +66,7 @@ describe('ci.yml secret-scan job (#679)', () => {
   it('runs gitleaks detect over full history and fails on findings', () => {
     expect(job).toMatch(/fetch-depth:\s*0/)
     expect(job).toMatch(/run:\s*gitleaks detect .*--exit-code 1/)
+    expect(job).not.toMatch(/gitleaks detect.*--redact=0/)
   })
 
   it('runs gitleaks with full redaction that cannot be weakened', () => {
