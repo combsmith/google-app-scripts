@@ -1713,7 +1713,14 @@ test.describe('deploy index.html', () => {
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
-          body: JSON.stringify({ files: [] }),
+          body: JSON.stringify({
+            files: [
+              {
+                id: 'existing-gmail-id',
+                name: 'Petry-Projects \u2013 Gmail to Drive By Labels',
+              },
+            ],
+          }),
         })
       }
     )
@@ -1729,11 +1736,9 @@ test.describe('deploy index.html', () => {
     await expect(briefingCheckbox).toBeChecked()
     await expect(page.locator('#btn-deploy')).toBeEnabled()
 
-    const driveCompleted = page.waitForResponse((resp) =>
-      resp.url().includes('drive/v3/files')
-    )
     resolveDriveLookup()
-    await driveCompleted
+    // Observable effect of the Drive-triggered re-render
+    await expect(page.locator('.deploy-badge').first()).toBeVisible()
 
     await expect(briefingCheckbox).toBeChecked()
     await expect(page.locator('#btn-deploy')).toBeEnabled()
@@ -1864,7 +1869,14 @@ test.describe('deploy index.html', () => {
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
-          body: JSON.stringify({ files: [] }),
+          body: JSON.stringify({
+            files: [
+              {
+                id: 'existing-briefing-id',
+                name: 'Petry-Projects \u2013 Calendar to Briefing Doc',
+              },
+            ],
+          }),
         })
       }
     )
@@ -1892,11 +1904,9 @@ test.describe('deploy index.html', () => {
     await expect(page.locator('#btn-deploy')).toBeDisabled()
     await expect(page.locator('#btn-deploy')).toContainText('Deploying')
 
-    const driveCompleted = page.waitForResponse((resp) =>
-      resp.url().includes('drive/v3/files')
-    )
     resolveDriveLookup()
-    await driveCompleted
+    // Observable effect of the Drive-triggered re-render
+    await expect(page.locator('.deploy-badge').first()).toBeVisible()
 
     // Must remain disabled and in-progress while deployment is still running
     await expect(page.locator('#btn-deploy')).toBeDisabled()

@@ -1773,6 +1773,8 @@
 
       // catalogId → { deployedVersion, latestVersion, needsUpdate }
       const scriptVersions = new Map()
+      // Bumped on each upload so older in-flight version lookups are discarded.
+      const versionEpoch = new Map()
 
       /**
        * Searches Google Drive for existing Apps Script projects matching our
@@ -1837,6 +1839,7 @@
        * compares against the catalog version, and updates the UI.
        */
       async function checkProjectVersion(scriptId, catalogId) {
+        const epochAtStart = versionEpoch.get(catalogId) || 0
         try {
           const project = await apiFetch(
             `${APPS_SCRIPT_API}/projects/${scriptId}/content`
@@ -1849,6 +1852,9 @@
           const latestVersion = catalogEntry ? catalogEntry.version : null
           const needsUpdate =
             deployedVersion !== latestVersion && latestVersion != null
+
+          // An upload happened while this lookup was in flight; drop it.
+          if ((versionEpoch.get(catalogId) || 0) !== epochAtStart) return
 
           scriptVersions.set(catalogId, {
             deployedVersion,
@@ -2025,6 +2031,17 @@
           scriptId: projectId,
           title: projectTitle,
         })
+        // The latest source was just uploaded: invalidate any in-flight version
+        // lookup and mark the script as current so stale "Update available"
+        // state is not shown or restored.
+        versionEpoch.set(catalogId, (versionEpoch.get(catalogId) || 0) + 1)
+        const uploadedEntry = SCRIPT_CATALOG.find((c) => c.id === catalogId)
+        const uploadedVersion = uploadedEntry ? uploadedEntry.version : null
+        scriptVersions.set(catalogId, {
+          deployedVersion: uploadedVersion,
+          latestVersion: uploadedVersion,
+          needsUpdate: false,
+        })
         return { scriptId: projectId, title: projectTitle, catalogId }
       }
 
@@ -2125,7 +2142,9 @@
           }
 
           // Refresh Step 2 to show deployment badges and clear completed selections
-          renderScriptList({ resetSelection: true })
+          renderScriptList({
+            uncheckIds: deployedProjects.map((p) => p.catalogId),
+          })
 
           if (deployedProjects.length === 0) {
             showStatus('error', '❌ No scripts were deployed successfully.')
@@ -2153,8 +2172,6 @@
           }
         } finally {
           isDeploying = false
-          btn.disabled = false
-          btn.innerHTML = 'Deploy to my account'
           setDeployEnabled()
         }
       }

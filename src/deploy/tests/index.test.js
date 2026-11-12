@@ -892,4 +892,58 @@ describe('computeDeployButtonState', () => {
     expect(page).toContain('computeDeployButtonState(')
     expect(page).toContain('buildDeployBadgeHtml(')
   })
+
+  test('inline page copies of computeDeployButtonState and buildDeployBadgeHtml match the module (#678)', () => {
+    const page = fs.readFileSync(
+      path.join(__dirname, '..', '..', '..', 'deploy', 'index.html'),
+      'utf8'
+    )
+    // Extract a top-level function body from the inline script by brace matching.
+    const extract = (name) => {
+      const start = page.indexOf(`function ${name}(`)
+      expect(start).toBeGreaterThanOrEqual(0)
+      const open = page.indexOf('{', page.indexOf(')', start))
+      let depth = 0
+      for (let i = open; i < page.length; i++) {
+        if (page[i] === '{') depth++
+        else if (page[i] === '}' && --depth === 0) {
+          return page.slice(start, i + 1)
+        }
+      }
+      throw new Error(`unterminated function ${name}`)
+    }
+    const inline = new Function(
+      `${extract('computeDeployButtonState')}\n${extract('buildDeployBadgeHtml')}\n` +
+        'return { computeDeployButtonState, buildDeployBadgeHtml }'
+    )()
+
+    const stateCases = [
+      undefined,
+      { hasToken: true },
+      { hasToken: true, isDeploying: true, checkedIds: ['a'] },
+      { hasToken: true, checkedIds: ['a'] },
+      { checkedIds: ['a'], deployedIds: ['a'] },
+      { hasToken: true, checkedIds: ['a'], deployedIds: ['a'] },
+      { hasToken: true, checkedIds: ['a', 'b'], deployedIds: ['a'] },
+      {
+        hasToken: true,
+        checkedIds: ['a'],
+        deployedIds: ['a'],
+        needsUpdateIds: ['a'],
+      },
+    ]
+    for (const c of stateCases) {
+      expect(inline.computeDeployButtonState(c)).toEqual(
+        computeDeployButtonState(c)
+      )
+    }
+    for (const [d, u] of [
+      [false, false],
+      [false, true],
+      [true, false],
+      [true, true],
+    ]) {
+      expect(inline.buildDeployBadgeHtml(d, u)).toBe(buildDeployBadgeHtml(d, u))
+    }
+  })
 })
