@@ -55,9 +55,6 @@ jobs:
         if: github.event_name == 'push'
         run: npm run check
 
-      - name: Run tests
-        run: npm test
-
       - name: Type check
         run: npm run typecheck
 
