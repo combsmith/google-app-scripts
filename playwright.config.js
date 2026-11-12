@@ -8,8 +8,11 @@ module.exports = defineConfig({
     headless: true,
     browserName: 'chromium',
   },
-  reporter: [['list']],
-  // Keep Playwright artifacts out of the root directory.
+  reporter: process.env.CI
+    ? [['list'], ['html', { outputFolder: 'playwright-report', open: 'never' }]]
+    : [['list']],
+  // Keep test-result artifacts out of the root directory (the CI-only HTML
+  // reporter intentionally writes ./playwright-report at the repo root).
   outputDir: 'test-results/playwright',
   // Each test should complete well within this limit since all external
   // calls are mocked/intercepted.
