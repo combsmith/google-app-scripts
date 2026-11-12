@@ -2234,4 +2234,121 @@ test.describe('deploy index.html', () => {
       'Re-deploy to my account'
     )
   })
+
+  test('discards stale pre-deploy version lookup that resolves after upload (#678)', async ({
+    page,
+  }) => {
+    let resolveStaleVersionGet = () => {}
+    const staleVersionGate = new Promise((resolve) => {
+      resolveStaleVersionGet = resolve
+    })
+    let notifyVersionGetStarted = () => {}
+    const versionGetStarted = new Promise((resolve) => {
+      notifyVersionGetStarted = resolve
+    })
+
+    await page.route(
+      'https://www.googleapis.com/drive/v3/files**',
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            files: [
+              {
+                id: 'existing-gmail-id',
+                name: 'Petry-Projects \u2013 Gmail to Drive By Labels',
+              },
+            ],
+          }),
+        })
+      }
+    )
+
+    await page.route('https://raw.githubusercontent.com/**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/plain',
+        body: '// @version 9.9.9\nfunction main() {}',
+      })
+    })
+
+    await page.route('https://script.googleapis.com/**', async (route) => {
+      const url = route.request().url()
+      const method = route.request().method()
+      if (method === 'GET' && url.includes('/content')) {
+        notifyVersionGetStarted()
+        await staleVersionGate
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            files: [
+              {
+                name: 'code',
+                type: 'SERVER_JS',
+                source: '// @version 0.0.1\nfunction main() {}',
+              },
+            ],
+          }),
+        })
+      } else if (method === 'GET' && url.includes('/projects/')) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            scriptId: 'existing-gmail-id',
+            title: 'Petry-Projects \u2013 Gmail to Drive By Labels',
+          }),
+        })
+      } else if (method === 'PUT' && url.includes('/content')) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({}),
+        })
+      } else {
+        await route.continue()
+      }
+    })
+
+    await signIn(page)
+    await versionGetStarted
+
+    const gmailCheckbox = page.locator(
+      '#script-list input[value="gmail-to-drive-by-labels"]'
+    )
+    const gmailBadge = page.locator(
+      'label[for="script-gmail-to-drive-by-labels"] .deploy-badge'
+    )
+    await expect(gmailBadge).toHaveText('Deployed')
+
+    // Complete upload while the initial GET /content lookup is still pending
+    await gmailCheckbox.click()
+    await page.locator('#btn-deploy').click()
+    await expect(page.locator('.status-ok')).toContainText('deployed')
+
+    // Release the outdated GET /content response after upload finished
+    const staleVersionResp = page.waitForResponse(
+      (r) =>
+        r.request().method() === 'GET' &&
+        r.url().includes('/content') &&
+        r.status() === 200
+    )
+    resolveStaleVersionGet()
+    await staleVersionResp
+    await page.evaluate(() => new Promise((r) => setTimeout(r, 0)))
+
+    // Stale response must not restore Update available in Step 2 or Step 3
+    await expect(gmailBadge).toHaveText('Deployed')
+    await expect(page.locator('#version-info-existing-gmail-id')).toContainText(
+      '✓'
+    )
+    await expect(page.locator('#btn-update-existing-gmail-id')).toBeHidden()
+
+    await gmailCheckbox.click()
+    await expect(page.locator('#btn-deploy')).toHaveText(
+      'Re-deploy to my account'
+    )
+  })
 })
