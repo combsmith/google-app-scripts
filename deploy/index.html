@@ -2042,6 +2042,19 @@
           latestVersion: uploadedVersion,
           needsUpdate: false,
         })
+        // Existing Step 3 cards are not re-rendered, so refresh the card's
+        // version label and hide its Update button directly.
+        const cardSafeId = escapeHtml(projectId)
+        const cardVersionEl = document.getElementById(
+          'version-info-' + cardSafeId
+        )
+        if (cardVersionEl && uploadedVersion) {
+          cardVersionEl.innerHTML = `<span style="color:#137333;font-size:12px;">v${escapeHtml(uploadedVersion)} ✓</span>`
+        }
+        const cardUpdateBtn = document.getElementById(
+          'btn-update-' + cardSafeId
+        )
+        if (cardUpdateBtn) cardUpdateBtn.style.display = 'none'
         return { scriptId: projectId, title: projectTitle, catalogId }
       }
 
