@@ -1983,6 +1983,27 @@ test.describe('deploy index.html', () => {
       }
     })
 
+    await page.evaluate(() => {
+      const origDrive = window.loadExistingDeployments
+      const origVersion = window.checkProjectVersion
+      window.__driveLookupsDone = 0
+      window.__versionChecksDone = 0
+      window.loadExistingDeployments = async (...args) => {
+        try {
+          return await origDrive(...args)
+        } finally {
+          window.__driveLookupsDone += 1
+        }
+      }
+      window.checkProjectVersion = async (...args) => {
+        try {
+          return await origVersion(...args)
+        } finally {
+          window.__versionChecksDone += 1
+        }
+      }
+    })
+
     // 1. Drive lookup fails with 500 after script selection
     await signIn(page)
     await driveStarted
@@ -1997,12 +2018,8 @@ test.describe('deploy index.html', () => {
     await expect(briefingCheckbox).toBeChecked()
     await expect(page.locator('#btn-deploy')).toBeEnabled()
 
-    const driveFailedResp = page.waitForResponse(
-      (r) => r.url().includes('drive/v3/files') && r.status() === 500
-    )
     resolveDriveLookup()
-    await driveFailedResp
-    await page.evaluate(() => new Promise((r) => setTimeout(r, 0)))
+    await page.waitForFunction(() => window.__driveLookupsDone === 1)
 
     await expect(briefingCheckbox).toBeChecked()
     await expect(page.locator('#btn-deploy')).toBeEnabled()
@@ -2025,12 +2042,8 @@ test.describe('deploy index.html', () => {
       page.locator('label[for="script-gmail-to-drive-by-labels"] .deploy-badge')
     ).toHaveText('Deployed')
 
-    const versionFailedResp = page.waitForResponse(
-      (r) => r.url().includes('/content') && r.status() === 500
-    )
     resolveVersionLookup()
-    await versionFailedResp
-    await page.evaluate(() => new Promise((r) => setTimeout(r, 0)))
+    await page.waitForFunction(() => window.__versionChecksDone === 1)
 
     await expect(briefingCheckbox).toBeChecked()
     await expect(gmailCheckbox).toBeChecked()
@@ -2312,6 +2325,18 @@ test.describe('deploy index.html', () => {
       }
     })
 
+    await page.evaluate(() => {
+      const origVersion = window.checkProjectVersion
+      window.__staleVersionChecksDone = 0
+      window.checkProjectVersion = async (...args) => {
+        try {
+          return await origVersion(...args)
+        } finally {
+          window.__staleVersionChecksDone += 1
+        }
+      }
+    })
+
     await signIn(page)
     await versionGetStarted
 
@@ -2328,16 +2353,10 @@ test.describe('deploy index.html', () => {
     await page.locator('#btn-deploy').click()
     await expect(page.locator('.status-ok')).toContainText('deployed')
 
-    // Release the outdated GET /content response after upload finished
-    const staleVersionResp = page.waitForResponse(
-      (r) =>
-        r.request().method() === 'GET' &&
-        r.url().includes('/content') &&
-        r.status() === 200
-    )
+    // Release the outdated GET /content response and wait for checkProjectVersion
+    // itself to finish parsing the body and running its post-await logic
     resolveStaleVersionGet()
-    await staleVersionResp
-    await page.evaluate(() => new Promise((r) => setTimeout(r, 0)))
+    await page.waitForFunction(() => window.__staleVersionChecksDone === 1)
 
     // Stale response must not restore Update available in Step 2 or Step 3
     await expect(gmailBadge).toHaveText('Deployed')
