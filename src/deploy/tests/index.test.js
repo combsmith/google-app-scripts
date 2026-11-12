@@ -14,6 +14,8 @@ const {
   escapeHtml,
   buildDeploySuccessHtml,
   buildDeployErrorHtml,
+  buildDeployBadgeHtml,
+  computeDeployButtonState,
 } = require('../index')
 
 // ---------------------------------------------------------------------------
@@ -757,5 +759,137 @@ describe('buildDeployErrorHtml', () => {
 describe('APPS_SCRIPT_API_BASE', () => {
   test('points to the correct Google API endpoint', () => {
     expect(APPS_SCRIPT_API_BASE).toBe('https://script.googleapis.com/v1')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// buildDeployBadgeHtml (#678)
+// ---------------------------------------------------------------------------
+
+describe('buildDeployBadgeHtml', () => {
+  test('returns empty string when script is not deployed', () => {
+    expect(buildDeployBadgeHtml(false, false)).toBe('')
+    expect(buildDeployBadgeHtml(false, true)).toBe('')
+  })
+
+  test('returns Deployed badge when deployed and up to date', () => {
+    const html = buildDeployBadgeHtml(true, false)
+    expect(html).toContain('class="deploy-badge"')
+    expect(html).toContain('Deployed')
+    expect(html).not.toContain('Update available')
+  })
+
+  test('returns Update available badge when deployed and outdated', () => {
+    const html = buildDeployBadgeHtml(true, true)
+    expect(html).toContain('class="deploy-badge"')
+    expect(html).toContain('Update available')
+    expect(html).not.toContain('>Deployed<')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// computeDeployButtonState (#678)
+// ---------------------------------------------------------------------------
+
+describe('computeDeployButtonState', () => {
+  test('defaults to disabled with Deploy to my account when called with no args', () => {
+    expect(computeDeployButtonState()).toEqual({
+      disabled: true,
+      label: 'Deploy to my account',
+    })
+  })
+
+  test('keeps button disabled and preserves spinner label (null) while deploying', () => {
+    expect(
+      computeDeployButtonState({
+        hasToken: true,
+        isDeploying: true,
+        checkedIds: ['gmail-to-drive-by-labels'],
+      })
+    ).toEqual({
+      disabled: true,
+      label: null,
+    })
+  })
+
+  test('remains disabled without token even when scripts are checked', () => {
+    expect(
+      computeDeployButtonState({
+        hasToken: false,
+        checkedIds: ['gmail-to-drive-by-labels'],
+      })
+    ).toEqual({
+      disabled: true,
+      label: 'Deploy to my account',
+    })
+  })
+
+  test('remains disabled with token when no scripts are checked', () => {
+    expect(
+      computeDeployButtonState({
+        hasToken: true,
+        checkedIds: [],
+      })
+    ).toEqual({
+      disabled: true,
+      label: 'Deploy to my account',
+    })
+  })
+
+  test('enables with Deploy to my account for an undeployed checked script', () => {
+    expect(
+      computeDeployButtonState({
+        hasToken: true,
+        checkedIds: ['calendar-to-briefing-doc'],
+        deployedIds: ['gmail-to-drive-by-labels'],
+      })
+    ).toEqual({
+      disabled: false,
+      label: 'Deploy to my account',
+    })
+  })
+
+  test('shows Re-deploy to my account when all checked scripts are deployed and current', () => {
+    expect(
+      computeDeployButtonState({
+        hasToken: true,
+        checkedIds: ['gmail-to-drive-by-labels', 'calendar-to-sheets'],
+        deployedIds: new Set([
+          'gmail-to-drive-by-labels',
+          'calendar-to-sheets',
+        ]),
+        needsUpdateIds: [],
+      })
+    ).toEqual({
+      disabled: false,
+      label: 'Re-deploy to my account',
+    })
+  })
+
+  test('shows Update & Deploy to my account when any checked script needs an update', () => {
+    expect(
+      computeDeployButtonState({
+        hasToken: true,
+        checkedIds: ['gmail-to-drive-by-labels', 'calendar-to-briefing-doc'],
+        deployedIds: ['gmail-to-drive-by-labels'],
+        needsUpdateIds: ['gmail-to-drive-by-labels'],
+      })
+    ).toEqual({
+      disabled: false,
+      label: 'Update & Deploy to my account',
+    })
+  })
+
+  test('deploy/index.html updates script badges in place to preserve checked inputs (#678)', () => {
+    const page = fs.readFileSync(
+      path.join(__dirname, '..', '..', '..', 'deploy', 'index.html'),
+      'utf8'
+    )
+
+    expect(page).toContain(
+      'if (!container.querySelector(\'input[name="script"]\'))'
+    )
+    expect(page).toContain('computeDeployButtonState(')
+    expect(page).toContain('buildDeployBadgeHtml(')
   })
 })

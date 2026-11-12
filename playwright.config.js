@@ -8,7 +8,9 @@ module.exports = defineConfig({
     headless: true,
     browserName: 'chromium',
   },
-  reporter: [['list']],
+  reporter: process.env.CI
+    ? [['list'], ['html', { outputFolder: 'playwright-report', open: 'never' }]]
+    : [['list']],
   // Keep Playwright artifacts out of the root directory.
   outputDir: 'test-results/playwright',
   // Each test should complete well within this limit since all external

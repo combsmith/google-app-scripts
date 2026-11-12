@@ -342,6 +342,67 @@ function buildDeployErrorHtml(err) {
   )
 }
 
+/**
+ * Builds the status badge HTML shown next to a script name in Step 2.
+ *
+ * @param {boolean} isDeployed - Whether the script is currently deployed.
+ * @param {boolean} needsUpdate - Whether a newer catalog version is available.
+ * @returns {string} HTML snippet (with leading space) or empty string.
+ */
+function buildDeployBadgeHtml(isDeployed, needsUpdate) {
+  if (!isDeployed) return ''
+  if (needsUpdate) {
+    return ' <span class="deploy-badge" style="display:inline-block;background:#fff8e1;color:#e37400;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;">Update available</span>'
+  }
+  return ' <span class="deploy-badge" style="display:inline-block;background:#e6f4ea;color:#137333;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;">Deployed</span>'
+}
+
+/**
+ * Computes the enabled/disabled state and text label for the Step 2 deploy
+ * button, preserving the in-progress spinner when a deployment is active.
+ *
+ * @param {object} [params]
+ * @param {boolean} [params.hasToken=false] - Whether an OAuth token is present.
+ * @param {boolean} [params.isDeploying=false] - Whether a deployment is running.
+ * @param {Iterable<string>} [params.checkedIds=[]] - Checked catalog IDs.
+ * @param {Iterable<string>} [params.deployedIds=[]] - Deployed catalog IDs.
+ * @param {Iterable<string>} [params.needsUpdateIds=[]] - Outdated catalog IDs.
+ * @returns {{disabled: boolean, label: string|null}}
+ *   `label` is `null` while `isDeploying` is true so callers keep the spinner HTML.
+ */
+function computeDeployButtonState({
+  hasToken = false,
+  isDeploying = false,
+  checkedIds = [],
+  deployedIds = [],
+  needsUpdateIds = [],
+} = {}) {
+  if (isDeploying) {
+    return { disabled: true, label: null }
+  }
+
+  const checkedList = Array.from(checkedIds)
+  const hasScript = checkedList.length > 0
+  const disabled = !(hasToken && hasScript)
+
+  if (!hasScript) {
+    return { disabled, label: 'Deploy to my account' }
+  }
+
+  const deployedSet = new Set(deployedIds)
+  const needsUpdateSet = new Set(needsUpdateIds)
+  const anyNeedsUpdate = checkedList.some((id) => needsUpdateSet.has(id))
+  const allDeployed = checkedList.every((id) => deployedSet.has(id))
+
+  if (anyNeedsUpdate) {
+    return { disabled, label: 'Update & Deploy to my account' }
+  }
+  if (allDeployed) {
+    return { disabled, label: 'Re-deploy to my account' }
+  }
+  return { disabled, label: 'Deploy to my account' }
+}
+
 module.exports = {
   APPS_SCRIPT_API_BASE,
   GMAIL_API_BASE,
@@ -355,4 +416,6 @@ module.exports = {
   escapeHtml,
   buildDeploySuccessHtml,
   buildDeployErrorHtml,
+  buildDeployBadgeHtml,
+  computeDeployButtonState,
 }

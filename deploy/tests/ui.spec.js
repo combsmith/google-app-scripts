@@ -1690,4 +1690,221 @@ test.describe('deploy index.html', () => {
     await page.locator('#btn-deploy').click()
     await expect(page.locator('.status-ok')).toContainText('deployed')
   })
+
+  // ── Background Drive/version lookup concurrency (#678) ────────────────────
+
+  test('preserves checked scripts and keeps deploy button enabled when Drive lookup resolves after selection (#678)', async ({
+    page,
+  }) => {
+    let resolveDriveLookup = () => {}
+    const driveGate = new Promise((resolve) => {
+      resolveDriveLookup = resolve
+    })
+    let notifyDriveRequestStarted = () => {}
+    const driveRequestStarted = new Promise((resolve) => {
+      notifyDriveRequestStarted = resolve
+    })
+
+    await page.route(
+      'https://www.googleapis.com/drive/v3/files**',
+      async (route) => {
+        notifyDriveRequestStarted()
+        await driveGate
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ files: [] }),
+        })
+      }
+    )
+
+    await mockSuccessfulDeploy(page)
+    await signIn(page)
+    await driveRequestStarted
+
+    const briefingCheckbox = page.locator(
+      '#script-list input[value="calendar-to-briefing-doc"]'
+    )
+    await briefingCheckbox.click()
+    await expect(briefingCheckbox).toBeChecked()
+    await expect(page.locator('#btn-deploy')).toBeEnabled()
+
+    const driveCompleted = page.waitForResponse((resp) =>
+      resp.url().includes('drive/v3/files')
+    )
+    resolveDriveLookup()
+    await driveCompleted
+
+    await expect(briefingCheckbox).toBeChecked()
+    await expect(page.locator('#btn-deploy')).toBeEnabled()
+    await page.locator('#btn-deploy').click()
+    await expect(page.locator('.status-ok')).toContainText('deployed')
+  })
+
+  test('updates deploy button label without clearing selection when Drive and version checks finish asynchronously (#678)', async ({
+    page,
+  }) => {
+    let resolveDriveLookup = () => {}
+    const driveGate = new Promise((resolve) => {
+      resolveDriveLookup = resolve
+    })
+    let notifyDriveRequestStarted = () => {}
+    const driveRequestStarted = new Promise((resolve) => {
+      notifyDriveRequestStarted = resolve
+    })
+
+    let resolveVersionLookup = () => {}
+    const versionGate = new Promise((resolve) => {
+      resolveVersionLookup = resolve
+    })
+    let notifyVersionRequestStarted = () => {}
+    const versionRequestStarted = new Promise((resolve) => {
+      notifyVersionRequestStarted = resolve
+    })
+
+    await page.route(
+      'https://www.googleapis.com/drive/v3/files**',
+      async (route) => {
+        notifyDriveRequestStarted()
+        await driveGate
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            files: [
+              {
+                id: 'existing-gmail-id',
+                name: 'Petry-Projects \u2013 Gmail to Drive By Labels',
+              },
+            ],
+          }),
+        })
+      }
+    )
+
+    await page.route('https://script.googleapis.com/**', async (route) => {
+      const url = route.request().url()
+      if (url.includes('/content')) {
+        notifyVersionRequestStarted()
+        await versionGate
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            files: [
+              {
+                name: 'code',
+                type: 'SERVER_JS',
+                source: '// @version 0.9.0\nfunction main() {}',
+              },
+            ],
+          }),
+        })
+      } else {
+        await route.continue()
+      }
+    })
+
+    await signIn(page)
+    await driveRequestStarted
+
+    const gmailCheckbox = page.locator(
+      '#script-list input[value="gmail-to-drive-by-labels"]'
+    )
+    await gmailCheckbox.click()
+    await expect(gmailCheckbox).toBeChecked()
+    await expect(page.locator('#btn-deploy')).toHaveText('Deploy to my account')
+
+    resolveDriveLookup()
+    await versionRequestStarted
+
+    await expect(gmailCheckbox).toBeChecked()
+    await expect(page.locator('#btn-deploy')).toBeEnabled()
+    await expect(page.locator('#btn-deploy')).toHaveText(
+      'Re-deploy to my account'
+    )
+
+    resolveVersionLookup()
+    await expect(
+      page.locator('.deploy-badge:has-text("Update available")')
+    ).toBeVisible()
+    await expect(gmailCheckbox).toBeChecked()
+    await expect(page.locator('#btn-deploy')).toBeEnabled()
+    await expect(page.locator('#btn-deploy')).toHaveText(
+      'Update & Deploy to my account'
+    )
+  })
+
+  test('keeps deploy button disabled with spinner if Drive lookup resolves mid-deploy (#678)', async ({
+    page,
+  }) => {
+    let resolveDriveLookup = () => {}
+    const driveGate = new Promise((resolve) => {
+      resolveDriveLookup = resolve
+    })
+    let notifyDriveRequestStarted = () => {}
+    const driveRequestStarted = new Promise((resolve) => {
+      notifyDriveRequestStarted = resolve
+    })
+
+    let resolveRawFetch = () => {}
+    const rawFetchGate = new Promise((resolve) => {
+      resolveRawFetch = resolve
+    })
+    let notifyRawFetchStarted = () => {}
+    const rawFetchStarted = new Promise((resolve) => {
+      notifyRawFetchStarted = resolve
+    })
+
+    await page.route(
+      'https://www.googleapis.com/drive/v3/files**',
+      async (route) => {
+        notifyDriveRequestStarted()
+        await driveGate
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ files: [] }),
+        })
+      }
+    )
+
+    await mockSuccessfulDeploy(page)
+    await page.route('https://raw.githubusercontent.com/**', async (route) => {
+      notifyRawFetchStarted()
+      await rawFetchGate
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/plain',
+        body: '// @version 1.0.0\nfunction main() {}',
+      })
+    })
+
+    await signIn(page)
+    await driveRequestStarted
+
+    await page
+      .locator('#script-list input[value="gmail-to-drive-by-labels"]')
+      .click()
+    await page.locator('#btn-deploy').click()
+    await rawFetchStarted
+
+    await expect(page.locator('#btn-deploy')).toBeDisabled()
+    await expect(page.locator('#btn-deploy')).toContainText('Deploying')
+
+    const driveCompleted = page.waitForResponse((resp) =>
+      resp.url().includes('drive/v3/files')
+    )
+    resolveDriveLookup()
+    await driveCompleted
+
+    // Must remain disabled and in-progress while deployment is still running
+    await expect(page.locator('#btn-deploy')).toBeDisabled()
+    await expect(page.locator('#btn-deploy')).toContainText('Deploying')
+
+    resolveRawFetch()
+    await expect(page.locator('.status-ok')).toContainText('deployed')
+    await expect(page.locator('#btn-deploy')).toBeDisabled()
+    await expect(page.locator('#btn-deploy')).toHaveText('Deploy to my account')
+  })
 })
