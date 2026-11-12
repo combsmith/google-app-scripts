@@ -576,6 +576,7 @@
 
       let tokenClient = null
       let accessToken = null
+      let isDeploying = false
       let userCalendars = [] // populated after sign-in
       let userEmail = '' // populated after sign-in
       let userGmailLabels = [] // populated after sign-in
@@ -701,33 +702,59 @@
         area.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
       }
 
-      function setDeployEnabled() {
-        const hasToken = !!accessToken
-        const checked = Array.from(
-          document.querySelectorAll('input[name="script"]:checked')
-        )
-        const hasScript = checked.length > 0
-        const btn = document.getElementById('btn-deploy')
-        btn.disabled = !(hasToken && hasScript)
+      // Tested in src/deploy/tests/index.test.js (computeDeployButtonState suite)
+      function computeDeployButtonState({
+        hasToken = false,
+        isDeploying: activeDeploy = false,
+        checkedIds = [],
+        deployedIds = [],
+        needsUpdateIds = [],
+      } = {}) {
+        if (activeDeploy) {
+          return { disabled: true, label: null }
+        }
 
-        // Update button label based on deployment state
-        if (hasScript) {
-          const allDeployed = checked.every((el) =>
-            deployedScripts.has(el.value)
-          )
-          const anyNeedsUpdate = checked.some((el) => {
-            const v = scriptVersions.get(el.value)
-            return v && v.needsUpdate
-          })
-          if (anyNeedsUpdate) {
-            btn.textContent = 'Update & Deploy to my account'
-          } else if (allDeployed) {
-            btn.textContent = 'Re-deploy to my account'
-          } else {
-            btn.textContent = 'Deploy to my account'
-          }
-        } else {
-          btn.textContent = 'Deploy to my account'
+        const checkedList = Array.from(checkedIds)
+        const hasScript = checkedList.length > 0
+        const disabled = !(hasToken && hasScript)
+
+        if (!hasScript) {
+          return { disabled, label: 'Deploy to my account' }
+        }
+
+        const deployedSet = new Set(deployedIds)
+        const needsUpdateSet = new Set(needsUpdateIds)
+        const anyNeedsUpdate = checkedList.some((id) => needsUpdateSet.has(id))
+        const allDeployed = checkedList.every((id) => deployedSet.has(id))
+
+        if (anyNeedsUpdate) {
+          return { disabled, label: 'Update & Deploy to my account' }
+        }
+        if (allDeployed) {
+          return { disabled, label: 'Re-deploy to my account' }
+        }
+        return { disabled, label: 'Deploy to my account' }
+      }
+
+      function setDeployEnabled() {
+        const checkedIds = Array.from(
+          document.querySelectorAll('input[name="script"]:checked')
+        ).map((el) => el.value)
+        const needsUpdateIds = []
+        for (const [id, v] of scriptVersions.entries()) {
+          if (v && v.needsUpdate) needsUpdateIds.push(id)
+        }
+        const state = computeDeployButtonState({
+          hasToken: !!accessToken,
+          isDeploying,
+          checkedIds,
+          deployedIds: deployedScripts.keys(),
+          needsUpdateIds,
+        })
+        const btn = document.getElementById('btn-deploy')
+        btn.disabled = state.disabled
+        if (state.label !== null) {
+          btn.textContent = state.label
         }
       }
 
@@ -1644,20 +1671,36 @@
 
       // ── Script list ───────────────────────────────────────────────────────────────
 
-      function renderScriptList() {
+      // Tested in src/deploy/tests/index.test.js (buildDeployBadgeHtml suite)
+      function buildDeployBadgeHtml(isDeployed, needsUpdate) {
+        if (!isDeployed) return ''
+        if (needsUpdate) {
+          return ' <span class="deploy-badge" style="display:inline-block;background:#fff8e1;color:#e37400;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;">Update available</span>'
+        }
+        return ' <span class="deploy-badge" style="display:inline-block;background:#e6f4ea;color:#137333;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;">Deployed</span>'
+      }
+
+      /**
+       * Renders Step 2 script options on initial load, and updates deployment
+       * badges in place on subsequent calls so async Drive/version lookups
+       * never detach checkbox nodes or discard in-flight user selections (#678).
+       */
+      function renderScriptList({
+        resetSelection = false,
+        uncheckIds = [],
+      } = {}) {
         const container = document.getElementById('script-list')
-        container.innerHTML = SCRIPT_CATALOG.map((s) => {
-          const deployed = deployedScripts.has(s.id)
-          const vInfo = scriptVersions.get(s.id)
-          let badge = ''
-          if (deployed && vInfo && vInfo.needsUpdate) {
-            badge =
-              ' <span class="deploy-badge" style="display:inline-block;background:#fff8e1;color:#e37400;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;">Update available</span>'
-          } else if (deployed) {
-            badge =
-              ' <span class="deploy-badge" style="display:inline-block;background:#e6f4ea;color:#137333;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;">Deployed</span>'
-          }
-          return `
+        const uncheckSet = new Set(uncheckIds)
+
+        if (!container.querySelector('input[name="script"]')) {
+          container.innerHTML = SCRIPT_CATALOG.map((s) => {
+            const deployed = deployedScripts.has(s.id)
+            const vInfo = scriptVersions.get(s.id)
+            const badge = buildDeployBadgeHtml(
+              deployed,
+              Boolean(vInfo && vInfo.needsUpdate)
+            )
+            return `
     <label class="script-option" for="script-${s.id}">
       <input type="checkbox" name="script" id="script-${s.id}" value="${s.id}"
              onchange="setDeployEnabled()" />
@@ -1667,7 +1710,31 @@
       </span>
     </label>
   `
-        }).join('')
+          }).join('')
+        }
+
+        for (const s of SCRIPT_CATALOG) {
+          const checkbox = document.getElementById('script-' + s.id)
+          if (!checkbox) continue
+          if (resetSelection || uncheckSet.has(s.id)) {
+            checkbox.checked = false
+          }
+          const strongEl = checkbox
+            .closest('.script-option')
+            ?.querySelector('.script-info strong')
+          if (strongEl) {
+            const deployed = deployedScripts.has(s.id)
+            const vInfo = scriptVersions.get(s.id)
+            const badge = buildDeployBadgeHtml(
+              deployed,
+              Boolean(vInfo && vInfo.needsUpdate)
+            )
+            const nextTitleHtml = `${escapeHtml(s.name)}${badge}`
+            if (strongEl.innerHTML !== nextTitleHtml) {
+              strongEl.innerHTML = nextTitleHtml
+            }
+          }
+        }
       }
 
       // Tested in src/deploy/tests/index.test.js (escapeHtml suite)
@@ -1706,6 +1773,8 @@
 
       // catalogId → { deployedVersion, latestVersion, needsUpdate }
       const scriptVersions = new Map()
+      // Bumped on each upload so older in-flight version lookups are discarded.
+      const versionEpoch = new Map()
 
       /**
        * Searches Google Drive for existing Apps Script projects matching our
@@ -1770,6 +1839,7 @@
        * compares against the catalog version, and updates the UI.
        */
       async function checkProjectVersion(scriptId, catalogId) {
+        const epochAtStart = versionEpoch.get(catalogId) || 0
         try {
           const project = await apiFetch(
             `${APPS_SCRIPT_API}/projects/${scriptId}/content`
@@ -1783,14 +1853,18 @@
           const needsUpdate =
             deployedVersion !== latestVersion && latestVersion != null
 
+          // An upload happened while this lookup was in flight; drop it.
+          if ((versionEpoch.get(catalogId) || 0) !== epochAtStart) return
+
           scriptVersions.set(catalogId, {
             deployedVersion,
             latestVersion,
             needsUpdate,
           })
 
-          // Update the badge in Step 2
+          // Update the badge and deploy button label in Step 2
           renderScriptList()
+          setDeployEnabled()
 
           // Update the config card header and Update button
           const safeId = escapeHtml(scriptId)
@@ -1957,6 +2031,30 @@
           scriptId: projectId,
           title: projectTitle,
         })
+        // The latest source was just uploaded: invalidate any in-flight version
+        // lookup and mark the script as current so stale "Update available"
+        // state is not shown or restored.
+        versionEpoch.set(catalogId, (versionEpoch.get(catalogId) || 0) + 1)
+        const uploadedEntry = SCRIPT_CATALOG.find((c) => c.id === catalogId)
+        const uploadedVersion = uploadedEntry ? uploadedEntry.version : null
+        scriptVersions.set(catalogId, {
+          deployedVersion: uploadedVersion,
+          latestVersion: uploadedVersion,
+          needsUpdate: false,
+        })
+        // Existing Step 3 cards are not re-rendered, so refresh the card's
+        // version label and hide its Update button directly.
+        const cardSafeId = escapeHtml(projectId)
+        const cardVersionEl = document.getElementById(
+          'version-info-' + cardSafeId
+        )
+        if (cardVersionEl && uploadedVersion) {
+          cardVersionEl.innerHTML = `<span style="color:#137333;font-size:12px;">v${escapeHtml(uploadedVersion)} ✓</span>`
+        }
+        const cardUpdateBtn = document.getElementById(
+          'btn-update-' + cardSafeId
+        )
+        if (cardUpdateBtn) cardUpdateBtn.style.display = 'none'
         return { scriptId: projectId, title: projectTitle, catalogId }
       }
 
@@ -2042,6 +2140,7 @@
         }
 
         const btn = document.getElementById('btn-deploy')
+        isDeploying = true
         btn.disabled = true
         btn.innerHTML = '<span class="spinner"></span> Deploying…'
 
@@ -2055,8 +2154,10 @@
             deployedProjects.push(descriptor)
           }
 
-          // Refresh Step 2 to show deployment badges
-          renderScriptList()
+          // Refresh Step 2 to show deployment badges and clear completed selections
+          renderScriptList({
+            uncheckIds: deployedProjects.map((p) => p.catalogId),
+          })
 
           if (deployedProjects.length === 0) {
             showStatus('error', '❌ No scripts were deployed successfully.')
@@ -2068,7 +2169,9 @@
         } catch (err) {
           // Show any partial successes alongside the failure
           if (deployedProjects.length > 0) {
-            renderScriptList()
+            renderScriptList({
+              uncheckIds: deployedProjects.map((p) => p.catalogId),
+            })
             renderConfigCards(deployedProjects)
             showStatus(
               'error',
@@ -2081,8 +2184,7 @@
             showStatus('error', buildDeployErrorHtml(err))
           }
         } finally {
-          btn.disabled = false
-          btn.innerHTML = 'Deploy to my account'
+          isDeploying = false
           setDeployEnabled()
         }
       }
