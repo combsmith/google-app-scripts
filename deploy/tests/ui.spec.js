@@ -1690,4 +1690,684 @@ test.describe('deploy index.html', () => {
     await page.locator('#btn-deploy').click()
     await expect(page.locator('.status-ok')).toContainText('deployed')
   })
+
+  // ── Background Drive/version lookup concurrency (#678) ────────────────────
+
+  test('preserves checked scripts and keeps deploy button enabled when Drive lookup resolves after selection (#678)', async ({
+    page,
+  }) => {
+    let resolveDriveLookup = () => {}
+    const driveGate = new Promise((resolve) => {
+      resolveDriveLookup = resolve
+    })
+    let notifyDriveRequestStarted = () => {}
+    const driveRequestStarted = new Promise((resolve) => {
+      notifyDriveRequestStarted = resolve
+    })
+
+    await page.route(
+      'https://www.googleapis.com/drive/v3/files**',
+      async (route) => {
+        notifyDriveRequestStarted()
+        await driveGate
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            files: [
+              {
+                id: 'existing-gmail-id',
+                name: 'Petry-Projects \u2013 Gmail to Drive By Labels',
+              },
+            ],
+          }),
+        })
+      }
+    )
+
+    await mockSuccessfulDeploy(page)
+    await signIn(page)
+    await driveRequestStarted
+
+    const briefingCheckbox = page.locator(
+      '#script-list input[value="calendar-to-briefing-doc"]'
+    )
+    await briefingCheckbox.click()
+    await expect(briefingCheckbox).toBeChecked()
+    await expect(page.locator('#btn-deploy')).toBeEnabled()
+
+    resolveDriveLookup()
+    // Observable effect of the Drive-triggered re-render
+    await expect(page.locator('.deploy-badge').first()).toBeVisible()
+
+    await expect(briefingCheckbox).toBeChecked()
+    await expect(page.locator('#btn-deploy')).toBeEnabled()
+    await page.locator('#btn-deploy').click()
+    await expect(page.locator('.status-ok')).toContainText('deployed')
+  })
+
+  test('updates deploy button label without clearing selection when Drive and version checks finish asynchronously (#678)', async ({
+    page,
+  }) => {
+    let resolveDriveLookup = () => {}
+    const driveGate = new Promise((resolve) => {
+      resolveDriveLookup = resolve
+    })
+    let notifyDriveRequestStarted = () => {}
+    const driveRequestStarted = new Promise((resolve) => {
+      notifyDriveRequestStarted = resolve
+    })
+
+    let resolveVersionLookup = () => {}
+    const versionGate = new Promise((resolve) => {
+      resolveVersionLookup = resolve
+    })
+    let notifyVersionRequestStarted = () => {}
+    const versionRequestStarted = new Promise((resolve) => {
+      notifyVersionRequestStarted = resolve
+    })
+
+    await page.route(
+      'https://www.googleapis.com/drive/v3/files**',
+      async (route) => {
+        notifyDriveRequestStarted()
+        await driveGate
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            files: [
+              {
+                id: 'existing-gmail-id',
+                name: 'Petry-Projects \u2013 Gmail to Drive By Labels',
+              },
+            ],
+          }),
+        })
+      }
+    )
+
+    await page.route('https://script.googleapis.com/**', async (route) => {
+      const url = route.request().url()
+      if (url.includes('/content')) {
+        notifyVersionRequestStarted()
+        await versionGate
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            files: [
+              {
+                name: 'code',
+                type: 'SERVER_JS',
+                source: '// @version 0.9.0\nfunction main() {}',
+              },
+            ],
+          }),
+        })
+      } else {
+        await route.continue()
+      }
+    })
+
+    await signIn(page)
+    await driveRequestStarted
+
+    const gmailCheckbox = page.locator(
+      '#script-list input[value="gmail-to-drive-by-labels"]'
+    )
+    await gmailCheckbox.click()
+    await expect(gmailCheckbox).toBeChecked()
+    await expect(page.locator('#btn-deploy')).toHaveText('Deploy to my account')
+
+    resolveDriveLookup()
+    await versionRequestStarted
+
+    await expect(gmailCheckbox).toBeChecked()
+    await expect(page.locator('#btn-deploy')).toBeEnabled()
+    await expect(page.locator('#btn-deploy')).toHaveText(
+      'Re-deploy to my account'
+    )
+
+    resolveVersionLookup()
+    await expect(
+      page.locator('.deploy-badge:has-text("Update available")')
+    ).toBeVisible()
+    await expect(gmailCheckbox).toBeChecked()
+    await expect(page.locator('#btn-deploy')).toBeEnabled()
+    await expect(page.locator('#btn-deploy')).toHaveText(
+      'Update & Deploy to my account'
+    )
+  })
+
+  test('keeps deploy button disabled with spinner if Drive lookup resolves mid-deploy (#678)', async ({
+    page,
+  }) => {
+    let resolveDriveLookup = () => {}
+    const driveGate = new Promise((resolve) => {
+      resolveDriveLookup = resolve
+    })
+    let notifyDriveRequestStarted = () => {}
+    const driveRequestStarted = new Promise((resolve) => {
+      notifyDriveRequestStarted = resolve
+    })
+
+    let resolveRawFetch = () => {}
+    const rawFetchGate = new Promise((resolve) => {
+      resolveRawFetch = resolve
+    })
+    let notifyRawFetchStarted = () => {}
+    const rawFetchStarted = new Promise((resolve) => {
+      notifyRawFetchStarted = resolve
+    })
+
+    await page.route(
+      'https://www.googleapis.com/drive/v3/files**',
+      async (route) => {
+        notifyDriveRequestStarted()
+        await driveGate
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            files: [
+              {
+                id: 'existing-briefing-id',
+                name: 'Petry-Projects \u2013 Calendar to Briefing Doc',
+              },
+            ],
+          }),
+        })
+      }
+    )
+
+    await mockSuccessfulDeploy(page)
+    await page.route('https://raw.githubusercontent.com/**', async (route) => {
+      notifyRawFetchStarted()
+      await rawFetchGate
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/plain',
+        body: '// @version 1.0.0\nfunction main() {}',
+      })
+    })
+
+    await signIn(page)
+    await driveRequestStarted
+
+    await page
+      .locator('#script-list input[value="gmail-to-drive-by-labels"]')
+      .click()
+    await page.locator('#btn-deploy').click()
+    await rawFetchStarted
+
+    await expect(page.locator('#btn-deploy')).toBeDisabled()
+    await expect(page.locator('#btn-deploy')).toContainText('Deploying')
+
+    resolveDriveLookup()
+    // Observable effect of the Drive-triggered re-render
+    await expect(page.locator('.deploy-badge').first()).toBeVisible()
+
+    // Must remain disabled and in-progress while deployment is still running
+    await expect(page.locator('#btn-deploy')).toBeDisabled()
+    await expect(page.locator('#btn-deploy')).toContainText('Deploying')
+
+    resolveRawFetch()
+    await expect(page.locator('.status-ok')).toContainText('deployed')
+    await expect(page.locator('#btn-deploy')).toBeDisabled()
+    await expect(page.locator('#btn-deploy')).toHaveText('Deploy to my account')
+  })
+
+  test('preserves checked scripts and enabled deploy button when Drive or version lookups fail (#678)', async ({
+    page,
+  }) => {
+    let driveAttempt = 0
+    let resolveDriveLookup = () => {}
+    let driveGate = new Promise((resolve) => {
+      resolveDriveLookup = resolve
+    })
+    let notifyDriveStarted = () => {}
+    let driveStarted = new Promise((resolve) => {
+      notifyDriveStarted = resolve
+    })
+
+    let resolveVersionLookup = () => {}
+    const versionGate = new Promise((resolve) => {
+      resolveVersionLookup = resolve
+    })
+    let notifyVersionStarted = () => {}
+    const versionStarted = new Promise((resolve) => {
+      notifyVersionStarted = resolve
+    })
+
+    await page.route(
+      'https://www.googleapis.com/drive/v3/files**',
+      async (route) => {
+        driveAttempt += 1
+        notifyDriveStarted()
+        await driveGate
+        if (driveAttempt === 1) {
+          await route.fulfill({
+            status: 500,
+            contentType: 'application/json',
+            body: JSON.stringify({ error: { message: 'Drive unavailable' } }),
+          })
+        } else {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              files: [
+                {
+                  id: 'existing-gmail-id',
+                  name: 'Petry-Projects \u2013 Gmail to Drive By Labels',
+                },
+              ],
+            }),
+          })
+        }
+      }
+    )
+
+    await page.route('https://script.googleapis.com/**', async (route) => {
+      if (route.request().url().includes('/content')) {
+        notifyVersionStarted()
+        await versionGate
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: { message: 'Version check failed' } }),
+        })
+      } else {
+        await route.continue()
+      }
+    })
+
+    await page.evaluate(() => {
+      const origDrive = window.loadExistingDeployments
+      const origVersion = window.checkProjectVersion
+      window.__driveLookupsDone = 0
+      window.__versionChecksDone = 0
+      window.loadExistingDeployments = async (...args) => {
+        try {
+          return await origDrive(...args)
+        } finally {
+          window.__driveLookupsDone += 1
+        }
+      }
+      window.checkProjectVersion = async (...args) => {
+        try {
+          return await origVersion(...args)
+        } finally {
+          window.__versionChecksDone += 1
+        }
+      }
+    })
+
+    // 1. Drive lookup fails with 500 after script selection
+    await signIn(page)
+    await driveStarted
+
+    const briefingCheckbox = page.locator(
+      '#script-list input[value="calendar-to-briefing-doc"]'
+    )
+    const gmailCheckbox = page.locator(
+      '#script-list input[value="gmail-to-drive-by-labels"]'
+    )
+    await briefingCheckbox.click()
+    await expect(briefingCheckbox).toBeChecked()
+    await expect(page.locator('#btn-deploy')).toBeEnabled()
+
+    resolveDriveLookup()
+    await page.waitForFunction(() => window.__driveLookupsDone === 1)
+
+    await expect(briefingCheckbox).toBeChecked()
+    await expect(page.locator('#btn-deploy')).toBeEnabled()
+
+    // 2. Re-sign-in where Drive succeeds and version lookup fails with 500
+    driveGate = new Promise((resolve) => {
+      resolveDriveLookup = resolve
+    })
+    driveStarted = new Promise((resolve) => {
+      notifyDriveStarted = resolve
+    })
+
+    await gmailCheckbox.click()
+    await signIn(page)
+    await driveStarted
+
+    resolveDriveLookup()
+    await versionStarted
+    await expect(
+      page.locator('label[for="script-gmail-to-drive-by-labels"] .deploy-badge')
+    ).toHaveText('Deployed')
+
+    resolveVersionLookup()
+    await page.waitForFunction(() => window.__versionChecksDone === 1)
+
+    await expect(briefingCheckbox).toBeChecked()
+    await expect(gmailCheckbox).toBeChecked()
+    await expect(page.locator('#btn-deploy')).toBeEnabled()
+  })
+
+  test('unchecks deployed scripts and retains failed script selection on partial deploy failure (#678)', async ({
+    page,
+  }) => {
+    let createCount = 0
+    await page.route('https://raw.githubusercontent.com/**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/plain',
+        body: '// @version 1.0.0\nfunction main() {}',
+      })
+    })
+    await page.route('https://script.googleapis.com/**', async (route) => {
+      const url = route.request().url()
+      const method = route.request().method()
+      if (method === 'POST' && url.endsWith('/projects')) {
+        createCount += 1
+        if (createCount === 1) {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ scriptId: 'partial-ok-script-id' }),
+          })
+        } else {
+          await route.fulfill({
+            status: 500,
+            contentType: 'application/json',
+            body: JSON.stringify({ error: { message: 'Quota exceeded' } }),
+          })
+        }
+      } else if (method === 'PUT' && url.includes('/content')) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({}),
+        })
+      } else {
+        await route.continue()
+      }
+    })
+
+    await signIn(page)
+
+    const gmailCheckbox = page.locator(
+      '#script-list input[value="gmail-to-drive-by-labels"]'
+    )
+    const sheetsCheckbox = page.locator(
+      '#script-list input[value="calendar-to-sheets"]'
+    )
+    await gmailCheckbox.click()
+    await sheetsCheckbox.click()
+    await page.locator('#btn-deploy').click()
+
+    await expect(page.locator('.status-error')).toContainText(
+      'Deployed successfully'
+    )
+    await expect(page.locator('.status-error')).toContainText(
+      'Deployment failed'
+    )
+
+    // First script deployed and was unchecked; second failed and remains checked for retry
+    await expect(gmailCheckbox).not.toBeChecked()
+    await expect(
+      page.locator('label[for="script-gmail-to-drive-by-labels"] .deploy-badge')
+    ).toHaveText('Deployed')
+    await expect(sheetsCheckbox).toBeChecked()
+    await expect(page.locator('#btn-deploy')).toBeEnabled()
+    await expect(page.locator('#btn-deploy')).toHaveText('Deploy to my account')
+  })
+
+  test('refreshes Step 2 badge and Step 3 card on Update & Deploy while preserving mid-deploy selections (#678)', async ({
+    page,
+  }) => {
+    let resolveUpload = () => {}
+    const uploadGate = new Promise((resolve) => {
+      resolveUpload = resolve
+    })
+    let notifyUploadStarted = () => {}
+    const uploadStarted = new Promise((resolve) => {
+      notifyUploadStarted = resolve
+    })
+
+    await page.route(
+      'https://www.googleapis.com/drive/v3/files**',
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            files: [
+              {
+                id: 'existing-gmail-id',
+                name: 'Petry-Projects \u2013 Gmail to Drive By Labels',
+              },
+            ],
+          }),
+        })
+      }
+    )
+
+    await page.route('https://raw.githubusercontent.com/**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/plain',
+        body: '// @version 9.9.9\nfunction main() {}',
+      })
+    })
+
+    await page.route('https://script.googleapis.com/**', async (route) => {
+      const url = route.request().url()
+      const method = route.request().method()
+      if (method === 'GET' && url.includes('/content')) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            files: [
+              {
+                name: 'code',
+                type: 'SERVER_JS',
+                source: '// @version 0.0.1\nfunction main() {}',
+              },
+            ],
+          }),
+        })
+      } else if (method === 'GET' && url.includes('/projects/')) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            scriptId: 'existing-gmail-id',
+            title: 'Petry-Projects \u2013 Gmail to Drive By Labels',
+          }),
+        })
+      } else if (method === 'PUT' && url.includes('/content')) {
+        notifyUploadStarted()
+        await uploadGate
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({}),
+        })
+      } else {
+        await route.continue()
+      }
+    })
+
+    await signIn(page)
+
+    const gmailBadge = page.locator(
+      'label[for="script-gmail-to-drive-by-labels"] .deploy-badge'
+    )
+    await expect(gmailBadge).toHaveText('Update available')
+    await expect(page.locator('#version-info-existing-gmail-id')).toContainText(
+      'v0.0.1'
+    )
+    await expect(page.locator('#btn-update-existing-gmail-id')).toBeVisible()
+
+    const gmailCheckbox = page.locator(
+      '#script-list input[value="gmail-to-drive-by-labels"]'
+    )
+    const sheetsCheckbox = page.locator(
+      '#script-list input[value="calendar-to-sheets"]'
+    )
+    await gmailCheckbox.click()
+    await expect(page.locator('#btn-deploy')).toHaveText(
+      'Update & Deploy to my account'
+    )
+
+    await page.locator('#btn-deploy').click()
+    await uploadStarted
+
+    // Select another script while the upload is in flight
+    await sheetsCheckbox.click()
+
+    resolveUpload()
+    await expect(page.locator('.status-ok')).toContainText('deployed')
+
+    // Uploaded script is unchecked and marked current in both Step 2 and Step 3
+    await expect(gmailCheckbox).not.toBeChecked()
+    await expect(gmailBadge).toHaveText('Deployed')
+    await expect(page.locator('#version-info-existing-gmail-id')).toContainText(
+      '✓'
+    )
+    await expect(page.locator('#btn-update-existing-gmail-id')).toBeHidden()
+
+    // Script selected mid-deploy remains checked with deploy button enabled
+    await expect(sheetsCheckbox).toBeChecked()
+    await expect(page.locator('#btn-deploy')).toBeEnabled()
+    await expect(page.locator('#btn-deploy')).toHaveText('Deploy to my account')
+
+    // Re-checking the updated script offers Re-deploy rather than Update & Deploy
+    await sheetsCheckbox.click()
+    await gmailCheckbox.click()
+    await expect(page.locator('#btn-deploy')).toHaveText(
+      'Re-deploy to my account'
+    )
+  })
+
+  test('discards stale pre-deploy version lookup that resolves after upload (#678)', async ({
+    page,
+  }) => {
+    let resolveStaleVersionGet = () => {}
+    const staleVersionGate = new Promise((resolve) => {
+      resolveStaleVersionGet = resolve
+    })
+    let notifyVersionGetStarted = () => {}
+    const versionGetStarted = new Promise((resolve) => {
+      notifyVersionGetStarted = resolve
+    })
+
+    await page.route(
+      'https://www.googleapis.com/drive/v3/files**',
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            files: [
+              {
+                id: 'existing-gmail-id',
+                name: 'Petry-Projects \u2013 Gmail to Drive By Labels',
+              },
+            ],
+          }),
+        })
+      }
+    )
+
+    await page.route('https://raw.githubusercontent.com/**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/plain',
+        body: '// @version 9.9.9\nfunction main() {}',
+      })
+    })
+
+    await page.route('https://script.googleapis.com/**', async (route) => {
+      const url = route.request().url()
+      const method = route.request().method()
+      if (method === 'GET' && url.includes('/content')) {
+        notifyVersionGetStarted()
+        await staleVersionGate
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            files: [
+              {
+                name: 'code',
+                type: 'SERVER_JS',
+                source: '// @version 0.0.1\nfunction main() {}',
+              },
+            ],
+          }),
+        })
+      } else if (method === 'GET' && url.includes('/projects/')) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            scriptId: 'existing-gmail-id',
+            title: 'Petry-Projects \u2013 Gmail to Drive By Labels',
+          }),
+        })
+      } else if (method === 'PUT' && url.includes('/content')) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({}),
+        })
+      } else {
+        await route.continue()
+      }
+    })
+
+    await page.evaluate(() => {
+      const origVersion = window.checkProjectVersion
+      window.__staleVersionChecksDone = 0
+      window.checkProjectVersion = async (...args) => {
+        try {
+          return await origVersion(...args)
+        } finally {
+          window.__staleVersionChecksDone += 1
+        }
+      }
+    })
+
+    await signIn(page)
+    await versionGetStarted
+
+    const gmailCheckbox = page.locator(
+      '#script-list input[value="gmail-to-drive-by-labels"]'
+    )
+    const gmailBadge = page.locator(
+      'label[for="script-gmail-to-drive-by-labels"] .deploy-badge'
+    )
+    await expect(gmailBadge).toHaveText('Deployed')
+
+    // Complete upload while the initial GET /content lookup is still pending
+    await gmailCheckbox.click()
+    await page.locator('#btn-deploy').click()
+    await expect(page.locator('.status-ok')).toContainText('deployed')
+
+    // Release the outdated GET /content response and wait for checkProjectVersion
+    // itself to finish parsing the body and running its post-await logic
+    resolveStaleVersionGet()
+    await page.waitForFunction(() => window.__staleVersionChecksDone === 1)
+
+    // Stale response must not restore Update available in Step 2 or Step 3
+    await expect(gmailBadge).toHaveText('Deployed')
+    await expect(page.locator('#version-info-existing-gmail-id')).toContainText(
+      '✓'
+    )
+    await expect(page.locator('#btn-update-existing-gmail-id')).toBeHidden()
+
+    await gmailCheckbox.click()
+    await expect(page.locator('#btn-deploy')).toHaveText(
+      'Re-deploy to my account'
+    )
+  })
 })
