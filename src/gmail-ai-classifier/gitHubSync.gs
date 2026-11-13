@@ -9,52 +9,63 @@
  * - Idempotency Guard (skips duplicate entries)
  */
 
-var GITHUB_SYNC_RULE6_PATTERNS_ = [
-  [/\S \? \S/, "' ? ' between words (was an em dash or a · separator)"],
-  [/\?\?/, "'??' (was a multi-codepoint emoji)"],
-  [/[A-Za-z]\?[A-Za-z]/, "'?' inside a word (was a curly apostrophe)"],
-  [/\uFFFD/, 'U+FFFD replacement character'],
-]
+// Import shared Rule 6 helpers when running under Jest
+var sharedHelpers_ = (() => {
+  if (typeof module !== 'undefined' && module.exports) {
+    return require('../gas-utils.js')
+  }
+  return {}
+})()
 
-/** Refuse to write an entry that already shows mojibake. */
-function assertClean_(text, what) {
-  if (!text) return
-  var stripped = String(text).replace(/https?:\/\/\S+/g, '')
-  for (var i = 0; i < GITHUB_SYNC_RULE6_PATTERNS_.length; i++) {
-    if (GITHUB_SYNC_RULE6_PATTERNS_[i][0].test(stripped)) {
-      throw new Error(
-        'Rule 6: refusing to write ' +
-          what +
-          ' — ' +
-          GITHUB_SYNC_RULE6_PATTERNS_[i][1]
-      )
+// Use shared helpers if available (Jest), otherwise use inline fallbacks
+var assertClean_ =
+  sharedHelpers_.assertClean_ ||
+  (function () {
+    var patterns = [
+      [/\S \? \S/, "' ? ' between words (was an em dash or a · separator)"],
+      [/\?\?/, "'??' (was a multi-codepoint emoji)"],
+      [/[A-Za-z]\?[A-Za-z]/, "'?' inside a word (was a curly apostrophe)"],
+      [/�/, 'U+FFFD replacement character'],
+    ]
+    return function (text, what) {
+      if (!text) return
+      var stripped = String(text).replace(/https?:\/\/\S+/g, '')
+      for (var i = 0; i < patterns.length; i++) {
+        if (patterns[i][0].test(stripped)) {
+          throw new Error(
+            'Rule 6: refusing to write ' + what + ' — ' + patterns[i][1]
+          )
+        }
+      }
     }
-  }
-}
+  })()
 
-/** Refuse to write when a non-ASCII char in the source text became '?' on the way out. */
-function assertNoAsciiReplacement_(source, rendered) {
-  if (!source || !rendered) return
-  if (rendered.indexOf('?') === -1) return
-  var lost = []
-  for (var i = 0; i < source.length; i++) {
-    var c = source.charAt(i)
-    if (
-      c.charCodeAt(0) > 127 &&
-      rendered.indexOf(c) === -1 &&
-      lost.indexOf(c) === -1
-    ) {
-      lost.push(c)
+var assertNoAsciiReplacement_ =
+  sharedHelpers_.assertNoAsciiReplacement_ ||
+  (function () {
+    return function (source, rendered) {
+      if (!source || !rendered) return
+      if (rendered.indexOf('?') === -1) return
+      var lost = []
+      for (var i = 0; i < source.length; i++) {
+        var c = source.charAt(i)
+        if (
+          c.charCodeAt(0) > 127 &&
+          rendered.indexOf(c) === -1 &&
+          lost.indexOf(c) === -1
+        ) {
+          lost.push(c)
+        }
+      }
+      if (lost.length) {
+        throw new Error(
+          'Rule 6: refusing to write text that flattened non-ASCII to "?": ' +
+            lost.join(' ') +
+            ' — encode as UTF-8, not ASCII.'
+        )
+      }
     }
-  }
-  if (lost.length) {
-    throw new Error(
-      'Rule 6: refusing to write text that flattened non-ASCII to "?": ' +
-        lost.join(' ') +
-        ' — encode as UTF-8, not ASCII.'
-    )
-  }
-}
+  })()
 
 /**
  * Resolves GitHub repository owner and name lazily from services, ScriptProperties, config, or environment.
@@ -534,6 +545,6 @@ if (typeof module !== 'undefined' && module.exports) {
     extractEntrySourceMarker_: extractEntrySourceMarker_,
     assertClean_: assertClean_,
     assertNoAsciiReplacement_: assertNoAsciiReplacement_,
-    RULE6_PATTERNS: GITHUB_SYNC_RULE6_PATTERNS_,
+    RULE6_PATTERNS: sharedHelpers_.RULE6_PATTERNS,
   }
 }

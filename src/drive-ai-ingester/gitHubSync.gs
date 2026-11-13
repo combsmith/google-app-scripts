@@ -3,43 +3,57 @@
  * Performs atomic GET -> PUT markdown updates with 404 auto-initialization.
  */
 
-var RULE6_PATTERNS = [[/\uFFFD/, 'U+FFFD replacement character']]
+// Import shared Rule 6 helpers when running under Jest
+var sharedHelpers_ = (() => {
+  if (typeof module !== 'undefined' && module.exports) {
+    return require('../gas-utils.js')
+  }
+  return {}
+})()
 
-/** Refuse to write an entry that already shows mojibake. */
-function assertClean_(text, what) {
-  if (!text) return
-  for (var i = 0; i < RULE6_PATTERNS.length; i++) {
-    if (RULE6_PATTERNS[i][0].test(text)) {
-      throw new Error(
-        'Rule 6: refusing to write ' + what + ' — ' + RULE6_PATTERNS[i][1]
-      )
+// Use shared helpers if available (Jest), otherwise use inline fallbacks
+var assertClean_ =
+  sharedHelpers_.assertClean_ ||
+  (function () {
+    var patterns = [[/�/, 'U+FFFD replacement character']]
+    return function (text, what) {
+      if (!text) return
+      for (var i = 0; i < patterns.length; i++) {
+        if (patterns[i][0].test(text)) {
+          throw new Error(
+            'Rule 6: refusing to write ' + what + ' — ' + patterns[i][1]
+          )
+        }
+      }
     }
-  }
-}
+  })()
 
-/** Refuse to write when a non-ASCII char in the source text became '?' on the way out. */
-function assertNoAsciiReplacement_(source, rendered) {
-  if (!source || !rendered) return
-  if (rendered.indexOf('?') === -1) return
-  var lost = []
-  for (var i = 0; i < source.length; i++) {
-    var c = source.charAt(i)
-    if (
-      c.charCodeAt(0) > 127 &&
-      rendered.indexOf(c) === -1 &&
-      lost.indexOf(c) === -1
-    ) {
-      lost.push(c)
+var assertNoAsciiReplacement_ =
+  sharedHelpers_.assertNoAsciiReplacement_ ||
+  (function () {
+    return function (source, rendered) {
+      if (!source || !rendered) return
+      if (rendered.indexOf('?') === -1) return
+      var lost = []
+      for (var i = 0; i < source.length; i++) {
+        var c = source.charAt(i)
+        if (
+          c.charCodeAt(0) > 127 &&
+          rendered.indexOf(c) === -1 &&
+          lost.indexOf(c) === -1
+        ) {
+          lost.push(c)
+        }
+      }
+      if (lost.length) {
+        throw new Error(
+          'Rule 6: refusing to write text that flattened non-ASCII to "?": ' +
+            lost.join(' ') +
+            ' — encode as UTF-8, not ASCII.'
+        )
+      }
     }
-  }
-  if (lost.length) {
-    throw new Error(
-      'Rule 6: refusing to write text that flattened non-ASCII to "?": ' +
-        lost.join(' ') +
-        ' — encode as UTF-8, not ASCII.'
-    )
-  }
-}
+  })()
 
 /**
  * Commits an appended markdown entry to GitHub with automatic retry on version
@@ -246,6 +260,5 @@ if (typeof module !== 'undefined' && module.exports) {
     executeGitHubCommit: executeGitHubCommit,
     assertClean_: assertClean_,
     assertNoAsciiReplacement_: assertNoAsciiReplacement_,
-    RULE6_PATTERNS: RULE6_PATTERNS,
   }
 }
