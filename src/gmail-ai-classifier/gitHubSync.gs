@@ -141,6 +141,7 @@ function appendMarkdownEntryToGitHubRepo(
     console.log(
       '[gitHubSync] GITHUB_PAT ScriptProperty not set. Skipping GitHub commit.'
     )
+    recordGitHubSyncStatus_(services, 'NO_TOKEN', filePath)
     return false
   }
 
@@ -157,8 +158,9 @@ function appendMarkdownEntryToGitHubRepo(
     }
 
   var maxRetries = 3
+  var result = false
   for (var attempt = 1; attempt <= maxRetries; attempt++) {
-    var result = executeGitHubCommit(
+    result = executeGitHubCommit(
       filePath,
       entryMd,
       commitMessage,
@@ -166,7 +168,16 @@ function appendMarkdownEntryToGitHubRepo(
       services
     )
     if (result === true || result === 'IDEMPOTENT_SKIP') {
+      recordGitHubSyncStatus_(
+        services,
+        result === true ? 'OK' : 'IDEMPOTENT_SKIP',
+        filePath
+      )
       return true
+    }
+    // Configuration and size failures cannot succeed on retry.
+    if (result === 'NOT_CONFIGURED' || result === 'FILE_TOO_LARGE') {
+      break
     }
     console.log(
       '[gitHubSync] Retry attempt',
@@ -181,11 +192,48 @@ function appendMarkdownEntryToGitHubRepo(
 
   console.error(
     '[gitHubSync] Failed to commit entry to GitHub after',
-    maxRetries,
+    attempt > maxRetries ? maxRetries : attempt,
     'attempts:',
     filePath
   )
+  recordGitHubSyncStatus_(
+    services,
+    typeof result === 'string' ? result : 'FAILED',
+    filePath
+  )
   return false
+}
+
+/**
+ * Records the outcome of the latest GitHub sync attempt in the
+ * GITHUB_SYNC_LAST_STATUS ScriptProperty ("<ISO time> <STATUS> <path>"), so a
+ * silent outage (expired PAT, unset repo, oversized note) is visible in
+ * Project Settings instead of only in execution logs. Best effort.
+ */
+function recordGitHubSyncStatus_(services, status, filePath) {
+  try {
+    var propsService =
+      (services && services.PropertiesService) ||
+      (typeof PropertiesService !== 'undefined' ? PropertiesService : null)
+    var scriptProps =
+      propsService && typeof propsService.getScriptProperties === 'function'
+        ? propsService.getScriptProperties()
+        : null
+    if (scriptProps && typeof scriptProps.setProperty === 'function') {
+      scriptProps.setProperty(
+        'GITHUB_SYNC_LAST_STATUS',
+        new Date().toISOString() + ' ' + status + ' ' + (filePath || '')
+      )
+    }
+  } catch (e) {
+    // Status breadcrumbs must never break ingestion
+  }
+}
+
+/** Returns the `<!-- source: ... -->` idempotency marker in an entry, or ''. */
+function extractEntrySourceMarker_(entryMd) {
+  var m = /<!-- source: [^\n]*? -->/.exec(String(entryMd || ''))
+  return m ? m[0] : ''
 }
 
 /**
@@ -208,7 +256,7 @@ function executeGitHubCommit(
     console.warn(
       '[gitHubSync] GITHUB_REPO_OWNER or GITHUB_REPO_NAME not configured. Skipping GitHub commit.'
     )
-    return false
+    return 'NOT_CONFIGURED'
   }
 
   var urlFetchApp =
@@ -275,6 +323,32 @@ function executeGitHubCommit(
     } else if (statusCode === 200) {
       var fileData = JSON.parse(res.getContentText())
       sha = fileData.sha
+      // Files over 1 MB come back with encoding "none" and empty content.
+      // Decoding that as "" and PUTting would replace the whole note with a
+      // single entry, so refuse instead.
+      var reportedSize = Number(fileData.size) || 0
+      if (
+        fileData.encoding === 'none' ||
+        (!fileData.content && reportedSize > 0)
+      ) {
+        console.error(
+          '[gitHubSync] ' +
+            filePath +
+            ' is over the GitHub Contents API 1 MB read limit (size ' +
+            reportedSize +
+            '); refusing to overwrite it. Shard the log (NOTE_LOG_SHARDING) or archive older entries.'
+        )
+        return 'FILE_TOO_LARGE'
+      }
+      if (reportedSize > 800000) {
+        console.warn(
+          '[gitHubSync] ' +
+            filePath +
+            ' is ' +
+            reportedSize +
+            ' bytes, approaching the 1 MB Contents API limit.'
+        )
+      }
       // GitHub Contents API wraps Base64 in newlines every 60 chars; strip them
       // before decoding since some decoders reject embedded whitespace.
       rawContent = utils
@@ -282,12 +356,25 @@ function executeGitHubCommit(
           utils.base64Decode((fileData.content || '').replace(/[\r\n]/g, ''))
         )
         .getDataAsString()
+      if (!rawContent && reportedSize > 0) {
+        console.error(
+          '[gitHubSync] Decoded ' +
+            filePath +
+            ' to empty text despite size ' +
+            reportedSize +
+            '; refusing to overwrite it.'
+        )
+        return 'FILE_TOO_LARGE'
+      }
 
-      // Idempotency Check: Skip if entry already present
-      if (
-        rawContent.indexOf(entryMd.trim()) !== -1 ||
-        (commitMessage && rawContent.indexOf(commitMessage) !== -1)
-      ) {
+      // Idempotency: entries carrying a source marker are keyed on the source
+      // message; legacy entries fall back to exact-text matching.
+      var marker = extractEntrySourceMarker_(entryMd)
+      var alreadyPresent = marker
+        ? rawContent.indexOf(marker) !== -1
+        : rawContent.indexOf(entryMd.trim()) !== -1 ||
+          (commitMessage && rawContent.indexOf(commitMessage) !== -1)
+      if (alreadyPresent) {
         console.log(
           '[gitHubSync] Idempotent Skip: Entry already exists in',
           filePath
@@ -380,6 +467,15 @@ function extractTopicTitleFromPath(filePath) {
     return 'Ingested Records'
   }
   var topic = parts.length > 1 ? parts[parts.length - 2] : parts[0]
+  // Shard files (<domain>/activity/2026-Q4.md) are titled after their domain
+  // and period rather than the generic "activity" folder.
+  if (parts.length > 2 && topic === 'activity') {
+    return (
+      parts[parts.length - 3] +
+      ' activity log ' +
+      parts[parts.length - 1].replace(/\.[^.]+$/, '')
+    )
+  }
   // Strip any trailing file extension (e.g. ".md") before title-casing so a
   // single-segment path like "digital-backups.md" becomes "Digital Backups".
   var cleaned = topic.replace(/\.[^.]+$/, '').replace(/-/g, ' ')
@@ -434,6 +530,8 @@ if (typeof module !== 'undefined' && module.exports) {
     extractTopicTitleFromPath: extractTopicTitleFromPath,
     insertEntryIntoLogSection: insertEntryIntoLogSection,
     resolveGitHubRepoTarget_: resolveGitHubRepoTarget_,
+    recordGitHubSyncStatus_: recordGitHubSyncStatus_,
+    extractEntrySourceMarker_: extractEntrySourceMarker_,
     assertClean_: assertClean_,
     assertNoAsciiReplacement_: assertNoAsciiReplacement_,
     RULE6_PATTERNS: GITHUB_SYNC_RULE6_PATTERNS_,

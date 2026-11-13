@@ -5,6 +5,23 @@
  * saves canonical attachments to Google Drive, and applies retention policies.
  */
 
+// Apps Script evaluates every .gs file in one shared global scope, so the GitHub
+// sync helpers live only in gitHubSync.gs (a second copy here was silently
+// shadowed at runtime). Node/Jest has no shared scope, so load them explicitly.
+if (typeof module !== 'undefined' && typeof require === 'function') {
+  var gitHubSyncModule_ = require('./gitHubSync.gs')
+  var RULE6_PATTERNS = gitHubSyncModule_.RULE6_PATTERNS
+  var resolveGitHubRepoTarget_ = gitHubSyncModule_.resolveGitHubRepoTarget_
+  var assertClean_ = gitHubSyncModule_.assertClean_
+  var assertNoAsciiReplacement_ = gitHubSyncModule_.assertNoAsciiReplacement_
+  var extractTopicTitleFromPath = gitHubSyncModule_.extractTopicTitleFromPath
+  var insertEntryIntoLogSection = gitHubSyncModule_.insertEntryIntoLogSection
+  var appendMarkdownEntryToGitHubRepo =
+    gitHubSyncModule_.appendMarkdownEntryToGitHubRepo
+  var executeGitHubCommit = gitHubSyncModule_.executeGitHubCommit
+  var recordGitHubSyncStatus_ = gitHubSyncModule_.recordGitHubSyncStatus_
+}
+
 function getFileHash(blob) {
   if (!blob) return ''
   try {
@@ -1244,7 +1261,14 @@ function matchesSenderDomain_(sender, domains) {
     const target = String(list[i] || '')
       .trim()
       .toLowerCase()
-    if (target && (host === target || host.endsWith('.' + target))) {
+    if (!target) continue
+    // A configured full address (e.g. "admissions@school.edu") matches that
+    // sender exactly; it would otherwise never equal a bare hostname.
+    if (target.indexOf('@') !== -1) {
+      if (extractSenderAddress_(sender) === target) return true
+      continue
+    }
+    if (host === target || host.endsWith('.' + target)) {
       return true
     }
   }
@@ -1285,6 +1309,75 @@ function containsAny_(textLower, terms) {
     if (list[i] && textLower.indexOf(list[i]) !== -1) return true
   }
   return false
+}
+
+function isWordChar_(ch) {
+  return Boolean(ch) && /[a-z0-9]/i.test(ch)
+}
+
+/**
+ * Like containsAny_, but a term only matches on word boundaries, so "unifi"
+ * does not match "unified" and "bill" does not match "billing". A boundary is
+ * only enforced on a term edge that is itself a letter or digit, so terms such
+ * as "[pypi]", "ordered:" or "interview with " keep their literal meaning.
+ *
+ * @param {string} textLower - Lowercased hay-stack string
+ * @param {string[]|string} terms - Lowercase needle terms (array or pipe-delimited)
+ * @returns {boolean} True if any term is found on word boundaries
+ */
+function containsAnyWord_(textLower, terms) {
+  const list = toTermList_(terms)
+  if (!textLower || list.length === 0) return false
+  for (let i = 0; i < list.length; i++) {
+    const term = list[i]
+    if (!term) continue
+    const checkStart = isWordChar_(term.charAt(0))
+    const checkEnd = isWordChar_(term.charAt(term.length - 1))
+    let from = 0
+    let idx = textLower.indexOf(term, from)
+    while (idx !== -1) {
+      const before = idx > 0 ? textLower.charAt(idx - 1) : ''
+      const after = textLower.charAt(idx + term.length)
+      if (
+        (!checkStart || !isWordChar_(before)) &&
+        (!checkEnd || !isWordChar_(after))
+      ) {
+        return true
+      }
+      from = idx + 1
+      idx = textLower.indexOf(term, from)
+    }
+  }
+  return false
+}
+
+// Single words that are reliable exclusions in a subject line but routinely
+// appear in benign receipt and newsletter bodies ("Billing address", "due to",
+// "national security", "SSO login", "Invoice ID"). Body snippets are checked
+// against the remaining exclusion terms only.
+const SUBJECT_ONLY_EXCLUSION_TERMS_ = [
+  'bill',
+  'due',
+  'security',
+  'login',
+  'sign-in',
+  'verify',
+  'verification',
+  'request',
+  'requested',
+  'invoice',
+  'receipt',
+  'billing',
+  'payment',
+  'transaction',
+  'urgent',
+  'appeal',
+]
+
+function snippetExclusionTerms_(excludeTerms) {
+  return toTermList_(excludeTerms).filter(
+    (t) => t && SUBJECT_ONLY_EXCLUSION_TERMS_.indexOf(t) === -1
+  )
 }
 
 /**
@@ -1342,7 +1435,7 @@ function normalizeConfigTermList_(value) {
 }
 
 const SCHOOL_BROADCAST_TERMS_ =
-  'weekly|newsletter|bulletin|school update|campus update|district update|digest|progress is ready|lunch|menu|portraits|news|noteworthy|announcement|athletics|e learning|e-learning|report card update|trunk or treat|spirit week|pto|pta|open house|picture day|fall festival|spring festival|school announcement|tryouts|tryout|try-outs|try-out|auditions|audition|team tryouts|absent|attendance|tardy|tuition|billing statement|assignment posted|new assignment|grade updated|score published|family portal|parent portal'
+  'weekly|newsletter|bulletin|school update|campus update|district update|digest|progress is ready|lunch|menu|portraits|news|noteworthy|announcement|athletics|e learning|e-learning|report card update|trunk or treat|spirit week|pto|pta|open house|picture day|fall festival|spring festival|school announcement|tryouts|tryout|try-outs|try-out|auditions|audition|team tryouts|absent|attendance|tardy|assignment posted|new assignment|grade updated|score published|family portal|parent portal'
 
 const SCHOOL_ACTIONABLE_TERMS_ =
   'urgent|conference|disciplin|suspension|expulsion|action required|action needed|reply required|response required|please respond|please reply|immediate attention'
@@ -1353,14 +1446,26 @@ const SECURITY_WARNING_SUBJECT_TERMS_ =
 const SECURITY_WARNING_SNIPPET_TERMS_ =
   'suspicious activity|suspicious sign-in|suspicious login|unauthorized access|account was compromised|account has been compromised'
 
+const FINANCIAL_SECURITY_SENDER_DOMAINS_ =
+  'chase.com|bankofamerica.com|wellsfargo.com|citi.com|citibank.com|capitalone.com|americanexpress.com|aexp.com|discover.com|usbank.com|truist.com|regions.com|pnc.com|paypal.com|venmo.com|cash.app|zellepay.com|schwab.com|fidelity.com|vanguard.com|empower.com'
+
 const MANUAL_PAYMENT_SNIPPET_TERMS_ =
   'autopay is disabled|autopay is off|autopay is not enabled|auto-pay is off|not enrolled in autopay|please pay|pay by|pay now|payment is due|amount due|balance due|payment due|payment request|money request|sent you an invoice|sent you a money request|to avoid interruption|to avoid a late fee|to avoid late fees|manual payment'
 
 const CAREER_SUBJECT_TERMS_ =
-  'employment agreement|employment contract|offer letter|job offer|employment offer|terms of employment|independent contractor agreement|restrictive covenant|confidentiality agreement|interview confirmation|interview invitation|invitation to interview|interview with |schedule an interview|recruiter screen|phone screen|interview schedule|schedule your interview|interview availability|next round of interview|next round of interviews|round 1 interview|round 2 interview|round 3 interview|final round interview|panel interview|leadership interview|interview follow up|interview follow-up|interview debrief|next steps in the interview|connecting on |opportunities at |introductory phone call|introductory call|time to connect regarding|update on your candidacy|update on your application|your application for|application status:'
+  'employment agreement|employment contract|offer letter|job offer|employment offer|terms of employment|independent contractor agreement|restrictive covenant|confidentiality agreement|interview confirmation|interview invitation|invitation to interview|interview with |schedule an interview|recruiter screen|phone screen|interview schedule|schedule your interview|interview availability|next round of interview|next round of interviews|round 1 interview|round 2 interview|round 3 interview|final round interview|panel interview|leadership interview|interview follow up|interview follow-up|interview debrief|next steps in the interview|update on your candidacy|update on your application|your application for|application status:'
 
 const CAREER_SNIPPET_TERMS_ =
-  'employment agreement|offer of employment|terms of employment|pleased to offer you the position|pleased to offer you|pleased to confirm our offer|congratulations on your offer|employment document|restrictive covenants agreement|interview schedule|schedule your interview|schedule an interview|interview availability|next round of interview|next round of interviews|next steps in the interview|interview with our team|speak with our team|discuss the role|candidacy for the position|your application for the position|invitation to interview|talent acquisition|reaching out regarding your application|reaching out regarding your resume|regarding your resume and application|introductory phone call|introductory call|schedule a next step interview|scheduling a next step interview|discuss opportunities at|discuss the opportunity'
+  'employment agreement|offer of employment|terms of employment|pleased to offer you the position|pleased to offer you|pleased to confirm our offer|congratulations on your offer|employment document|restrictive covenants agreement|interview schedule|schedule your interview|schedule an interview|interview availability|next round of interview|next round of interviews|next steps in the interview|interview with our team|candidacy for the position|your application for the position|invitation to interview|talent acquisition|reaching out regarding your application|reaching out regarding your resume|regarding your resume and application|schedule a next step interview|scheduling a next step interview'
+
+// Generic outreach phrases ("introductory call", "opportunities at ") are
+// also standard cold-sales and volunteer language, so they only count as career
+// mail when the message also carries recruiting context.
+const CAREER_WEAK_TERMS_ =
+  'connecting on |opportunities at |introductory phone call|introductory call|time to connect regarding|discuss opportunities at|discuss the opportunity|speak with our team|discuss the role'
+
+const CAREER_CONTEXT_TERMS_ =
+  'role|position|resume|candidacy|candidate|recruiter|recruiting|recruitment|hiring|interview|job|career|talent acquisition'
 
 const DOCUMENT_SIGNATURE_COMPLETED_TERMS_ =
   'completed: docusign|docusign: completed|has completed signing|all parties have signed|document is completed|signed copy'
@@ -1564,7 +1669,7 @@ const DETERMINISTIC_RULE_SPECS_ = [
   'sender+sub::ups.com|fedex.com|usps.com|usps.gov::::::delivered|out for delivery|tracking|scheduled delivery|package|shipment::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Carrier Tracking::Carrier parcel shipment or package delivery notification.',
   'sender+sub::amazon.com::::::ordered:|shipped:|delivered:|refund issued|auto-reloaded::::02_Finance_Legal::Finance/Purchases::Updates::archive::0.98::Amazon Routine::Routine Amazon e-commerce order, shipping, or refund update.',
   'sender+sub::chase.com|bankofamerica.com|message.att-mail.com|att-mail.com|citi.com|americanexpress.com|rocketmortgage.com|mycirclecard.target.com|$billingSenderDomains::::capitalone|spectrum|citicards::statement|autopay|payment processed|payment confirmation|payment scheduled|payment received|scheduled payment|bill is ready|bill is available|e-statement|estatement::failed|failure|declined|past due|overdue|action required|unpaid|late fee|returned payment|insufficient funds::02_Finance_Legal::Finance/Bills::Updates::archive::0.98::Routine Billing::Routine billing statement, receipt, or AutoPay confirmation.',
-  'sender+sub::bcbsal.org|bcbs.com|uhc.com|aetna.com|cigna.com|humana.com::::bluecrosspayments|unitedhealthcare::explanation of benefits|claim|claims|eob::::02_Finance_Legal::Finance/Insurance::Updates::archive::0.99::Insurance Claim / EOB Notice::Health insurance claim processing notice or explanation of benefits (EOB) notification routed to Finance/Insurance.',
+  'sender+sub::bcbsal.org|bcbs.com|uhc.com|aetna.com|cigna.com|humana.com::::bluecrosspayments|unitedhealthcare::explanation of benefits|claim|claims|eob::denied|denial|appeal|action required|action needed|additional information|information needed|information requested|records request|medical records|past due|overdue|balance due|amount due::02_Finance_Legal::Finance/Insurance::Updates::archive::0.99::Insurance Claim / EOB Notice::Health insurance claim processing notice or explanation of benefits (EOB) notification routed to Finance/Insurance.',
   'sender+sub::bcbsal.org|bcbs.com|uhc.com|aetna.com|cigna.com|humana.com::::bluecrosspayments|unitedhealthcare::payment|payments|premium|statement|bill|processed|receipt::failed|failure|declined|past due|overdue|action required|unpaid|late fee|returned payment|insufficient funds::02_Finance_Legal::Finance/Bills::Updates::archive::0.99::Insurance Payment Receipt::Health insurance premium payment or processing notification routed to Finance/Bills.',
   'sender+sub::geico.com|progressive.com|statefarm.com::::::auto pay|autopay|payment|bill|statement|policy document|id card::claim|adjuster|settlement|complaint|failed|failure|declined|past due|overdue|action required|unpaid|late fee|returned payment|insufficient funds::02_Finance_Legal::Finance/Bills::Updates::archive::0.99::Auto Insurance Routine Billing::Routine auto insurance billing, AutoPay notice, or policy document routed to Finance/Bills.',
   'sender+sub::chase.com|discover.com::::creditwise|creditkarma|experian|equifax|transunion|myfico|capitalone::credit score|score went up|score went down|creditwise|score changed|credit alert|credit monitoring|credit report|fico score|new credit inquiry::::02_Finance_Legal::Finance/Banking::Updates::archive::0.99::Credit Score Alert::Automated credit score update or credit monitoring notification routed to Updates.',
@@ -1585,10 +1690,14 @@ function evaluateDeterministicRuleSpec_(specStr, ctx, subject) {
   const parts = specStr.split('::')
   const mode = parts[0]
   const excludeTerms = parts[5]
+  // Subject exclusions stay substring matches (failing open to Gemini is the
+  // safe direction). Body exclusions are word-bounded and skip words that are
+  // only meaningful in a subject, so routine receipt and newsletter bodies
+  // ("Billing address", "national security") do not defeat the fast path.
   if (
     excludeTerms &&
     (containsAny_(ctx.subLower, excludeTerms) ||
-      containsAny_(ctx.snipLower, excludeTerms))
+      containsAnyWord_(ctx.snipLower, snippetExclusionTerms_(excludeTerms)))
   ) {
     return null
   }
@@ -1632,7 +1741,12 @@ function evaluateDeterministicRuleSpec_(specStr, ctx, subject) {
       matchesSenderDomain_(ctx.sender, domainTerms) ||
       matchesSenderAddress_(ctx.sender, parts[2]) ||
       containsAny_(ctx.sLower, parts[3])
-    const subjectHit = containsAny_(ctx.subLower, parts[4])
+    // In 'any' mode the subject alone decides, from any sender, so it must
+    // match on word boundaries ("unifi" must not catch "Unified School District").
+    const subjectHit =
+      mode === 'sender+sub'
+        ? containsAny_(ctx.subLower, parts[4])
+        : containsAnyWord_(ctx.subLower, parts[4])
     matched =
       mode === 'sender+sub' ? senderHit && subjectHit : senderHit || subjectHit
   }
@@ -1647,6 +1761,44 @@ function evaluateDeterministicRuleSpec_(specStr, ctx, subject) {
     parts[12],
     parts[11]
   )
+}
+
+/**
+ * Chooses the canonical domain and sub-label for a signature request or
+ * completion notice from its content, so school permission slips, medical
+ * consents and offer letters are not all filed as legal documents.
+ *
+ * @param {string} subLower - Lowercased subject
+ * @param {string} snipLower - Lowercased body snippet
+ * @returns {string[]} [canonicalDomain, subLabel]
+ */
+function signatureDocumentFiling_(subLower, snipLower) {
+  const text = subLower + ' ' + snipLower
+  if (
+    containsAnyWord_(
+      text,
+      'offer letter|employment|onboarding|new hire|i-9|w-4|independent contractor'
+    )
+  ) {
+    return ['06_Work_Career', 'Work/Career']
+  }
+  if (
+    containsAnyWord_(
+      text,
+      'patient|medical|consent for treatment|clinic|hipaa|dental|pediatric|therapy'
+    )
+  ) {
+    return ['04_Family_Health', 'Family/Medical']
+  }
+  if (
+    containsAnyWord_(
+      text,
+      'school|student|field trip|permission slip|enrollment|teacher|camp'
+    )
+  ) {
+    return ['04_Family_Health', 'Family/School-Student']
+  }
+  return ['02_Finance_Legal', 'Finance/Legal']
 }
 
 /**
@@ -1807,7 +1959,10 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
   )
   const isCareerContent =
     containsAny_(subLower, CAREER_SUBJECT_TERMS_) ||
-    containsAny_(snipLower, CAREER_SNIPPET_TERMS_)
+    containsAny_(snipLower, CAREER_SNIPPET_TERMS_) ||
+    ((containsAny_(subLower, CAREER_WEAK_TERMS_) ||
+      containsAny_(snipLower, CAREER_WEAK_TERMS_)) &&
+      containsAnyWord_(subLower + ' ' + snipLower, CAREER_CONTEXT_TERMS_))
   const isJobAlertSpam = containsAny_(
     subLower,
     'job alert|job recommendations|recommended jobs|new jobs matching|jobs you might like'
@@ -1841,30 +1996,34 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     containsAny_(snipLower, DOCUMENT_SIGNATURE_REQUEST_SNIPPET_TERMS_)
 
   if (isDocuSignSender && isDocuSignCompleted) {
+    const filing = signatureDocumentFiling_(subLower, snipLower)
     return applyUserSentShield_(
       makeDeterministicResult_(
-        '02_Finance_Legal',
-        'Legal/Legal_Court',
+        filing[0],
+        filing[1],
         'Updates',
         'archive',
         0.99,
         subject,
-        'Completed/executed legal or financial document notification routed to Updates.',
+        'Completed/executed signed document notification routed to Updates.',
         'Document Signature Completed'
       )
     )
   }
 
-  if ((isDocuSignSender && isDocuSignRequest) || isDocuSignRequest) {
+  // Signature requests stay in Primary from any sender; the platform sender is
+  // not required (requests also arrive from law firms and schools directly).
+  if (isDocuSignRequest) {
+    const filing = signatureDocumentFiling_(subLower, snipLower)
     return applyUserSentShield_(
       makeDeterministicResult_(
-        '02_Finance_Legal',
-        'Legal/Legal_Court',
+        filing[0],
+        filing[1],
         'Primary',
         'keep',
         1.0,
         subject,
-        'Legal agreement or financial document signature request preserved in Primary Inbox.',
+        'Document signature request preserved in Primary Inbox.',
         'Document Signature Shield'
       )
     )
@@ -1980,15 +2139,29 @@ function deterministicRuleClassify_(sender, subject, snippet, thread, config) {
     containsAny_(subLower, SECURITY_WARNING_SUBJECT_TERMS_) ||
     containsAny_(snipLower, SECURITY_WARNING_SNIPPET_TERMS_)
   ) {
+    // Card and account-fraud alerts belong with the bank, not with IT security.
+    const isFinancialSecurity =
+      matchesSenderDomain_(
+        sender,
+        FINANCIAL_SECURITY_SENDER_DOMAINS_ +
+          '|' +
+          normalizeConfigTermList_(config && config.billingSenderDomains)
+      ) ||
+      containsAnyWord_(
+        subLower + ' ' + snipLower,
+        'charge|charges|transaction|transactions|purchase|debit card|credit card|your card|card ending|withdrawal|transfer'
+      )
     return applyUserSentShield_(
       makeDeterministicResult_(
-        '05_Tech_Infrastructure',
-        'Tech/Security',
+        isFinancialSecurity ? '02_Finance_Legal' : '05_Tech_Infrastructure',
+        isFinancialSecurity ? 'Finance/Banking' : 'Tech/Security',
         'Primary',
         'keep',
         0.99,
         subject,
-        'Suspicious sign-in or account-security warning preserved in Primary Inbox.',
+        isFinancialSecurity
+          ? 'Possible fraudulent charge or account-security alert from a financial institution preserved in Primary Inbox.'
+          : 'Suspicious sign-in or account-security warning preserved in Primary Inbox.',
         'Security Warning Shield'
       )
     )
@@ -2326,149 +2499,12 @@ function processThreadBatch(threads, config, services) {
   return results
 }
 
-const RULE6_PATTERNS = [
-  [/\S \? \S/, "' ? ' between words (was an em dash or a · separator)"],
-  [/\?\?/, "'??' (was a multi-codepoint emoji)"],
-  [/[A-Za-z]\?[A-Za-z]/, "'?' inside a word (was a curly apostrophe)"],
-  [/\uFFFD/, 'U+FFFD replacement character'],
-]
-
 /**
- * Resolves the target GitHub repository owner and name from injected services,
- * environment variables, ScriptProperties, or config.
- *
- * @param {Object} [services] - Optional injected services
- * @returns {{ repoOwner: string, repoName: string }}
+ * Formats one ingested-email log entry. When `sourceRef` is given (e.g.
+ * "gmail thread=<id> msg=<id>"), an invisible HTML-comment marker is appended so
+ * idempotency keys on the message itself rather than on generated prose, which
+ * changes between runs and collides for same-day lookalike receipts.
  */
-function resolveGitHubRepoTarget_(services) {
-  const props =
-    services?.PropertiesService ||
-    (typeof PropertiesService !== 'undefined' ? PropertiesService : null)
-  const scriptProps = props?.getScriptProperties?.()
-  const cfg =
-    typeof getAiClassifierConfig === 'function' ? getAiClassifierConfig() : {}
-  const envOwner =
-    typeof process !== 'undefined' && process.env
-      ? process.env.GITHUB_REPO_OWNER
-      : ''
-  const envName =
-    typeof process !== 'undefined' && process.env
-      ? process.env.GITHUB_REPO_NAME
-      : ''
-
-  const repoOwner =
-    services?.githubRepoOwner ||
-    envOwner ||
-    scriptProps?.getProperty?.('GITHUB_REPO_OWNER') ||
-    cfg.githubRepoOwner ||
-    ''
-  const repoName =
-    services?.githubRepoName ||
-    envName ||
-    scriptProps?.getProperty?.('GITHUB_REPO_NAME') ||
-    cfg.githubRepoName ||
-    ''
-
-  return { repoOwner, repoName }
-}
-
-/** Refuse to write an entry that already shows mojibake. */
-function assertClean_(text, what) {
-  if (!text) return
-  const scrubbed = String(text).replace(/https?:\/\/\S+/gi, '')
-  for (let i = 0; i < RULE6_PATTERNS.length; i++) {
-    if (RULE6_PATTERNS[i][0].test(scrubbed)) {
-      throw new Error(
-        'Rule 6: refusing to write ' + what + ' — ' + RULE6_PATTERNS[i][1]
-      )
-    }
-  }
-}
-
-/** Refuse to write when a non-ASCII char in the source text became '?' on the way out. */
-function assertNoAsciiReplacement_(source, rendered) {
-  if (!source || !rendered) return
-  if (rendered.indexOf('?') === -1) return
-  const lost = []
-  for (let i = 0; i < source.length; i++) {
-    const c = source.charAt(i)
-    if (
-      c.charCodeAt(0) > 127 &&
-      rendered.indexOf(c) === -1 &&
-      lost.indexOf(c) === -1
-    ) {
-      lost.push(c)
-    }
-  }
-  if (lost.length) {
-    throw new Error(
-      'Rule 6: refusing to write text that flattened non-ASCII to "?": ' +
-        lost.join(' ') +
-        ' — encode as UTF-8, not ASCII.'
-    )
-  }
-}
-
-function extractTopicTitleFromPath(filePath) {
-  if (!filePath || typeof filePath !== 'string') {
-    return 'Ingested Records'
-  }
-  const trimmed = filePath.trim()
-  if (!trimmed || trimmed === '/') {
-    return 'Ingested Records'
-  }
-  const parts = trimmed.split('/').filter(Boolean)
-  if (parts.length === 0) {
-    return 'Ingested Records'
-  }
-  const topic = parts.length > 1 ? parts[parts.length - 2] : parts[0]
-  // Strip any trailing file extension (e.g. ".md") before title-casing so a
-  // single-segment path like "digital-backups.md" becomes "Digital Backups".
-  const cleaned = topic.replace(/\.[^.]+$/, '').replace(/-/g, ' ')
-  if (!cleaned) return 'Ingested Records'
-  return cleaned.replace(/\b\w/g, function (l) {
-    return l.toUpperCase()
-  })
-}
-
-function insertEntryIntoLogSection(fullContent, newEntry) {
-  if (!fullContent && !newEntry) return ''
-  if (!fullContent) return String(newEntry)
-  if (!newEntry) return String(fullContent)
-
-  const section3Marker = '## 3. Ingested Activity'
-  const section3Index = fullContent.indexOf(section3Marker)
-  const detailsMarker = '</details>'
-  // Scope the </details> search to the Activity Log section so earlier
-  // collapsible blocks (Layer 1/2 summaries) are never targeted. Fall back to
-  // the first </details> only when the note has no Section 3 marker.
-  const detailsIndex =
-    section3Index !== -1
-      ? fullContent.indexOf(detailsMarker, section3Index)
-      : fullContent.indexOf(detailsMarker)
-
-  if (detailsIndex !== -1) {
-    return (
-      fullContent.substring(0, detailsIndex) +
-      newEntry +
-      '\n' +
-      fullContent.substring(detailsIndex)
-    )
-  }
-
-  if (section3Index !== -1) {
-    const lineBreakIndex = fullContent.indexOf('\n', section3Index)
-    return (
-      fullContent.substring(0, lineBreakIndex + 1) +
-      newEntry +
-      '\n' +
-      fullContent.substring(lineBreakIndex + 1)
-    )
-  }
-
-  return fullContent + '\n' + newEntry
-}
-
 function formatProgressiveDisclosureEntry(
   dateStr,
   title,
@@ -2476,7 +2512,8 @@ function formatProgressiveDisclosureEntry(
   subject,
   summaryText,
   accountEmail,
-  attachments
+  attachments,
+  sourceRef
 ) {
   let entry = '\n### ' + dateStr + ' — ' + title + '\n'
   entry += '- **Account**: ' + accountEmail + '\n'
@@ -2498,10 +2535,52 @@ function formatProgressiveDisclosureEntry(
       }
     }
   }
+  if (sourceRef) {
+    entry += '<!-- source: ' + String(sourceRef).replace(/-->/g, '') + ' -->\n'
+  }
   return entry
 }
 
-function getNotePathForDomain(domain, _subLabel) {
+/**
+ * Returns the log-shard suffix ("2026-Q4" or "2026-11") for an entry date, or ''
+ * when the date cannot be read.
+ *
+ * @param {string|Date} entryDate - "yyyy-MM-dd" string or Date
+ * @param {string} mode - "quarterly" or "monthly"
+ * @returns {string}
+ */
+function noteLogShardSuffix_(entryDate, mode) {
+  let year = 0
+  let month = 0
+  if (entryDate instanceof Date && !Number.isNaN(entryDate.getTime())) {
+    year = entryDate.getUTCFullYear()
+    month = entryDate.getUTCMonth() + 1
+  } else {
+    const m = /^(\d{4})-(\d{2})/.exec(String(entryDate || ''))
+    if (m) {
+      year = Number(m[1])
+      month = Number(m[2])
+    }
+  }
+  if (!year || month < 1 || month > 12) return ''
+  if (mode === 'monthly') {
+    return year + '-' + String(month).padStart(2, '0')
+  }
+  return year + '-Q' + Math.ceil(month / 3)
+}
+
+/**
+ * Maps a canonical domain to the note that receives its ingested log entries.
+ * CUSTOM_NOTE_PATHS (JSON) wins; otherwise NOTE_LOG_SHARDING ("quarterly" or
+ * "monthly") routes entries to `<domain>/activity/<shard>.md` so the domain
+ * index never grows toward the GitHub Contents API's 1 MB read limit.
+ *
+ * @param {string} domain - Canonical domain code
+ * @param {string} [_subLabel] - Unused; reserved for sub-label routing
+ * @param {string|Date} [entryDate] - Entry date used to pick the shard
+ * @returns {string|null} Repo-relative note path
+ */
+function getNotePathForDomain(domain, _subLabel, entryDate) {
   const map = {
     '01_Household': '01_Household/index.md',
     '02_Finance_Legal': '02_Finance_Legal/index.md',
@@ -2511,243 +2590,36 @@ function getNotePathForDomain(domain, _subLabel) {
     '06_Work_Career': '06_Work_Career/index.md',
     '07_Community_NonProfit': '07_Community_NonProfit/index.md',
   }
+  let shardMode = ''
   if (typeof PropertiesService !== 'undefined') {
     try {
-      const customMapJson =
-        PropertiesService.getScriptProperties().getProperty('CUSTOM_NOTE_PATHS')
-      if (customMapJson) {
-        const customMap = JSON.parse(customMapJson)
+      const props = PropertiesService.getScriptProperties()
+      const all =
+        typeof props.getProperties === 'function'
+          ? props.getProperties() || {}
+          : {
+              CUSTOM_NOTE_PATHS: props.getProperty('CUSTOM_NOTE_PATHS'),
+              NOTE_LOG_SHARDING: props.getProperty('NOTE_LOG_SHARDING'),
+            }
+      if (all.CUSTOM_NOTE_PATHS) {
+        const customMap = JSON.parse(all.CUSTOM_NOTE_PATHS)
         if (customMap && customMap[domain]) {
           return customMap[domain]
         }
       }
+      shardMode = String(all.NOTE_LOG_SHARDING || '')
+        .trim()
+        .toLowerCase()
     } catch {
       // Fall through to default map
     }
   }
-  return map[domain] || null
-}
-
-function appendMarkdownEntryToGitHubRepo(
-  filePath,
-  entryMd,
-  commitMessage,
-  services
-) {
-  const props =
-    services?.PropertiesService ||
-    (typeof PropertiesService !== 'undefined' ? PropertiesService : null)
-  const githubToken = props?.getScriptProperties()?.getProperty('GITHUB_PAT')
-  if (!githubToken) {
-    console.log(
-      '[gitHubSync] GITHUB_PAT ScriptProperty not set. Skipping GitHub commit.'
-    )
-    return false
+  const base = map[domain] || null
+  if (base && (shardMode === 'quarterly' || shardMode === 'monthly')) {
+    const suffix = noteLogShardSuffix_(entryDate, shardMode)
+    if (suffix) return domain + '/activity/' + suffix + '.md'
   }
-
-  const sleep = services?.sleepFn || _sleep
-  const maxRetries = 3
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const result = executeGitHubCommit(
-      filePath,
-      entryMd,
-      commitMessage,
-      githubToken,
-      services
-    )
-    if (result === true || result === 'IDEMPOTENT_SKIP') {
-      return true
-    }
-    console.log(
-      '[gitHubSync] Retry attempt',
-      attempt,
-      'of',
-      maxRetries,
-      'for',
-      filePath
-    )
-    sleep(1000 * attempt)
-  }
-
-  console.error(
-    '[gitHubSync] Failed to commit entry to GitHub after',
-    maxRetries,
-    'attempts:',
-    filePath
-  )
-  return false
-}
-
-function executeGitHubCommit(
-  filePath,
-  entryMd,
-  commitMessage,
-  githubToken,
-  services
-) {
-  if (!filePath || !entryMd) {
-    console.warn('[gitHubSync] Missing filePath or entryMd for GitHub commit.')
-    return false
-  }
-  const urlFetchApp =
-    services?.UrlFetchApp ||
-    (typeof UrlFetchApp !== 'undefined' ? UrlFetchApp : null)
-  const utils =
-    services?.Utilities || (typeof Utilities !== 'undefined' ? Utilities : null)
-
-  const { repoOwner, repoName } = resolveGitHubRepoTarget_(services)
-  if (!repoOwner || !repoName) {
-    console.warn(
-      '[gitHubSync] GITHUB_REPO_OWNER or GITHUB_REPO_NAME not configured. Skipping GitHub commit.'
-    )
-    return false
-  }
-
-  const encodedPath = String(filePath)
-    .split('/')
-    .filter(Boolean)
-    .map(function (segment) {
-      return encodeURIComponent(segment)
-    })
-    .join('/')
-
-  const url =
-    'https://api.github.com/repos/' +
-    encodeURIComponent(repoOwner) +
-    '/' +
-    encodeURIComponent(repoName) +
-    '/contents/' +
-    encodedPath
-  const headers = {
-    Authorization: 'Bearer ' + githubToken,
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'Google-Apps-Script',
-  }
-
-  try {
-    const getOptions = {
-      method: 'get',
-      headers: headers,
-      muteHttpExceptions: true,
-    }
-    const res = urlFetchApp.fetch(url, getOptions)
-    const statusCode = res.getResponseCode()
-
-    let sha = null
-    let rawContent = ''
-
-    if (statusCode === 404) {
-      console.log(
-        '[gitHubSync] File not found on GitHub (HTTP 404). Initializing new note:',
-        filePath
-      )
-      const topicTitle = extractTopicTitleFromPath(filePath)
-      const dateStr = utils?.formatDate
-        ? utils.formatDate(new Date(), 'GMT', 'yyyy-MM-dd')
-        : new Date().toISOString().slice(0, 10)
-      rawContent =
-        '---\ntitle: ' +
-        topicTitle +
-        '\ncreated: ' +
-        dateStr +
-        '\nnotebook: household\nsection: general\n---\n\n' +
-        '# ' +
-        topicTitle +
-        '\n\n' +
-        '## 1. Executive Summary & Active Status\n- Ingested records log.\n\n' +
-        '## 2. Key References & Quick Links\n| Topic | Asset |\n| :--- | :--- |\n\n' +
-        '## 3. Ingested Activity Logs\n<details open><summary><b>Activity Logs</b></summary>\n</details>\n'
-    } else if (statusCode === 200) {
-      const fileData = JSON.parse(res.getContentText())
-      sha = fileData.sha
-      // GitHub Contents API wraps Base64 in newlines every 60 chars; strip them
-      // before decoding since some decoders reject embedded whitespace.
-      rawContent = utils
-        .newBlob(
-          utils.base64Decode((fileData.content || '').replace(/[\r\n]/g, ''))
-        )
-        .getDataAsString()
-
-      if (
-        rawContent.indexOf(entryMd.trim()) !== -1 ||
-        (commitMessage && rawContent.indexOf(commitMessage) !== -1)
-      ) {
-        console.log(
-          '[gitHubSync] Idempotent Skip: Entry already exists in',
-          filePath
-        )
-        return 'IDEMPOTENT_SKIP'
-      }
-    } else {
-      console.error(
-        '[gitHubSync] Error fetching file from GitHub (HTTP ' +
-          statusCode +
-          '):',
-        res.getContentText()
-      )
-      return false
-    }
-
-    const updatedContent = insertEntryIntoLogSection(rawContent, entryMd)
-
-    assertClean_(entryMd, 'new entry for ' + filePath)
-
-    const base64Updated = utils.base64Encode(
-      utils.newBlob(updatedContent).getBytes()
-    )
-
-    // Validate the ACTUAL Base64 round trip at the payload boundary: decode what
-    // we are about to PUT and confirm no non-ASCII character was flattened to
-    // '?'. Comparing updatedContent to entryMd/rawContent directly is inert
-    // because updatedContent contains both source strings unchanged.
-    const renderedContent = utils
-      .newBlob(utils.base64Decode(base64Updated))
-      .getDataAsString()
-    assertNoAsciiReplacement_(updatedContent, renderedContent)
-
-    const putPayload = {
-      message:
-        commitMessage ||
-        'feat(ingestion): append ingested document entry via Google Apps Script',
-      content: base64Updated,
-      branch: 'main',
-    }
-    if (sha) {
-      putPayload.sha = sha
-    }
-
-    const putOptions = {
-      method: 'put',
-      headers: headers,
-      contentType: 'application/json',
-      payload: JSON.stringify(putPayload),
-      muteHttpExceptions: true,
-    }
-
-    const putRes = urlFetchApp.fetch(url, putOptions)
-    const putStatus = putRes.getResponseCode()
-
-    if (putStatus === 200 || putStatus === 201) {
-      console.log(
-        '[gitHubSync] Successfully committed markdown entry to GitHub:',
-        filePath
-      )
-      return true
-    } else if (putStatus === 409) {
-      console.warn('[gitHubSync] SHA collision (HTTP 409) on file:', filePath)
-      return false
-    } else {
-      console.error(
-        '[gitHubSync] Error committing to GitHub (HTTP ' + putStatus + '):',
-        putRes.getContentText()
-      )
-      return false
-    }
-  } catch (e) {
-    console.error('[gitHubSync] Exception calling GitHub API:', e.message)
-    return false
-  }
+  return base
 }
 
 function formatAuditDate_(d) {
@@ -6319,7 +6191,7 @@ function revertAndQueueMissedCareerEmails(gmailApp, config) {
   const processedLabel = ensureGmailLabel(processedLabelName, gmail)
 
   const recoverySearch =
-    'newer_than:14d (subject:"Employment Agreement" OR subject:"Employment Contract" OR subject:"Offer Letter" OR subject:"Job Offer")'
+    'newer_than:14d -category:promotions -category:social -category:forums (subject:"Employment Agreement" OR subject:"Employment Contract" OR subject:"Offer Letter" OR subject:"Job Offer")'
 
   const modifiedThreadIds = []
   try {
@@ -6405,7 +6277,7 @@ function runMissedEmailsSweep(config, services) {
 
   // 1. Direct Priority Recovery: First sweep and reclassify career & employment contract emails
   const careerQuery =
-    'newer_than:14d (subject:"Employment Agreement" OR subject:"Employment Contract" OR subject:"Offer Letter" OR subject:"Job Offer")'
+    'newer_than:14d -category:promotions -category:social -category:forums (subject:"Employment Agreement" OR subject:"Employment Contract" OR subject:"Offer Letter" OR subject:"Job Offer")'
   console.log('[runMissedEmailsSweep] Priority career sweep: ' + careerQuery)
   reclassifyThreadsByQuery(
     careerQuery,
@@ -6844,9 +6716,6 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
     console.log(
       '[processEmailsWithAiClassifier] Starting AI semantic email processing...'
     )
-    const hasExplicitCustomConfig = Boolean(
-      customConfig && !isTriggerEventObject_(customConfig)
-    )
     const config = resolveEffectiveConfig_(customConfig)
 
     if (!config.geminiApiKey) {
@@ -6865,9 +6734,10 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
       return
     }
 
-    if (!hasExplicitCustomConfig) {
-      revertAndQueueMissedCareerEmails(gmail, config)
-    }
+    // revertAndQueueMissedCareerEmails is a recovery sweep, not part of the
+    // 5-minute path: run every trigger, it stripped Processed from correctly
+    // filed job-board promos titled "Job Offer" and re-queued them each cycle
+    // for 14 days. It now runs only from runMissedEmailsSweep.
 
     const rawPrimaryThreads = gmail.search(config.unprocessedQuery, 0, 10) || []
     let threads = sortThreadsByLastMessageDate_(rawPrimaryThreads)
@@ -6963,6 +6833,7 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
     const startTime = Date.now()
     let consecutiveRemoteFailures = 0
     let remoteQuotaExhausted = false
+    let githubTokenMissingRecorded = false
 
     if (isCircuitBreakerOpen(props)) {
       const untilMs = Number.parseInt(
@@ -7154,19 +7025,29 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
 
           if (config.githubToken) {
             try {
-              const notePath = getNotePathForDomain(
-                classification.canonicalDomain,
-                classification.subLabel
-              )
               const utils =
                 services.Utilities ||
                 (typeof Utilities !== 'undefined' ? Utilities : null)
+              const msgDate =
+                typeof firstMessage.getDate === 'function'
+                  ? firstMessage.getDate()
+                  : new Date()
+              const dateStr =
+                utils && typeof utils.formatDate === 'function'
+                  ? utils.formatDate(msgDate, 'GMT', 'yyyy-MM-dd')
+                  : ''
+              const notePath = getNotePathForDomain(
+                classification.canonicalDomain,
+                classification.subLabel,
+                dateStr || msgDate
+              )
               if (notePath && utils) {
-                const msgDate =
-                  typeof firstMessage.getDate === 'function'
-                    ? firstMessage.getDate()
-                    : new Date()
-                const dateStr = utils.formatDate(msgDate, 'GMT', 'yyyy-MM-dd')
+                const threadRef =
+                  typeof thread.getId === 'function' ? thread.getId() : ''
+                const msgRef =
+                  typeof firstMessage.getId === 'function'
+                    ? firstMessage.getId()
+                    : ''
                 const entryMd = formatProgressiveDisclosureEntry(
                   dateStr,
                   classification.title || subject,
@@ -7174,7 +7055,12 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
                   subject,
                   classification.summary,
                   config.userAccountEmail,
-                  savedAttachments.concat(savedAttachments.existingFiles || [])
+                  savedAttachments.concat(savedAttachments.existingFiles || []),
+                  threadRef
+                    ? 'gmail thread=' +
+                        threadRef +
+                        (msgRef ? ' msg=' + msgRef : '')
+                    : ''
                 )
                 assertNoAsciiReplacement_(
                   (subject || '') + (classification.summary || ''),
@@ -7196,6 +7082,10 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
                   ghErr.message
               )
             }
+          } else if (!githubTokenMissingRecorded) {
+            // Surface a silent ingestion outage once per run.
+            githubTokenMissingRecorded = true
+            recordGitHubSyncStatus_(services, 'NO_TOKEN', '')
           }
         } else {
           cleanConflictingLabels(
@@ -7473,5 +7363,9 @@ if (typeof module !== 'undefined' && module.exports) {
     resolveEffectiveConfig_,
     sortThreadsByLastMessageDate_,
     extractSenderAddress_,
+    containsAnyWord_,
+    noteLogShardSuffix_,
+    signatureDocumentFiling_,
+    recordGitHubSyncStatus_,
   }
 }

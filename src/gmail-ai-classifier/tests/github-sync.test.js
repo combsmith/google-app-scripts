@@ -460,7 +460,7 @@ describe('GitHub Sync & Rule 6 Mojibake Guards', () => {
       expect(result).toBe(false)
     })
 
-    test('fails closed and returns false when GITHUB_REPO_OWNER or GITHUB_REPO_NAME is unconfigured', () => {
+    test('fails closed (non-retryable NOT_CONFIGURED) when GITHUB_REPO_OWNER or GITHUB_REPO_NAME is unconfigured', () => {
       global.PropertiesService = {
         getScriptProperties: () => ({
           getProperty: (k) => (k === 'GITHUB_PAT' ? 'ghp_valid' : ''),
@@ -482,7 +482,7 @@ describe('GitHub Sync & Rule 6 Mojibake Guards', () => {
           'feat(ingestion): Test',
           'ghp_valid'
         )
-      ).toBe(false)
+      ).toBe('NOT_CONFIGURED')
     })
 
     test('commits successfully (200 GET -> 200 PUT) with UTF-8 content', () => {

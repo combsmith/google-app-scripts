@@ -153,8 +153,13 @@ function executeGitHubCommit(filePath, entryContent, commitMessage, config) {
       )
       existingContent = Utilities.newBlob(decodedBytes).getDataAsString()
 
-      // Idempotency: skip when this exact entry is already present.
-      if (existingContent.indexOf(entryContent.trim()) !== -1) {
+      // Idempotency: entries with a source marker are keyed on the source file;
+      // otherwise skip when this exact entry is already present.
+      var markerMatch = /<!-- source: [^\n]*? -->/.exec(entryContent)
+      var alreadyPresent = markerMatch
+        ? existingContent.indexOf(markerMatch[0]) !== -1
+        : existingContent.indexOf(entryContent.trim()) !== -1
+      if (alreadyPresent) {
         console.log(
           '[gitHubSync] Idempotent Skip: Entry already exists in ' + filePath
         )
