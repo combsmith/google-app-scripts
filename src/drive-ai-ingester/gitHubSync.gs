@@ -15,11 +15,17 @@ var sharedHelpers_ = (() => {
 var assertClean_ =
   sharedHelpers_.assertClean_ ||
   (function () {
-    var patterns = [[/�/, 'U+FFFD replacement character']]
+    var patterns = [
+      [/\S \? \S/, "' ? ' between words (was an em dash or a · separator)"],
+      [/\?\?/, "'??' (was a multi-codepoint emoji)"],
+      [/[A-Za-z]\?[A-Za-z]/, "'?' inside a word (was a curly apostrophe)"],
+      [/�/, 'U+FFFD replacement character'],
+    ]
     return function (text, what) {
       if (!text) return
+      var stripped = String(text).replace(/https?:\/\/\S+/g, '')
       for (var i = 0; i < patterns.length; i++) {
-        if (patterns[i][0].test(text)) {
+        if (patterns[i][0].test(stripped)) {
           throw new Error(
             'Rule 6: refusing to write ' + what + ' — ' + patterns[i][1]
           )
