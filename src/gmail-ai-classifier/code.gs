@@ -2542,6 +2542,31 @@ function formatProgressiveDisclosureEntry(
 }
 
 /**
+ * True when a sub-label is listed in config.noteExcludedSubLabels
+ * (NOTE_EXCLUDED_SUBLABELS, comma-separated, case-insensitive). A trailing
+ * "/*" excludes a whole branch, e.g. "Tech/Alerts,Promotions/*".
+ *
+ * @param {string} subLabel - Effective sub-label
+ * @param {Object} config - Classifier config
+ * @returns {boolean}
+ */
+function isSubLabelExcludedFromNotes_(subLabel, config) {
+  const label = String(subLabel || '')
+    .trim()
+    .toLowerCase()
+  if (!label) return false
+  const list = String((config && config.noteExcludedSubLabels) || '')
+    .split(',')
+    .map((v) => v.trim().toLowerCase())
+    .filter(Boolean)
+  return list.some((entry) =>
+    entry.endsWith('/*')
+      ? label === entry.slice(0, -2) || label.startsWith(entry.slice(0, -1))
+      : label === entry
+  )
+}
+
+/**
  * Returns the log-shard suffix ("2026-Q4" or "2026-11") for an entry date, or ''
  * when the date cannot be read.
  *
@@ -7023,7 +7048,11 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
             continue
           }
 
-          if (config.githubToken) {
+          const excludedFromNotes = isSubLabelExcludedFromNotes_(
+            classification.subLabel,
+            config
+          )
+          if (config.githubToken && !excludedFromNotes) {
             try {
               const utils =
                 services.Utilities ||
@@ -7082,7 +7111,7 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
                   ghErr.message
               )
             }
-          } else if (!githubTokenMissingRecorded) {
+          } else if (!config.githubToken && !githubTokenMissingRecorded) {
             // Surface a silent ingestion outage once per run.
             githubTokenMissingRecorded = true
             recordGitHubSyncStatus_(services, 'NO_TOKEN', '')
@@ -7367,5 +7396,6 @@ if (typeof module !== 'undefined' && module.exports) {
     noteLogShardSuffix_,
     signatureDocumentFiling_,
     recordGitHubSyncStatus_,
+    isSubLabelExcludedFromNotes_,
   }
 }

@@ -406,6 +406,18 @@ describe.each(modules)('Phase 0 rule hardening (%s)', (_name, mod) => {
     })
   })
 
+  test('NOTE_EXCLUDED_SUBLABELS matches exact labels and branches', () => {
+    const cfg = { noteExcludedSubLabels: ' Tech/Alerts , Promotions/* ' }
+    expect(mod.isSubLabelExcludedFromNotes_('tech/alerts', cfg)).toBe(true)
+    expect(mod.isSubLabelExcludedFromNotes_('Tech/Security', cfg)).toBe(false)
+    expect(mod.isSubLabelExcludedFromNotes_('Promotions/Retail', cfg)).toBe(
+      true
+    )
+    expect(mod.isSubLabelExcludedFromNotes_('Promotions', cfg)).toBe(true)
+    expect(mod.isSubLabelExcludedFromNotes_('', cfg)).toBe(false)
+    expect(mod.isSubLabelExcludedFromNotes_('Tech/Alerts', {})).toBe(false)
+  })
+
   test('career recovery search excludes promotional categories', () => {
     const queries = []
     const gmail = {

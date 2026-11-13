@@ -2527,17 +2527,34 @@ function formatProgressiveDisclosureEntry(
     }
   }
   if (sourceRef) {
-    // Remove every comment-end form (--> and --!>) until stable so removal
-    // cannot reassemble a terminator.
-    let safeRef = String(sourceRef)
-    let prevRef
-    do {
-      prevRef = safeRef
-      safeRef = safeRef.replace(/--!?>/g, '')
-    } while (safeRef !== prevRef)
-    entry += '<!-- source: ' + safeRef + ' -->\n'
+    entry += '<!-- source: ' + String(sourceRef).replace(/-->/g, '') + ' -->\n'
   }
   return entry
+}
+
+/**
+ * True when a sub-label is listed in config.noteExcludedSubLabels
+ * (NOTE_EXCLUDED_SUBLABELS, comma-separated, case-insensitive). A trailing
+ * "/*" excludes a whole branch, e.g. "Tech/Alerts,Promotions/*".
+ *
+ * @param {string} subLabel - Effective sub-label
+ * @param {Object} config - Classifier config
+ * @returns {boolean}
+ */
+function isSubLabelExcludedFromNotes_(subLabel, config) {
+  const label = String(subLabel || '')
+    .trim()
+    .toLowerCase()
+  if (!label) return false
+  const list = String((config && config.noteExcludedSubLabels) || '')
+    .split(',')
+    .map((v) => v.trim().toLowerCase())
+    .filter(Boolean)
+  return list.some((entry) =>
+    entry.endsWith('/*')
+      ? label === entry.slice(0, -2) || label.startsWith(entry.slice(0, -1))
+      : label === entry
+  )
 }
 
 /**
@@ -7022,7 +7039,11 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
             continue
           }
 
-          if (config.githubToken) {
+          const excludedFromNotes = isSubLabelExcludedFromNotes_(
+            classification.subLabel,
+            config
+          )
+          if (config.githubToken && !excludedFromNotes) {
             try {
               const utils =
                 services.Utilities ||
@@ -7081,7 +7102,7 @@ function processEmailsWithAiClassifier(customConfig, customServices) {
                   ghErr.message
               )
             }
-          } else if (!githubTokenMissingRecorded) {
+          } else if (!config.githubToken && !githubTokenMissingRecorded) {
             // Surface a silent ingestion outage once per run.
             githubTokenMissingRecorded = true
             recordGitHubSyncStatus_(services, 'NO_TOKEN', '')
@@ -7366,5 +7387,6 @@ if (typeof module !== 'undefined' && module.exports) {
     noteLogShardSuffix_,
     signatureDocumentFiling_,
     recordGitHubSyncStatus_,
+    isSubLabelExcludedFromNotes_,
   }
 }
