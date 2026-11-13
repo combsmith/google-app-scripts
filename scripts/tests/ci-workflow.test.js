@@ -66,18 +66,6 @@ describe('ci.yml secret-scan job (#679)', () => {
   it('runs gitleaks detect over full history and fails on findings', () => {
     expect(job).toMatch(/fetch-depth:\s*0/)
     expect(job).toMatch(/run:\s*gitleaks detect .*--exit-code 1/)
-    // Verify effective redaction: exactly one --redact flag that enables full redaction
-    const cmdMatch = /run:\s*(gitleaks detect.*)$/m.exec(job)
-    expect(cmdMatch).not.toBeNull()
-    if (cmdMatch) {
-      const redactArgs = cmdMatch[1]
-        .split(/\s+/)
-        .filter((arg) => arg.startsWith('--redact'))
-      expect(redactArgs).toHaveLength(1)
-      expect(['--redact', '--redact=100']).toContain(redactArgs[0])
-      // Verify effective redaction cannot be weakened by --redact=0
-      expect(cmdMatch[1]).not.toMatch(/--redact=0/)
-    }
   })
 
   it('runs gitleaks with full redaction that cannot be weakened', () => {
