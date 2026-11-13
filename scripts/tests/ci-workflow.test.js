@@ -75,6 +75,8 @@ describe('ci.yml secret-scan job (#679)', () => {
         .filter((arg) => arg.startsWith('--redact'))
       expect(redactArgs).toHaveLength(1)
       expect(['--redact', '--redact=100']).toContain(redactArgs[0])
+      // Verify effective redaction cannot be weakened by --redact=0
+      expect(cmdMatch[1]).not.toMatch(/--redact=0/)
     }
   })
 
