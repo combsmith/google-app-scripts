@@ -2527,7 +2527,15 @@ function formatProgressiveDisclosureEntry(
     }
   }
   if (sourceRef) {
-    entry += '<!-- source: ' + String(sourceRef).replace(/-->/g, '') + ' -->\n'
+    // Remove every comment-end form (--> and --!>) until stable so removal
+    // cannot reassemble a terminator.
+    let safeRef = String(sourceRef)
+    let prevRef
+    do {
+      prevRef = safeRef
+      safeRef = safeRef.replace(/--!?>/g, '')
+    } while (safeRef !== prevRef)
+    entry += '<!-- source: ' + safeRef + ' -->\n'
   }
   return entry
 }
