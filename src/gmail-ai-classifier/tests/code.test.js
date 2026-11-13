@@ -4459,7 +4459,7 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             )
             expect(res).not.toBeNull()
             expect(res.canonicalDomain).toBe('02_Finance_Legal')
-            expect(res.subLabel).toBe('Legal/Legal_Court')
+            expect(res.subLabel).toBe('Finance/Legal')
             expect(res.category).toBe('Primary')
             expect(res.action).toBe('keep')
             expect(res.confidence).toBe(1.0)
@@ -4473,7 +4473,7 @@ describe('reclassifyThreadsByQuery Historical Realignment', () => {
             )
             expect(res).not.toBeNull()
             expect(res.canonicalDomain).toBe('02_Finance_Legal')
-            expect(res.subLabel).toBe('Legal/Legal_Court')
+            expect(res.subLabel).toBe('Finance/Legal')
             expect(res.category).toBe('Updates')
             expect(res.action).toBe('archive')
             expect(res.confidence).toBe(0.99)
@@ -6617,6 +6617,48 @@ describe('PR #649 owner review regressions', () => {
           })
         )
 
+        const digitaloceanReceipt = mod.deterministicRuleClassify_(
+          'DigitalOcean <support@digitalocean.com>',
+          'Your receipt for Droplet droplet-01',
+          'We have processed your monthly invoice'
+        )
+        expect(digitaloceanReceipt).toEqual(
+          expect.objectContaining({
+            canonical_label: '02_Finance_Legal',
+            category: 'Updates',
+            action: 'archive',
+            reasoning: 'Developer Platform Payment Receipt',
+          })
+        )
+
+        const anthropicReceipt = mod.deterministicRuleClassify_(
+          'Anthropic <billing@anthropic.com>',
+          'Payment received for Anthropic Claude API',
+          'Your payment was processed successfully'
+        )
+        expect(anthropicReceipt).toEqual(
+          expect.objectContaining({
+            canonical_label: '02_Finance_Legal',
+            category: 'Updates',
+            action: 'archive',
+            reasoning: 'Developer Platform Payment Receipt',
+          })
+        )
+
+        const openaiReceipt = mod.deterministicRuleClassify_(
+          'OpenAI <billing@openai.com>',
+          'Payment receipt for OpenAI API usage',
+          'Thank you for your subscription payment'
+        )
+        expect(openaiReceipt).toEqual(
+          expect.objectContaining({
+            canonical_label: '02_Finance_Legal',
+            category: 'Updates',
+            action: 'archive',
+            reasoning: 'Developer Platform Payment Receipt',
+          })
+        )
+
         // Non-receipt alerts still route to Tech/Alerts
         const githubAlert = mod.deterministicRuleClassify_(
           'GitHub <notifications@github.com>',
@@ -6631,6 +6673,43 @@ describe('PR #649 owner review regressions', () => {
             reasoning: 'GitHub Alert',
           })
         )
+
+        // Precedence: GitHub notification with receipt phrase in subject stays GitHub Alert
+        const githubNotifReceipt = mod.deterministicRuleClassify_(
+          'GitHub <notifications@github.com>',
+          '[combsmith/google-app-scripts] feat(classifier): add receipt for subscription fast-path',
+          'PR merged by maintainer'
+        )
+        expect(githubNotifReceipt).toEqual(
+          expect.objectContaining({
+            canonical_label: '05_Tech_Infrastructure',
+            category: 'Updates',
+            action: 'archive',
+            reasoning: 'GitHub Alert',
+          })
+        )
+
+        // Negative lookalikes: Developer platform payment failures / dunning fall through to semantic
+        const doFailedPayment = mod.deterministicRuleClassify_(
+          'DigitalOcean <billing@digitalocean.com>',
+          'Payment receipt failed: action required',
+          'Your card was declined by your bank'
+        )
+        expect(doFailedPayment).toBeNull()
+
+        const stripeDeclinedPayment = mod.deterministicRuleClassify_(
+          'Stripe <receipts@stripe.com>',
+          'Receipt for declined payment',
+          'Your payment method was declined'
+        )
+        expect(stripeDeclinedPayment).toBeNull()
+
+        const anthropicPastDue = mod.deterministicRuleClassify_(
+          'Anthropic <billing@anthropic.com>',
+          'Payment received: past due invoice',
+          'Please update your payment method'
+        )
+        expect(anthropicPastDue).toBeNull()
 
         // AI & developer platform product updates and release notes
         const claudeCodeUpdate = mod.deterministicRuleClassify_(
@@ -6677,6 +6756,22 @@ describe('PR #649 owner review regressions', () => {
             reasoning: 'AI Platform Product Update',
           })
         )
+
+        // Negative: 1:1 human outreach with "introducing" falls through to semantic reasoning
+        const humanIntro = mod.deterministicRuleClassify_(
+          'Anthropic <sarah.jenkins@anthropic.com>',
+          'Introducing myself - Anthropic partnership',
+          'Hi Don, I wanted to reach out regarding your enterprise account'
+        )
+        expect(humanIntro).toBeNull()
+
+        // Negative: Snippet exclusion prevents archiving if security/password notice is in body
+        const securitySnippetExclusion = mod.deterministicRuleClassify_(
+          'Claude <no-reply@email.claude.com>',
+          'What’s new in Claude',
+          'Security notice: your account password was recently changed'
+        )
+        expect(securitySnippetExclusion).toBeNull()
       })
     })
   })
