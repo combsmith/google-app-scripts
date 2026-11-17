@@ -118,7 +118,7 @@ describe('analyzeDocumentWithAi', () => {
     )
     expect(fetch).toHaveBeenNthCalledWith(
       2,
-      expect.stringContaining('gemini-2.0-flash:generateContent'),
+      expect.stringContaining('gemini-2.5-flash-lite:generateContent'),
       expect.any(Object)
     )
   })
@@ -131,14 +131,13 @@ describe('analyzeDocumentWithAi', () => {
       .mockImplementationOnce(() => {
         throw new Error('net')
       })
-      .mockReturnValueOnce(makeResponse(200, geminiBody('no json here')))
     const res = analyzeDocumentWithAi('f', 't', config, {
       UrlFetchApp: { fetch },
       Utilities: { sleep },
     })
     expect(res).toBeNull()
     expect(sleep).toHaveBeenCalledWith(2000)
-    expect(fetch).toHaveBeenCalledTimes(3)
+    expect(fetch).toHaveBeenCalledTimes(2)
     expect(fetch).toHaveBeenNthCalledWith(
       1,
       expect.stringContaining('gemini-2.5-flash:generateContent'),
@@ -146,14 +145,23 @@ describe('analyzeDocumentWithAi', () => {
     )
     expect(fetch).toHaveBeenNthCalledWith(
       2,
-      expect.stringContaining('gemini-2.0-flash:generateContent'),
+      expect.stringContaining('gemini-2.5-flash-lite:generateContent'),
       expect.any(Object)
     )
-    expect(fetch).toHaveBeenNthCalledWith(
-      3,
-      expect.stringContaining('gemini-1.5-flash:generateContent'),
-      expect.any(Object)
-    )
+    // Retired models are never called.
+    expect(JSON.stringify(fetch.mock.calls)).not.toMatch(/gemini-(1\.5|2\.0)/)
+  })
+
+  test('returns null when a model answers without JSON', () => {
+    const fetch = jest
+      .fn()
+      .mockReturnValue(makeResponse(200, geminiBody('no json here')))
+    expect(
+      analyzeDocumentWithAi('f', 't', config, {
+        UrlFetchApp: { fetch },
+        Utilities: { sleep: jest.fn() },
+      })
+    ).toBeNull()
   })
 
   test('handles 200 response with missing candidates', () => {
@@ -165,7 +173,7 @@ describe('analyzeDocumentWithAi', () => {
       Utilities: { sleep: jest.fn() },
     })
     expect(res).toBeNull()
-    expect(fetch).toHaveBeenCalledTimes(3)
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -200,9 +208,10 @@ describe('applyDualLayerTagsToDriveFile', () => {
     )
   }
 
-  test('sets description and inserts front matter into docs with properly escaped JSON arrays', () => {
+  test('tags the description only and never edits a Google Doc body', () => {
     const body = { getText: () => 'text', insertParagraph: jest.fn() }
-    const DocumentApp = { openById: () => ({ getBody: () => body }) }
+    const openById = jest.fn(() => ({ getBody: () => body }))
+    const DocumentApp = { openById }
     const file = makeFile({ getMimeType: () => 'gdoc' })
     expect(
       applyDualLayerTagsToDriveFile(file, meta, {
@@ -212,16 +221,10 @@ describe('applyDualLayerTagsToDriveFile', () => {
       })
     ).toBe(true)
     expect(file.setDescription).toHaveBeenCalledWith(
-      expect.stringContaining('old\n\n[AI_INDEXED]')
+      'old\n\n[AI_INDEXED] [AI_DOMAIN: 01_Household] sublabel: x | people: P, Acme, Inc. | organization: Org, LLC | tags: a, b'
     )
-    expect(body.insertParagraph).toHaveBeenCalledWith(
-      0,
-      expect.stringContaining('people: ["P","Acme, Inc."]')
-    )
-    expect(body.insertParagraph).toHaveBeenCalledWith(
-      0,
-      expect.stringContaining('organization: ["Org, LLC"]')
-    )
+    expect(openById).not.toHaveBeenCalled()
+    expect(body.insertParagraph).not.toHaveBeenCalled()
   })
 
   test('uses empty description, skips existing marker and header', () => {
@@ -286,11 +289,10 @@ describe('applyDualLayerTagsToDriveFile', () => {
         Utilities,
       })
     ).toBe(true)
-    expect(file.setDescription).toHaveBeenCalled()
-    expect(body.insertParagraph).toHaveBeenCalledWith(
-      0,
-      expect.stringContaining('people: []')
+    expect(file.setDescription).toHaveBeenCalledWith(
+      'old\n\n[AI_INDEXED] [AI_DOMAIN: 01_Household] sublabel: x | people:  | tags: '
     )
+    expect(body.insertParagraph).not.toHaveBeenCalled()
   })
 
   test('returns false when layer 1 fails', () => {
@@ -304,7 +306,7 @@ describe('applyDualLayerTagsToDriveFile', () => {
     ).toBe(false)
   })
 
-  test('layer 2 failure is non-fatal', () => {
+  test('does not depend on DocumentApp being available', () => {
     const DocumentApp = {
       openById: () => {
         throw new Error('x')
@@ -602,6 +604,19 @@ describe('processDriveFilesWithAiIngester runner & functional validation', () =>
         ),
     }
 
+    const iter = (items) => {
+      let i = 0
+      return { hasNext: () => i < items.length, next: () => items[i++] }
+    }
+    const folder = (id, name, parents) => ({
+      getId: () => id,
+      getName: () => name,
+      getParents: () => iter(parents || []),
+    })
+    const householdRoot = folder('f-root', '01_Household', [])
+    const householdSub = folder('f-sub', 'Primary_House', [householdRoot])
+    const personalFolder = folder('f-personal', 'Personal Notes', [])
+
     const testFile = {
       getName: () => 'My Test Doc',
       getDescription: () => '',
@@ -610,7 +625,15 @@ describe('processDriveFilesWithAiIngester runner & functional validation', () =>
       getId: () => 'doc123',
       getLastUpdated: () => new Date(),
       getUrl: () => 'https://drive.google.com/file/d/doc123',
+      getParents: () => iter([householdSub]),
     }
+
+    const outOfTreeFile = Object.assign({}, testFile, {
+      getName: () => 'Shared Coaching Notes',
+      setDescription: jest.fn(),
+      getId: () => 'doc999',
+      getParents: () => iter([personalFolder]),
+    })
 
     const errorFile = {
       getName: () => 'Corrupt Doc',
@@ -619,7 +642,7 @@ describe('processDriveFilesWithAiIngester runner & functional validation', () =>
       },
     }
 
-    let filesList = [errorFile, testFile]
+    let filesList = [errorFile, outOfTreeFile, testFile]
     let index = 0
     const mockIterator = {
       hasNext: () => index < filesList.length,
@@ -634,10 +657,16 @@ describe('processDriveFilesWithAiIngester runner & functional validation', () =>
 
     processDriveFilesWithAiIngester()
 
-    expect(global.DriveApp.searchFiles).toHaveBeenCalled()
+    expect(global.DriveApp.searchFiles).toHaveBeenCalledWith(
+      expect.stringContaining("'me' in owners")
+    )
     expect(testFile.setDescription).toHaveBeenCalledWith(
       expect.stringContaining('[AI_INDEXED]')
     )
+    // Documents outside the canonical folder tree are never tagged or summarized.
+    expect(outOfTreeFile.setDescription).not.toHaveBeenCalled()
+    // Document bodies are never edited.
+    expect(docBody.insertParagraph).not.toHaveBeenCalled()
     expect(deleteProperty).toHaveBeenCalledWith(
       'DRIVE_INGESTER_CONTINUATION_TOKEN'
     )
@@ -728,5 +757,85 @@ describe('processDriveFilesWithAiIngester runner & functional validation', () =>
     expect(newTrigger).toHaveBeenCalledWith('processDriveFilesWithAiIngester')
     expect(everyMinutes).toHaveBeenCalledWith(15)
     expect(create).toHaveBeenCalled()
+  })
+})
+
+describe('canonical scope, shards and markers', () => {
+  const {
+    isInCanonicalFolderTree_,
+    noteLogShardSuffix_,
+    getNotePathForDomain: notePath,
+    formatDriveIngestionEntry: fmt,
+  } = require('../src/index')
+  const originalProps = global.PropertiesService
+  afterEach(() => {
+    global.PropertiesService = originalProps
+  })
+  const iter = (items) => {
+    let i = 0
+    return { hasNext: () => i < items.length, next: () => items[i++] }
+  }
+
+  test('walks ancestors, memoizes folders and tolerates errors', () => {
+    const getParents = jest.fn(() => iter([]))
+    const root = {
+      getId: () => 'r',
+      getName: () => '02_Finance_Legal',
+      getParents,
+    }
+    const mid = {
+      getId: () => 'm',
+      getName: () => 'Taxes',
+      getParents: () => iter([root]),
+    }
+    const cache = {}
+    const file = { getParents: () => iter([mid]) }
+    expect(isInCanonicalFolderTree_(file, ['02_Finance_Legal'], cache)).toBe(
+      true
+    )
+    expect(cache).toEqual({ r: true, m: true })
+    expect(isInCanonicalFolderTree_(file, ['01_Household'], {})).toBe(false)
+    const broken = {
+      getName: () => 'x',
+      getParents: () => {
+        throw new Error('no access')
+      },
+    }
+    jest.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(isInCanonicalFolderTree_(broken, ['01_Household'])).toBe(false)
+    console.warn.mockRestore()
+  })
+
+  test('shards note paths when NOTE_LOG_SHARDING is set', () => {
+    global.PropertiesService = {
+      getScriptProperties: () => ({ getProperty: () => 'quarterly' }),
+    }
+    expect(notePath('04_Family_Health', null, '2026-11-02')).toBe(
+      '04_Family_Health/activity/2026-Q4.md'
+    )
+    global.PropertiesService = {
+      getScriptProperties: () => ({ getProperty: () => 'monthly' }),
+    }
+    expect(
+      notePath('04_Family_Health', null, new Date(Date.UTC(2026, 1, 3)))
+    ).toBe('04_Family_Health/activity/2026-02.md')
+    expect(notePath('04_Family_Health', null, 'bad')).toBe(
+      '04_Family_Health/index.md'
+    )
+    global.PropertiesService = {
+      getScriptProperties: () => {
+        throw new Error('x')
+      },
+    }
+    expect(notePath('04_Family_Health', null, '2026-11-02')).toBe(
+      '04_Family_Health/index.md'
+    )
+    expect(noteLogShardSuffix_('2026-00-01', 'quarterly')).toBe('')
+  })
+
+  test('adds a drive source marker when a file id is given', () => {
+    expect(fmt('2026-11-12', 'T', 'u', '', [], [], null, 'abc')).toContain(
+      '<!-- source: drive file=abc -->'
+    )
   })
 })
