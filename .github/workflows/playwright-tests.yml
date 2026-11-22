@@ -11,7 +11,11 @@ on:
 jobs:
   playwright:
     name: Playwright UI Tests
-    runs-on: ubuntu-latest
+    # Pinned to ubuntu-24.04: ubuntu-latest now resolves to ubuntu-26.04, where the
+    # installed Playwright fails with "Playwright does not support chromium on
+    # ubuntu26.04-x64" (#693). Switch back to ubuntu-latest once the Playwright
+    # version in package-lock.json supports ubuntu-26.04.
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       actions: write
