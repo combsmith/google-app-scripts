@@ -105,26 +105,39 @@ jobs:
       - name: Verify no remaining issues after auto-fix
         run: npm run check
 
+  # Canonical secret-scan job (combsmith/.github standards/workflows/ci.yml,
+  # push-protection.md#required-ci-job). Uses the gitleaks CLI rather than
+  # gitleaks/gitleaks-action, whose v2+ requires a GITLEAKS_LICENSE secret for
+  # org repos — Dependabot-triggered runs receive no Actions secrets, so the
+  # action failed on Dependabot PRs (#679). Fully pinned + checksum-verified;
+  # no SARIF upload, so no `security-events: write` permission.
   secret-scan:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write
     steps:
       - name: Checkout (full history)
         # Pin to SHA per Action Pinning Policy (ci-standards.md#action-pinning-policy).
-        # Look up current SHA: gh api repos/actions/checkout/git/refs/tags/v4 --jq '.object.sha'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - name: Run gitleaks
-        # Pinned to SHA per Action Pinning Policy (ci-standards.md#action-pinning-policy).
-        # Refresh with: gh api repos/gitleaks/gitleaks-action/git/refs/tags/v2.3.9 --jq '.object.sha'
-        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
-        with:
-          args: detect --source . --redact --verbose --exit-code 1
+      - name: Install gitleaks
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_VERSION: '8.30.1'
+          # Named GITLEAKS_CHECKSUM (not GITLEAKS_SHA256) — SonarCloud flags env var names
+          # matching *SHA256* containing hex strings as Security Hotspots (false positive).
+          GITLEAKS_CHECKSUM: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
+        run: |
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+          wget -q "${url}" -O /tmp/gitleaks.tar.gz
+          echo "${GITLEAKS_CHECKSUM}  /tmp/gitleaks.tar.gz" | sha256sum -c
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin
+
+      - name: Run gitleaks
+        # No --config: this repo has no .gitleaks.toml, so gitleaks uses its
+        # built-in default ruleset (same behavior as the previous action step).
+        run: gitleaks detect --source . --redact --verbose --exit-code 1
