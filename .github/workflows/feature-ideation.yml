@@ -40,6 +40,10 @@
 #
 # Standard: https://github.com/combsmith/.github/blob/main/standards/ci-standards.md#8-feature-ideation-feature-ideationyml--bmad-method-repos
 name: Feature Research & Ideation (BMAD Analyst)
+# A bridged run (see `redispatch`) is titled for its Discussion, so the bridge can
+# find the exact run it started and link it on the Idea. Empty on every other
+# run, so GitHub's default title applies. `github.event.inputs`, not `inputs` (#571).
+run-name: ${{ github.event.inputs.target_discussion && format('Feature ideation for Discussion {0}', github.event.inputs.target_discussion) || '' }}
 
 on:
   schedule:
@@ -108,6 +112,8 @@ jobs:
     # can start runs with, so no personal token is needed here.
     permissions:
       actions: write
+      # Only to post the link to the dispatched run on the Idea.
+      discussions: write
     steps:
       - name: Re-dispatch under workflow_dispatch
         env:
@@ -115,6 +121,7 @@ jobs:
           REPO: ${{ github.repository }}
           AUTHOR: ${{ github.event.discussion.user.login }}
           DISCUSSION_NUMBER: ${{ github.event.discussion.number }}
+          DISCUSSION_ID: ${{ github.event.discussion.node_id }}
         run: |
           permission=none
           if [[ "${AUTHOR}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
@@ -127,8 +134,54 @@ jobs:
               exit 0
               ;;
           esac
+          # 30s back absorbs clock skew; the exact title, not the time, ties the run
+          # to this Discussion.
+          dispatched_at=$(date -u -d '-30 seconds' +%Y-%m-%dT%H:%M:%SZ)
           gh workflow run feature-ideation.yml --repo "${REPO}" \
             -f target_discussion="${DISCUSSION_NUMBER}"
+
+          # Link the dispatched run on the Idea, best effort: from here on nothing
+          # fails the step. Must match the top-level run-name.
+          title="Feature ideation for Discussion ${DISCUSSION_NUMBER}"
+          count=0
+          urls=""
+          found="found 0 runs titled '${title}'"
+          for attempt in 1 2 3; do
+            sleep 5
+            if listed=$(gh run list --repo "${REPO}" --workflow feature-ideation.yml \
+              --event workflow_dispatch --created ">=${dispatched_at}" \
+              --limit 50 --json displayTitle,url) &&
+              matches=$(jq --arg t "${title}" '[.[] | select(.displayTitle == $t)]' <<<"${listed}") &&
+              count=$(jq 'length' <<<"${matches}") &&
+              urls=$(jq -r '.[].url' <<<"${matches}"); then
+              found="found ${count} runs titled '${title}'"
+              [ "${count}" -eq 0 ] || break
+            else
+              echo "Run lookup failed (attempt ${attempt})."
+              urls=""
+              count=0
+              found="the run lookup failed"
+            fi
+          done
+          if [ "${count}" -ne 1 ]; then
+            echo "::warning title=Feature ideation::Discussion ${DISCUSSION_NUMBER}: ${found}, so the run is not linked on the Idea."
+            exit 0
+          fi
+          if [[ ! "${urls}" =~ ^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/actions/runs/[0-9]+$ ]]; then
+            echo "::warning title=Feature ideation::Discussion ${DISCUSSION_NUMBER}: the run URL has an unexpected shape, so it is not linked."
+            exit 0
+          fi
+          body="An analyst run is enhancing this idea: ${urls}"
+          for attempt in 1 2 3; do
+            # shellcheck disable=SC2016 # $id/$body are GraphQL variables, intentionally literal
+            if gh api graphql \
+              -f query='mutation($id: ID!, $body: String!) { addDiscussionComment(input: {discussionId: $id, body: $body}) { comment { id } } }' \
+              -f id="${DISCUSSION_ID}" -f body="${body}" >/dev/null; then
+              exit 0
+            fi
+            [ "${attempt}" -eq 3 ] || sleep 5
+          done
+          echo "::warning title=Feature ideation::Discussion ${DISCUSSION_NUMBER}: could not post the run link on the Idea."
 
   # ── #571 input resolution — keep `inputs` out of the reusable `with:` ────────
   # A reusable-workflow call graph (its `uses:` + `with:`) is validated at
