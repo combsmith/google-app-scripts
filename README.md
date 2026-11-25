@@ -9,7 +9,7 @@ A collection of personal productivity scripts built on Google Apps Script. These
 
 Open sourced under the MIT License to help others build their own automation workflows.
 
-> **🚀 Deploy in your browser:** [combsmith.github.io/google-app-scripts/deploy/](https://combsmith.github.io/google-app-scripts/deploy/) — sign in with Google, pick a script, and deploy it to your account in a few clicks.
+> **Runs entirely in your own Google account.** Each script is two files you paste into a new Apps Script project — no add-on, no subscription, and no server of ours in between. [Install in 5 minutes ↓](#-getting-started)
 
 ## 📂 Script Catalog
 
@@ -20,23 +20,29 @@ Open sourced under the MIT License to help others build their own automation wor
 
 ## 🚀 Getting Started
 
-### Option A — Browser-based deployment (recommended)
+### Option A — Copy-paste install (recommended)
 
-Deploy and configure any script directly from your browser — no command line or manual ID-hunting required.
+Takes about five minutes and needs nothing but a browser. The script runs under your own account, so the only permission prompt you see is Google's own one for your project.
+
+1. **Pick a script** from the catalog above and open its folder (e.g. [`src/gmail-to-drive-by-labels`](./src/gmail-to-drive-by-labels)).
+2. **Create a project:** go to [script.google.com](https://script.google.com/) → **New project**.
+3. **Paste the code:** replace the default `Code.gs` with the contents of the script's `code.gs`. Add a second file named `config` (**+ → Script**) and paste in `config.gs`.
+4. **Configure:** edit the values in `config` (label names, Doc ID, folder ID, etc.) as described in that script's `README.md`.
+5. **Run once and authorise:** select the main function (e.g. `storeEmailsAndAttachments`) and click **Run**. Google asks you to approve access for your own project.
+6. **Schedule it:** open **Triggers** (clock icon) → **Add Trigger** → choose the main function and a time-driven interval, so it keeps running on its own.
+
+Only `code.gs` and `config.gs` are needed — the `src/` and `tests/` folders are for development.
+
+### Option B — Browser-based deployment (beta)
+
+The [deployment page](https://combsmith.github.io/google-app-scripts/deploy/) creates the project, uploads the code and writes `config.gs` for you, with dropdowns and Drive pickers for your labels, calendars, Docs and folders.
+
+It signs in through a shared OAuth client. If Google shows an "unverified app" screen or refuses the sign-in, use Option A instead.
 
 1. **Open the deployment page** — use the hosted version at [combsmith.github.io/google-app-scripts/deploy/](https://combsmith.github.io/google-app-scripts/deploy/), or open `deploy/index.html` locally.
-2. **Review authentication details** — the deployment page uses a preconfigured OAuth Client ID defined in `deploy/index.html`. If you are using this repository as-is, you do not need to create or enter your own client ID. If you fork this repo and want to use your own, see the GCP setup section below and [deploy/index.html](./deploy/index.html) for details.
-3. **Sign in with Google** — authorise the page to create Apps Script projects and read your Gmail labels, calendars, and Drive resources on your behalf.
-4. **Select a script and click Deploy** — the page fetches the latest source files from this repository, uploads them to your account, and creates a new Apps Script project with an auto-generated name. A direct link to the new project is shown on success.
-5. **Configure your script (Step 4)** — after deployment a **Configure** panel appears automatically for each deployed script. Use the dropdowns and Drive Pickers to select your resources (Gmail labels, calendars, Google Docs, Drive folders/spreadsheets), then click **Save Configuration**. This writes the settings directly to your Apps Script project's `config.gs` — no manual editing required.
-
-### Option B — Manual copy-paste
-
-1.  **Browse the Catalog:** Check the table above to find a script that fits your needs.
-2.  **Open the Folder:** Navigate to the specific script folder (e.g., `/src/gmail-to-drive-by-labels`).
-3.  **Code & Config Convention:** Each script places the runnable code in `code.gs` and configuration values in `config.gs`.
-4.  **Copy the Code:** Open `code.gs` (and `config.gs`) in the folder and copy them into a new [Google Apps Script project](https://script.google.com/).
-5.  **Configure:** Update `config.gs` values (spreadsheet id, sheet name, etc.) and follow the specific setup instructions in that script's `README.md`.
+2. **Sign in with Google** — authorise the page to create Apps Script projects and read your Gmail labels, calendars, and the Drive files you pick. Fork maintainers who want their own client ID: see the GCP setup section below.
+3. **Select a script and click Deploy** — the page fetches the latest source files from this repository and creates a new Apps Script project in your account. A direct link to the new project is shown on success.
+4. **Configure** — a **Configure** panel appears for each deployed script. Pick your resources, then click **Save Configuration** to write them to the project's `config.gs`.
 
 ## ⚙️ One-Time GCP Setup (For Fork Maintainers)
 
