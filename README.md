@@ -59,12 +59,12 @@ If you fork this repository and want to use the browser-based deployment page or
 1. Navigate to **APIs & Services → OAuth consent screen**. Set it to **External** (so anyone can use it).
 2. Add the following OAuth scopes so the page can deploy and configure scripts:
 
-   | Scope                                               | Purpose                                                    |
-   | :-------------------------------------------------- | :--------------------------------------------------------- |
-   | `https://www.googleapis.com/auth/script.projects`   | Create and update Apps Script projects                     |
-   | `https://www.googleapis.com/auth/drive.readonly`    | Drive Picker — browse and select Docs, folders, and sheets |
-   | `https://www.googleapis.com/auth/gmail.labels`      | Read Gmail label names for the config dropdowns            |
-   | `https://www.googleapis.com/auth/calendar.readonly` | Read calendar list for the config dropdowns                |
+   | Scope                                               | Purpose                                               |
+   | :-------------------------------------------------- | :---------------------------------------------------- |
+   | `https://www.googleapis.com/auth/script.projects`   | Create and update Apps Script projects                |
+   | `https://www.googleapis.com/auth/drive.file`        | Drive Picker selections and projects this app created |
+   | `https://www.googleapis.com/auth/gmail.labels`      | Read Gmail label names for the config dropdowns       |
+   | `https://www.googleapis.com/auth/calendar.readonly` | Read calendar list for the config dropdowns           |
 
 3. Add any test users while your app is in **Testing** mode (you can publish it later if needed).
 
