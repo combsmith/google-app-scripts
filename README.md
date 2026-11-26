@@ -55,6 +55,8 @@ The page is published as **CombSmith Script Deployer**. It runs only in your bro
 4. **Configure** — a **Configure** panel appears for each deployed script. Pick your resources, then click **Save Configuration** to write them to the project's `config.gs`.
 5. **Activate the schedule** — the deployer uploads a `setup` function but does not run it. Open the new project, select `setup` in the function dropdown, click **Run**, and approve the authorization prompt. This creates the hourly time-driven trigger; until you do, nothing runs automatically.
 
+   > **Calendar to Sheets:** do not run `setup` as generated. It schedules `syncAllCalendarsToSheetsGAS` directly, which silently does nothing. First add the `scheduledCalendarSync` wrapper from Option A, change `HOURLY_TRIGGER_FN` in `setup.gs` to `'scheduledCalendarSync'`, then run `setup`.
+
 ## ⚙️ One-Time GCP Setup (For Fork Maintainers)
 
 If you fork this repository and want to use the browser-based deployment page or the GAS Installer Web App, you must manually configure your Google Cloud Platform project once before anything will work.
