@@ -86,13 +86,11 @@ test.describe('gas-installer Index.html', () => {
   // ── Page structure ──────────────────────────────────────────────────────────
 
   test('has correct page title', async ({ page }) => {
-    await expect(page).toHaveTitle('Google Apps Script Installer')
+    await expect(page).toHaveTitle('OrganizerBot Installer')
   })
 
   test('renders heading and subtitle', async ({ page }) => {
-    await expect(page.locator('h1')).toContainText(
-      'Google Apps Script Installer'
-    )
+    await expect(page.locator('h1')).toContainText('OrganizerBot Installer')
     await expect(page.locator('header p')).toContainText(
       'Select a script, name your project'
     )
