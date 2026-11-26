@@ -324,6 +324,30 @@
           transform: rotate(360deg);
         }
       }
+
+      /* ── Footer ──────────────────────────────────────────────────────────── */
+      .site-footer {
+        margin-top: 32px;
+        padding-top: 16px;
+        border-top: 1px solid #dadce0;
+        text-align: center;
+        font-size: 13px;
+        color: #5f6368;
+      }
+      .site-footer a {
+        color: #1a73e8;
+        text-decoration: none;
+      }
+      .site-footer a:hover {
+        text-decoration: underline;
+      }
+      .site-footer nav {
+        margin-top: 6px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 4px 16px;
+      }
     </style>
   </head>
   <body>
@@ -402,6 +426,23 @@
         <h2><span class="step-badge">3</span>Configure your scripts</h2>
         <div id="step3-scripts"></div>
       </div>
+
+      <footer class="site-footer">
+        <p>
+          CombSmith Script Deployer runs only in your browser. Your Google data
+          and sign-in token are never sent to or stored by CombSmith.
+        </p>
+        <nav aria-label="About this app">
+          <a href="https://combsmith.com/google-app-scripts/">Home</a>
+          <a href="https://combsmith.com/google-app-scripts/privacy"
+            >Privacy policy</a
+          >
+          <a href="https://github.com/combsmith/google-app-scripts"
+            >Source on GitHub</a
+          >
+          <a href="mailto:support@combsmith.com">support@combsmith.com</a>
+        </nav>
+      </footer>
     </div>
 
     <!-- Google Identity Services -->

@@ -209,6 +209,35 @@ test.describe('deploy index.html', () => {
     await expect(page.locator('#step3-card')).toBeHidden()
   })
 
+  test('footer names the app and links to homepage, privacy policy, repo and support', async ({
+    page,
+  }) => {
+    const footer = page.locator('footer.site-footer')
+    await expect(footer).toBeVisible()
+    await expect(footer).toContainText('CombSmith Script Deployer')
+    await expect(
+      footer.locator('a[href="https://combsmith.com/google-app-scripts/"]')
+    ).toBeVisible()
+    await expect(
+      footer.locator(
+        'a[href="https://combsmith.com/google-app-scripts/privacy"]'
+      )
+    ).toBeVisible()
+    await expect(
+      footer.locator(
+        'a[href="https://github.com/combsmith/google-app-scripts"]'
+      )
+    ).toBeVisible()
+    await expect(
+      footer.locator('a[href="mailto:support@combsmith.com"]')
+    ).toBeVisible()
+  })
+
+  test('footer stays visible after sign-in', async ({ page }) => {
+    await signIn(page)
+    await expect(page.locator('footer.site-footer')).toBeVisible()
+  })
+
   test('renders sign-in button', async ({ page }) => {
     await expect(page.locator('#btn-signin')).toBeVisible()
     await expect(page.locator('#btn-signin')).toContainText(
