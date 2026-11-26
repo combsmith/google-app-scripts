@@ -28,10 +28,10 @@ Takes about five minutes and needs nothing but a browser. The script runs under 
 2. **Create a project:** go to [script.google.com](https://script.google.com/) → **New project**.
 3. **Paste the code:** replace the default `Code.gs` with the contents of the script's `code.gs`. Add a second file named `config` (**+ → Script**) and paste in `config.gs`.
 4. **Configure:** edit the values in `config` (label names, Doc ID, folder ID, etc.) as described in that script's `README.md`.
-5. **Run once and authorise:** select the main function (e.g. `storeEmailsAndAttachments`) and click **Run**. Google asks you to approve access for your own project.
+5. **Run once and authorise:** select the main function (e.g. `storeEmailsAndAttachments` or `syncAllCalendarsToSheetsGAS`) and click **Run**. Google asks you to approve access for your own project.
 6. **Schedule it:** open **Triggers** (clock icon) → **Add Trigger** → choose the main function and a time-driven interval, so it keeps running on its own.
 
-Only `code.gs` and `config.gs` are needed — the `src/` and `tests/` folders are for development.
+Only the `code.gs` and `config.gs` files in the script's root folder are needed — any nested `src/` or `tests/` folders within that script's directory are only for development.
 
 ### Option B — Browser-based deployment (beta)
 
