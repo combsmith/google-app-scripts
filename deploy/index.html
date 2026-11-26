@@ -425,6 +425,10 @@
       const OAUTH_CLIENT_ID =
         '873060687431-smmudbpd5rlogt0r7immp0u3tdqb2t3p.apps.googleusercontent.com'
 
+      // Google Cloud project number (the numeric prefix of the client ID).
+      // Required by Picker's setAppId() when using the drive.file scope.
+      const PICKER_APP_ID = OAUTH_CLIENT_ID.split('-')[0]
+
       // Required OAuth scopes:
       //   script.projects  — create, read, and update Apps Script projects
       //   drive.file       — Picker selections and projects this app created
@@ -546,6 +550,7 @@
             .addView(view)
             .addView(sharedView)
             .enableFeature(google.picker.Feature.SUPPORT_DRIVES)
+            .setAppId(PICKER_APP_ID)
             .setOAuthToken(accessToken)
             .setCallback((data) => {
               if (
@@ -1841,10 +1846,6 @@
       }
 
       /**
-       * Fetches a project's content to read its deployed @version tag,
-       * compares against the catalog version, and updates the UI.
-       */
-      /**
        * Returns deployments recorded in localStorage for catalog entries not
        * already in `found`, keeping only projects the Apps Script API still
        * returns.
@@ -1863,7 +1864,24 @@
                   headers: { Authorization: `Bearer ${accessToken}` },
                 }
               )
-              if (!res.ok) return null
+              if (!res.ok) {
+                if (res.status === 404) {
+                  // Project no longer exists; drop the dead entry.
+                  try {
+                    const map = JSON.parse(
+                      localStorage.getItem(DEPLOY_STORAGE_KEY) || '{}'
+                    )
+                    delete map[s.id + '\n' + title]
+                    localStorage.setItem(
+                      DEPLOY_STORAGE_KEY,
+                      JSON.stringify(map)
+                    )
+                  } catch {
+                    /* best-effort */
+                  }
+                }
+                return null
+              }
             } catch {
               return null
             }
@@ -1874,6 +1892,10 @@
         return (await Promise.all(checks)).filter(Boolean)
       }
 
+      /**
+       * Fetches a project's content to read its deployed @version tag,
+       * compares against the catalog version, and updates the UI.
+       */
       async function checkProjectVersion(scriptId, catalogId) {
         const epochAtStart = versionEpoch.get(catalogId) || 0
         try {
