@@ -75,7 +75,7 @@ If you fork this repository and want the browser deployment to work:
 
 2. **Configure OAuth Consent Screen:**
    - Set to External
-   - Add required scopes (script.projects, drive, gmail.labels, calendar.readonly)
+   - Add required scopes (`script.projects`, `drive.file` — remove `drive.readonly` if present, `gmail.labels`, `calendar.readonly`)
    - Add test users while in Testing mode
 
 3. **Create OAuth Client ID:**

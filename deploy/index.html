@@ -1798,8 +1798,9 @@
             `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&pageSize=50`,
             { headers: { Authorization: `Bearer ${accessToken}` } }
           )
-          if (!res.ok) return
-          const data = await res.json()
+          // A failed listing (e.g. 403 when Drive scope is declined) still
+          // falls through to the localStorage lookup below.
+          const data = res.ok ? await res.json() : {}
           const files = data.files || []
 
           // Match Drive files to our catalog entries by title
@@ -1824,21 +1825,25 @@
             }
           }
 
-          // drive.file only lists files this app can see, so also verify
-          // project IDs this browser recorded on earlier deploys.
-          found.push(...(await findStoredDeployments(found)))
-
-          // Refresh Step 2 badges immediately (before version check)
+          // Render confirmed Drive results first, without waiting on lookups.
           renderScriptList()
           setDeployEnabled()
-
-          if (found.length > 0) {
-            renderConfigCards(found)
-          }
-
-          // Check versions in background (don't block UI)
+          if (found.length > 0) renderConfigCards(found)
           for (const p of found) {
             checkProjectVersion(p.scriptId, p.catalogId)
+          }
+
+          // drive.file only lists files this app can see, so also verify
+          // project IDs this browser recorded on earlier deploys, then add
+          // any recovered ones.
+          const recovered = await findStoredDeployments(found)
+          if (recovered.length > 0) {
+            renderScriptList()
+            setDeployEnabled()
+            renderConfigCards([...found, ...recovered])
+            for (const p of recovered) {
+              checkProjectVersion(p.scriptId, p.catalogId)
+            }
           }
         } catch {
           // best-effort; ignore errors
