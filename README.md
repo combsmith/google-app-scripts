@@ -53,6 +53,7 @@ The page is published as **CombSmith Script Deployer**. It runs only in your bro
 2. **Sign in with Google** — authorise the page to create Apps Script projects and read your Gmail labels, calendars, and the Drive files you pick. Fork maintainers who want their own client ID: see the GCP setup section below.
 3. **Select a script and click Deploy** — the page fetches the latest source files from this repository and creates a new Apps Script project in your account. A direct link to the new project is shown on success.
 4. **Configure** — a **Configure** panel appears for each deployed script. Pick your resources, then click **Save Configuration** to write them to the project's `config.gs`.
+5. **Activate the schedule** — the deployer uploads a `setup` function but does not run it. Open the new project, select `setup` in the function dropdown, click **Run**, and approve the authorization prompt. This creates the hourly time-driven trigger; until you do, nothing runs automatically.
 
 ## ⚙️ One-Time GCP Setup (For Fork Maintainers)
 
