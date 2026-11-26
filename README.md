@@ -47,6 +47,8 @@ The [deployment page](https://combsmith.github.io/google-app-scripts/deploy/) cr
 
 It signs in through a shared OAuth client. If Google shows an "unverified app" screen or refuses the sign-in, use Option A instead.
 
+The page is published as **CombSmith Script Deployer**. It runs only in your browser and never sends your Google data or sign-in token to CombSmith. [Homepage](https://combsmith.com/google-app-scripts/) · [Privacy policy](https://combsmith.com/google-app-scripts/privacy)
+
 1. **Open the deployment page** — use the hosted version at [combsmith.github.io/google-app-scripts/deploy/](https://combsmith.github.io/google-app-scripts/deploy/), or open `deploy/index.html` locally.
 2. **Sign in with Google** — authorise the page to create Apps Script projects and read your Gmail labels, calendars, and the Drive files you pick. Fork maintainers who want their own client ID: see the GCP setup section below.
 3. **Select a script and click Deploy** — the page fetches the latest source files from this repository and creates a new Apps Script project in your account. A direct link to the new project is shown on success.
