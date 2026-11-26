@@ -31,6 +31,14 @@ Takes about five minutes and needs nothing but a browser. The script runs under 
 5. **Run once and authorise:** select the main function (e.g. `storeEmailsAndAttachments` or `syncAllCalendarsToSheetsGAS`) and click **Run**. Google asks you to approve access for your own project.
 6. **Schedule it:** open **Triggers** (clock icon) → **Add Trigger** → choose the main function and a time-driven interval, so it keeps running on its own.
 
+   > **Calendar to Sheets:** do not schedule `syncAllCalendarsToSheetsGAS` directly. Time-driven triggers pass an event object as the first argument, which that function would read as a start date, so the sync would silently do nothing. Add this wrapper to your project and schedule `scheduledCalendarSync` instead:
+   >
+   > ```js
+   > function scheduledCalendarSync() {
+   >   syncAllCalendarsToSheetsGAS()
+   > }
+   > ```
+
 Only the `code.gs` and `config.gs` files in the script's root folder are needed — any nested `src/` or `tests/` folders within that script's directory are only for development.
 
 ### Option B — Browser-based deployment (beta)
