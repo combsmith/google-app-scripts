@@ -1,4 +1,4 @@
-# Google Apps Script Productivity Suite — Project Overview
+# OrganizerBot — Project Overview
 
 **Generated:** 2026-03-28 | **Scan Level:** Exhaustive
 

@@ -4,7 +4,7 @@
 
 ## Overview
 
-The Google Apps Script Productivity Suite is a collection of automation scripts that run inside Google's Apps Script environment. The architecture bridges two distinct runtimes: **Google Apps Script V8** (production execution in the user's Google account) and **Node.js** (local development, testing, CI).
+OrganizerBot (formerly the Google Apps Script Productivity Suite) is a collection of automation scripts that run inside Google's Apps Script environment. The architecture bridges two distinct runtimes: **Google Apps Script V8** (production execution in the user's Google account) and **Node.js** (local development, testing, CI).
 
 ## Architecture Pattern
 

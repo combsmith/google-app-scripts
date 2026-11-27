@@ -1,4 +1,6 @@
-# Google Apps Script Productivity Suite
+# OrganizerBot: Inbox, Calendar & Files Automations
+
+_Free automations for Gmail™, Google Calendar™ and Google Drive™ that run entirely in your own Google account._
 
 [![Contributing](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](https://github.com/combsmith/.github/blob/main/CONTRIBUTING.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -129,3 +131,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 _Note: These scripts are provided "as is". Always test on a small batch of data before running on important files._
+
+## Trademarks
+
+Gmail, Google Calendar, Google Drive, Google Docs, Google Sheets, Google Workspace and Google Apps Script are trademarks of Google LLC. OrganizerBot is an independent open-source project and is not affiliated with or endorsed by Google.

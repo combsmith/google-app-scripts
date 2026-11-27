@@ -183,11 +183,11 @@ test.describe('deploy index.html', () => {
   // ── Page structure ──────────────────────────────────────────────────────────
 
   test('has correct page title', async ({ page }) => {
-    await expect(page).toHaveTitle('Deploy Google Apps Scripts')
+    await expect(page).toHaveTitle('Deploy OrganizerBot')
   })
 
   test('renders heading and subtitle', async ({ page }) => {
-    await expect(page.locator('h1')).toContainText('Deploy Google Apps Scripts')
+    await expect(page.locator('h1')).toContainText('Deploy OrganizerBot')
     await expect(page.locator('header p')).toContainText('Deploy a script')
   })
 
