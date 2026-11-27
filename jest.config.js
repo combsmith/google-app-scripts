@@ -3,6 +3,9 @@ module.exports = {
   testEnvironment: 'node',
   setupFilesAfterEnv: ['<rootDir>/test-utils/setup.js'],
   testMatch: ['**/tests/**/*.test.[jt]s?(x)'],
+  // Agent worktrees (.claude/worktrees/*) hold full repo copies; without this
+  // every suite runs once per worktree.
+  testPathIgnorePatterns: ['/node_modules/', '/\\.claude/', '/\\.wt-'],
   transform: {
     '^.+\\.[jt]sx?$': [
       'ts-jest',

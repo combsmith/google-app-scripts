@@ -60,4 +60,60 @@ function getFileHash(blob) {
   return hash
 }
 
-module.exports = { getCleanBody, getFileHash }
+/**
+ * GitHub sync Rule 6 patterns — detect and refuse mojibake in new entries
+ */
+const RULE6_PATTERNS = [
+  [/\S \? \S/, "' ? ' between words (was an em dash or a · separator)"],
+  [/\?\?/, "'??' (was a multi-codepoint emoji)"],
+  [/[A-Za-z]\?[A-Za-z]/, "'?' inside a word (was a curly apostrophe)"],
+  [/�/, 'U+FFFD replacement character'],
+]
+
+/**
+ * Refuse to write an entry that already shows mojibake.
+ * Strips URLs before testing to avoid false positives on URL query params.
+ */
+function assertClean_(text, what) {
+  if (!text) return
+  const stripped = String(text).replace(/https?:\/\/\S+/g, '')
+  for (let i = 0; i < RULE6_PATTERNS.length; i++) {
+    if (RULE6_PATTERNS[i][0].test(stripped)) {
+      throw new Error(
+        `Rule 6: refusing to write ${what} — ${RULE6_PATTERNS[i][1]}`
+      )
+    }
+  }
+}
+
+/**
+ * Refuse to write when a non-ASCII char in the source text became '?' on the way out.
+ */
+function assertNoAsciiReplacement_(source, rendered) {
+  if (!source || !rendered) return
+  if (rendered.indexOf('?') === -1) return
+  const lost = []
+  for (let i = 0; i < source.length; i++) {
+    const c = source.charAt(i)
+    if (
+      c.charCodeAt(0) > 127 &&
+      rendered.indexOf(c) === -1 &&
+      lost.indexOf(c) === -1
+    ) {
+      lost.push(c)
+    }
+  }
+  if (lost.length) {
+    throw new Error(
+      `Rule 6: refusing to write text that flattened non-ASCII to "?": ${lost.join(' ')} — encode as UTF-8, not ASCII.`
+    )
+  }
+}
+
+module.exports = {
+  getCleanBody,
+  getFileHash,
+  RULE6_PATTERNS,
+  assertClean_,
+  assertNoAsciiReplacement_,
+}

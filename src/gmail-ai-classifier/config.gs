@@ -95,6 +95,9 @@ function getAiClassifierConfig() {
     nonprofitSenderDomains: getProp('NONPROFIT_SENDER_DOMAINS') || '',
     nonprofitSubjectTerms: getProp('NONPROFIT_SUBJECT_TERMS') || '',
     promoSenderTerms: getProp('PROMO_SENDER_TERMS') || '',
+    // Comma-separated sub-labels whose emails are filed in Gmail/Drive but not
+    // written to the GitHub notes (e.g. machine notifications).
+    noteExcludedSubLabels: getProp('NOTE_EXCLUDED_SUBLABELS') || '',
     auditDigestEmail: getProp('AUDIT_DIGEST_EMAIL') || '',
     auditLookbackDays: auditLookbackDays,
     processedLabel: processedLabel,

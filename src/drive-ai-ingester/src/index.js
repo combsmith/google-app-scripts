@@ -81,8 +81,7 @@ function analyzeDocumentWithAi(fileName, fileText, config, services) {
 
   const endpoints = [
     'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent',
   ]
 
   for (const endpoint of endpoints) {
@@ -136,28 +135,27 @@ function analyzeDocumentWithAi(fileName, fileText, config, services) {
 }
 
 /**
- * Applies dual-layer metadata tagging:
- * Layer 1: Native Drive File Description ([AI_INDEXED] tag block)
- * Layer 2: Embedded YAML front-matter header in Google Docs
+ * Tags a Drive file in place through its Drive description only:
+ *   [AI_INDEXED] [AI_DOMAIN: <domain>] sublabel: ... | people: ... | organization: ... | tags: ...
+ * The document body is never modified. Earlier versions also inserted a YAML
+ * front-matter block at the top of Google Docs, which changed what every
+ * collaborator sees, bumped "last modified" on documents nobody edited, and
+ * duplicated the description (Drive full-text search already indexes it).
  *
  * @param {object} file - Drive file object
  * @param {object} metadata - Classification metadata from AI analysis
- * @param {object} services - Object with DocumentApp, MimeType, and Utilities references
- * @returns {boolean} True if Layer 1 ([AI_INDEXED]) persisted, false otherwise
+ * @param {object} [_services] - Unused; kept for call-site compatibility
+ * @returns {boolean} True if the [AI_INDEXED] marker persisted, false otherwise
  */
-function applyDualLayerTagsToDriveFile(file, metadata, services) {
-  const { DocumentApp, MimeType, Utilities } = services
+function applyDualLayerTagsToDriveFile(file, metadata, _services) {
   const tagsList = Array.isArray(metadata?.tags) ? metadata.tags : []
   const peopleList = Array.isArray(metadata?.people) ? metadata.people : []
   const orgList = Array.isArray(metadata?.organization)
     ? metadata.organization
     : []
-  const tagsStr = tagsList.join(', ')
-  const peopleStr = peopleList.join(', ')
   const domainStr = metadata?.canonicalDomain || ''
   const sublabelStr = metadata?.subLabel || ''
 
-  // Layer 1: Native Drive File Description Metadata Tagging
   try {
     const currDesc = file.getDescription() || ''
     if (!currDesc.includes('[AI_INDEXED]')) {
@@ -167,9 +165,10 @@ function applyDualLayerTagsToDriveFile(file, metadata, services) {
         '] sublabel: ' +
         sublabelStr +
         ' | people: ' +
-        peopleStr +
+        peopleList.join(', ') +
+        (orgList.length ? ' | organization: ' + orgList.join(', ') : '') +
         ' | tags: ' +
-        tagsStr
+        tagsList.join(', ')
       const newDesc = currDesc ? currDesc + '\n\n' + tagBlock : tagBlock
       file.setDescription(newDesc)
       console.log(
@@ -179,60 +178,13 @@ function applyDualLayerTagsToDriveFile(file, metadata, services) {
     }
   } catch (e) {
     console.error(
-      '[applyDualLayerTagsToDriveFile] Layer 1 failed; [AI_INDEXED] NOT persisted for ' +
+      '[applyDualLayerTagsToDriveFile] [AI_INDEXED] NOT persisted for ' +
         file.getName() +
         ': ' +
         e.message
     )
     return false
   }
-
-  // Layer 2: Embedded Document Front-Matter Header (Google Docs)
-  try {
-    if (file.getMimeType() === MimeType.GOOGLE_DOCS) {
-      const doc = DocumentApp.openById(file.getId())
-      const body = doc.getBody()
-
-      const yamlHeader =
-        '---\n' +
-        'domain: ' +
-        JSON.stringify(domainStr) +
-        '\n' +
-        'sublabel: ' +
-        JSON.stringify(sublabelStr) +
-        '\n' +
-        'people: ' +
-        JSON.stringify(peopleList) +
-        '\n' +
-        'organization: ' +
-        JSON.stringify(orgList) +
-        '\n' +
-        'tags: ' +
-        JSON.stringify(tagsList) +
-        '\n' +
-        'created: ' +
-        Utilities.formatDate(file.getLastUpdated(), 'GMT', 'yyyy-MM-dd') +
-        '\n' +
-        '---\n\n'
-
-      const text = body.getText()
-      if (text.trim().indexOf('---') !== 0) {
-        body.insertParagraph(0, yamlHeader)
-        console.log(
-          '[applyDualLayerTagsToDriveFile] Embedded YAML front-matter header into Google Doc: ' +
-            file.getName()
-        )
-      }
-    }
-  } catch (e) {
-    console.warn(
-      '[applyDualLayerTagsToDriveFile] Layer 2 (front-matter) failed for ' +
-        file.getName() +
-        ' (marker already persisted): ' +
-        e.message
-    )
-  }
-
   return true
 }
 
@@ -279,12 +231,39 @@ function parseRetryDelayMs(response) {
 }
 
 /**
- * Maps canonical domain to GitHub notes file path.
+ * Returns the log-shard suffix ("2026-Q4" or "2026-11") for an entry date, or ''.
+ * @param {string|Date} entryDate - "yyyy-MM-dd" string or Date
+ * @param {string} mode - "quarterly" or "monthly"
+ * @returns {string}
+ */
+function noteLogShardSuffix_(entryDate, mode) {
+  let year = 0
+  let month = 0
+  if (entryDate instanceof Date && !Number.isNaN(entryDate.getTime())) {
+    year = entryDate.getUTCFullYear()
+    month = entryDate.getUTCMonth() + 1
+  } else {
+    const m = /^(\d{4})-(\d{2})/.exec(String(entryDate || ''))
+    if (m) {
+      year = Number(m[1])
+      month = Number(m[2])
+    }
+  }
+  if (!year || month < 1 || month > 12) return ''
+  if (mode === 'monthly') return year + '-' + String(month).padStart(2, '0')
+  return year + '-Q' + Math.ceil(month / 3)
+}
+
+/**
+ * Maps canonical domain to the GitHub note that receives its log entries.
+ * With the NOTE_LOG_SHARDING Script Property set to "quarterly" or "monthly",
+ * entries go to <domain>/activity/<shard>.md (same layout as the Gmail classifier).
  * @param {string} domain - Canonical domain identifier (e.g., '01_Household')
- * @param {string} _subLabel - Sub-label for additional context (unused in v1)
+ * @param {string} _subLabel - Sub-label for additional context (unused)
+ * @param {string|Date} [entryDate] - Entry date used to pick the shard
  * @returns {string|null} Path to markdown file or null if domain not found
  */
-function getNotePathForDomain(domain, _subLabel) {
+function getNotePathForDomain(domain, _subLabel, entryDate) {
   const map = {
     '01_Household': '01_Household/index.md',
     '02_Finance_Legal': '02_Finance_Legal/index.md',
@@ -294,7 +273,65 @@ function getNotePathForDomain(domain, _subLabel) {
     '06_Work_Career': '06_Work_Career/index.md',
     '07_Community_NonProfit': '07_Community_NonProfit/index.md',
   }
-  return map[domain] || null
+  const base = map[domain] || null
+  let mode = ''
+  try {
+    if (typeof PropertiesService !== 'undefined') {
+      mode = String(
+        PropertiesService.getScriptProperties().getProperty(
+          'NOTE_LOG_SHARDING'
+        ) || ''
+      )
+        .trim()
+        .toLowerCase()
+    }
+  } catch (e) {
+    mode = ''
+  }
+  if (base && (mode === 'quarterly' || mode === 'monthly')) {
+    const suffix = noteLogShardSuffix_(entryDate, mode)
+    if (suffix) return domain + '/activity/' + suffix + '.md'
+  }
+  return base
+}
+
+/**
+ * True when the file sits (at any depth) under a folder named after a
+ * canonical domain (e.g. "02_Finance_Legal"), so only the household's filing
+ * tree is ingested, never arbitrary documents elsewhere in Drive.
+ * @param {object} file - Drive file
+ * @param {string[]} canonicalNames - Canonical domain folder names
+ * @param {object} [cache] - Per-run map of folderId -> boolean
+ * @returns {boolean}
+ */
+function isInCanonicalFolderTree_(file, canonicalNames, cache) {
+  const memo = cache || {}
+  const names = canonicalNames || []
+  function check(folder, depth) {
+    if (!folder || depth > 10) return false
+    const id = typeof folder.getId === 'function' ? folder.getId() : ''
+    if (id && Object.prototype.hasOwnProperty.call(memo, id)) return memo[id]
+    let result = names.indexOf(folder.getName()) !== -1
+    if (!result) {
+      const parents = folder.getParents()
+      while (!result && parents && parents.hasNext()) {
+        result = check(parents.next(), depth + 1)
+      }
+    }
+    if (id) memo[id] = result
+    return result
+  }
+  try {
+    const parents = file.getParents()
+    while (parents && parents.hasNext()) {
+      if (check(parents.next(), 0)) return true
+    }
+  } catch (e) {
+    console.warn(
+      '[isInCanonicalFolderTree_] Could not read parents: ' + e.message
+    )
+  }
+  return false
 }
 
 /**
@@ -306,6 +343,7 @@ function getNotePathForDomain(domain, _subLabel) {
  * @param {string[]} tagsList - Array of classification tags
  * @param {string[]} peopleList - Array of people mentioned in document
  * @param {string|null} accountEmail - Email account that processed the file
+ * @param {string} [fileId] - Drive file ID; adds an idempotency marker
  * @returns {string} Formatted markdown entry
  */
 function formatDriveIngestionEntry(
@@ -315,7 +353,8 @@ function formatDriveIngestionEntry(
   summaryText,
   tagsList,
   peopleList,
-  accountEmail
+  accountEmail,
+  fileId
 ) {
   const escapedTitle = (title || '')
     .replaceAll('\\', '\\\\')
@@ -344,6 +383,9 @@ function formatDriveIngestionEntry(
         .join('\n') +
       '\n'
   }
+  if (fileId) {
+    entry += '<!-- source: drive file=' + fileId + ' -->\n'
+  }
   return entry
 }
 
@@ -356,5 +398,7 @@ if (typeof module !== 'undefined' && module.exports) {
     parseRetryDelayMs,
     getNotePathForDomain,
     formatDriveIngestionEntry,
+    noteLogShardSuffix_,
+    isInCanonicalFolderTree_,
   }
 }
