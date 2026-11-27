@@ -23,7 +23,7 @@ var APPS_SCRIPT_API = 'https://script.googleapis.com/v1'
  */
 function doGet(e) {
   return HtmlService.createHtmlOutputFromFile('Index')
-    .setTitle('Google Apps Script Installer')
+    .setTitle('OrganizerBot Installer')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
 }
 
