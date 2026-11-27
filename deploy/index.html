@@ -425,15 +425,21 @@
       const OAUTH_CLIENT_ID =
         '873060687431-smmudbpd5rlogt0r7immp0u3tdqb2t3p.apps.googleusercontent.com'
 
+      // Google Cloud project number (the numeric prefix of the client ID).
+      // Required by Picker's setAppId() when using the drive.file scope.
+      const PICKER_APP_ID = OAUTH_CLIENT_ID.split('-')[0]
+
       // Required OAuth scopes:
       //   script.projects  — create, read, and update Apps Script projects
-      //   drive.readonly   — detect existing projects + browse via Picker API
+      //   drive.file       — Picker selections and projects this app created
+      //                      (non-sensitive; replaces the restricted
+      //                      drive.readonly, which needs a security assessment)
       //   gmail.labels     — list Gmail labels for config dropdowns
       //   calendar.readonly — list calendars for config dropdowns
       //   email            — get user's email for default recipient
       const OAUTH_SCOPE =
         'https://www.googleapis.com/auth/script.projects ' +
-        'https://www.googleapis.com/auth/drive.readonly ' +
+        'https://www.googleapis.com/auth/drive.file ' +
         'https://www.googleapis.com/auth/gmail.labels ' +
         'https://www.googleapis.com/auth/calendar.readonly ' +
         'email'
@@ -544,6 +550,7 @@
             .addView(view)
             .addView(sharedView)
             .enableFeature(google.picker.Feature.SUPPORT_DRIVES)
+            .setAppId(PICKER_APP_ID)
             .setOAuthToken(accessToken)
             .setCallback((data) => {
               if (
@@ -1791,8 +1798,9 @@
             `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&pageSize=50`,
             { headers: { Authorization: `Bearer ${accessToken}` } }
           )
-          if (!res.ok) return
-          const data = await res.json()
+          // A failed listing (e.g. 403 when Drive scope is declined) still
+          // falls through to the localStorage lookup below.
+          const data = res.ok ? await res.json() : {}
           const files = data.files || []
 
           // Match Drive files to our catalog entries by title
@@ -1817,21 +1825,76 @@
             }
           }
 
-          // Refresh Step 2 badges immediately (before version check)
+          // Render confirmed Drive results first, without waiting on lookups.
           renderScriptList()
           setDeployEnabled()
-
-          if (found.length > 0) {
-            renderConfigCards(found)
-          }
-
-          // Check versions in background (don't block UI)
+          if (found.length > 0) renderConfigCards(found)
           for (const p of found) {
             checkProjectVersion(p.scriptId, p.catalogId)
+          }
+
+          // drive.file only lists files this app can see, so also verify
+          // project IDs this browser recorded on earlier deploys, then add
+          // any recovered ones.
+          const recovered = await findStoredDeployments(found)
+          if (recovered.length > 0) {
+            renderScriptList()
+            setDeployEnabled()
+            renderConfigCards([...found, ...recovered])
+            for (const p of recovered) {
+              checkProjectVersion(p.scriptId, p.catalogId)
+            }
           }
         } catch {
           // best-effort; ignore errors
         }
+      }
+
+      /**
+       * Returns deployments recorded in localStorage for catalog entries not
+       * already in `found`, keeping only projects the Apps Script API still
+       * returns.
+       */
+      async function findStoredDeployments(found) {
+        const seen = new Set(found.map((p) => p.catalogId))
+        const checks = SCRIPT_CATALOG.filter((s) => !seen.has(s.id)).map(
+          async (s) => {
+            const title = `Petry-Projects \u2013 ${s.name}`
+            const scriptId = getStoredScriptId(s.id, title)
+            if (!scriptId) return null
+            try {
+              const res = await fetch(
+                `${APPS_SCRIPT_API}/projects/${scriptId}`,
+                {
+                  headers: { Authorization: `Bearer ${accessToken}` },
+                }
+              )
+              if (!res.ok) {
+                if (res.status === 404) {
+                  // Project no longer exists; drop the dead entry.
+                  try {
+                    const map = JSON.parse(
+                      localStorage.getItem(DEPLOY_STORAGE_KEY) || '{}'
+                    )
+                    delete map[s.id + '\n' + title]
+                    localStorage.setItem(
+                      DEPLOY_STORAGE_KEY,
+                      JSON.stringify(map)
+                    )
+                  } catch {
+                    /* best-effort */
+                  }
+                }
+                return null
+              }
+            } catch {
+              return null
+            }
+            deployedScripts.set(s.id, { scriptId, title })
+            return { scriptId, title, catalogId: s.id }
+          }
+        )
+        return (await Promise.all(checks)).filter(Boolean)
       }
 
       /**

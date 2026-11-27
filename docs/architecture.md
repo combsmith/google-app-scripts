@@ -149,7 +149,7 @@ OrganizerBot (formerly the Google Apps Script Productivity Suite) is a collectio
 
 ## Authentication & Security
 
-- **Deploy UI OAuth:** Uses Google Identity Services with scopes for `script.projects`, `drive.readonly`, `gmail.labels`, `calendar.readonly`, `email`
+- **Deploy UI OAuth:** Uses Google Identity Services with scopes for `script.projects`, `drive.file`, `gmail.labels`, `calendar.readonly`, `email`
 - **GAS runtime:** Scripts run with the deploying user's permissions — no separate auth
 - **No secrets in code:** Configuration values are written to `config.gs` in the user's GAS project, not stored in the repository
 - **Formula injection prevention:** Calendar-to-sheets sanitizes cell values

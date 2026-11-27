@@ -29,12 +29,14 @@ const PAGE_URL = `file://${path.resolve(__dirname, '..', 'index.html')}`
 function injectGisMock() {
   window.__authMode = 'success'
   window.__clientIdUsed = null
+  window.__scopeUsed = null
 
   window.google = {
     accounts: {
       oauth2: {
         initTokenClient(config) {
           window.__clientIdUsed = config.client_id
+          window.__scopeUsed = config.scope
           return {
             requestAccessToken() {
               if (window.__authMode === 'success') {
@@ -455,6 +457,93 @@ test.describe('deploy index.html', () => {
   })
 
   // ── handleSignIn ────────────────────────────────────────────────────────────
+
+  test('requests drive.file instead of the restricted drive.readonly scope', async ({
+    page,
+  }) => {
+    await signIn(page)
+    const scope = await page.evaluate(() => window.__scopeUsed)
+    const scopes = scope.split(/\s+/)
+    expect(scopes).toContain('https://www.googleapis.com/auth/drive.file')
+    expect(scopes).not.toContain(
+      'https://www.googleapis.com/auth/drive.readonly'
+    )
+  })
+
+  test('detects a deployment stored in localStorage when Drive returns none', async ({
+    page,
+  }) => {
+    // Under drive.file, Drive search may not see projects created elsewhere,
+    // so the page falls back to IDs it recorded and verifies them via the
+    // Apps Script API.
+    await page.evaluate(() => {
+      localStorage.setItem(
+        'gas_copilot_deployed',
+        JSON.stringify({
+          'gmail-to-drive-by-labels\nPetry-Projects \u2013 Gmail to Drive By Labels':
+            'stored-script-id',
+        })
+      )
+    })
+    await page.route('https://script.googleapis.com/**', async (route) => {
+      const url = route.request().url()
+      if (url.includes('/projects/stored-script-id/content')) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            files: [
+              {
+                name: 'code',
+                type: 'SERVER_JS',
+                source: '// @version 1.0.0\nfunction main() {}',
+              },
+            ],
+          }),
+        })
+      } else if (url.includes('/projects/stored-script-id')) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ scriptId: 'stored-script-id' }),
+        })
+      } else {
+        await route.continue()
+      }
+    })
+
+    await signIn(page)
+    await expect(page.locator('#step3-card')).toBeVisible()
+    await expect(page.locator('#btn-configure-stored-script-id')).toBeVisible()
+  })
+
+  test('ignores a stored deployment that no longer exists', async ({
+    page,
+  }) => {
+    await page.evaluate(() => {
+      localStorage.setItem(
+        'gas_copilot_deployed',
+        JSON.stringify({
+          'gmail-to-drive-by-labels\nPetry-Projects \u2013 Gmail to Drive By Labels':
+            'gone-script-id',
+        })
+      )
+    })
+    const lookup = page.waitForResponse((resp) =>
+      resp.url().includes('/projects/gone-script-id')
+    )
+    await page.route('https://script.googleapis.com/**', async (route) => {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: { message: 'Not found' } }),
+      })
+    })
+
+    await signIn(page)
+    await lookup
+    await expect(page.locator('#step3-card')).toBeHidden()
+  })
 
   test('handleSignIn uses the hardcoded Petry-Projects client ID', async ({
     page,

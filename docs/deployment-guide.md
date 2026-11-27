@@ -24,13 +24,13 @@ Scripts deploy into the **user's own Google Apps Script environment**. There is 
 
 **OAuth Scopes Required:**
 
-| Scope               | Purpose                                                  |
-| ------------------- | -------------------------------------------------------- |
-| `script.projects`   | Create and update Apps Script projects                   |
-| `drive.readonly`    | Drive Picker to browse and select existing files/folders |
-| `gmail.labels`      | Read existing Gmail labels and create new ones           |
-| `calendar.readonly` | Read calendar list for dropdowns                         |
-| `email`             | Identify the signed-in user                              |
+| Scope               | Purpose                                               |
+| ------------------- | ----------------------------------------------------- |
+| `script.projects`   | Create and update Apps Script projects                |
+| `drive.file`        | Drive Picker selections and projects this app created |
+| `gmail.labels`      | Read existing Gmail labels and create new ones        |
+| `calendar.readonly` | Read calendar list for dropdowns                      |
+| `email`             | Identify the signed-in user                           |
 
 **Features:**
 
@@ -75,14 +75,14 @@ If you fork this repository and want the browser deployment to work:
 
 2. **Configure OAuth Consent Screen:**
    - Set to External
-   - Add required scopes (script.projects, drive, gmail.labels, calendar.readonly)
+   - Add required scopes (`script.projects`, `drive.file` — remove `drive.readonly` if present, `gmail.labels`, `calendar.readonly`)
    - Add test users while in Testing mode
 
 3. **Create OAuth Client ID:**
    - Type: Web application
    - Add authorized JavaScript origins (GitHub Pages URL or localhost)
    - Copy Client ID into `deploy/index.html` (`OAUTH_CLIENT_ID` constant)
-   - Ensure scopes match: `script.projects`, `drive.readonly`, `gmail.labels`, `calendar.readonly`, `email`
+   - Ensure scopes match: `script.projects`, `drive.file`, `gmail.labels`, `calendar.readonly`, `email`
 
 ## CI/CD Pipeline
 
